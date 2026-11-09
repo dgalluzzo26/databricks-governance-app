@@ -1,0 +1,30 @@
+resources:
+  jobs:
+    setup_job:
+      name: ${var.app_name}-setup
+      description: Idempotent setup for the Data Governance App (Delta tables, demo domain, grants)
+      max_concurrent_runs: 1
+      tasks:
+        - task_key: provision
+          environment_key: default
+          spark_python_task:
+            python_file: ../provisioning/run_setup.py
+            parameters:
+              - --warehouse-id
+              - ${var.warehouse_id}
+              - --app-name
+              - ${resources.apps.governance_app.name}
+              - --app-catalog
+              - ${resources.catalogs.app_catalog.name}
+              - --app-schema
+              - ${resources.schemas.app_schema.name}
+              - --demo-catalog
+              - ${resources.catalogs.demo_catalog.name}
+              - --seed-demo
+              - ${var.seed_demo}
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "4"
+            dependencies:
+              - databricks-sdk==0.163.0

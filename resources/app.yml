@@ -1,0 +1,36 @@
+resources:
+  apps:
+    governance_app:
+      name: ${var.app_name}
+      description: Federated data access governance for Unity Catalog
+      source_code_path: ..
+      config:
+        command:
+          - python
+          - -m
+          - backend.app.main
+        env:
+          - name: DATABRICKS_WAREHOUSE_ID
+            value_from: sql-warehouse
+          - name: LAKEBASE_ENDPOINT
+            value_from: postgres
+          - name: STORAGE_BACKEND
+            value: ${var.storage_backend}
+          - name: APP_CATALOG
+            value: ${resources.catalogs.app_catalog.name}
+          - name: APP_SCHEMA
+            value: ${resources.schemas.app_schema.name}
+          - name: DEMO_CATALOG
+            value: ${resources.catalogs.demo_catalog.name}
+          - name: APP_ADMIN_GROUP
+            value: ${var.admin_group}
+      resources:
+        - name: sql-warehouse
+          sql_warehouse:
+            id: ${var.warehouse_id}
+            permission: CAN_USE
+        - name: postgres
+          postgres:
+            branch: ${resources.postgres_projects.app_lakebase.name}/branches/production
+            database: ${resources.postgres_databases.app_database.name}
+            permission: CAN_CONNECT_AND_CREATE

@@ -1,0 +1,74 @@
+# Data Governance App: one bundle provisions everything the app needs.
+#
+#   ./scripts/deploy.sh <target>            # build UI, deploy bundle, run setup, start app
+#
+# Override any variable per target below, or at deploy time with --var name=value.
+bundle:
+  name: data-governance-app
+
+include:
+  - resources/*.yml
+
+variables:
+  app_name:
+    description: Databricks App name (lowercase, hyphens, <= 26 chars)
+    default: data-governance-app
+  warehouse_id:
+    description: SQL warehouse used for Unity Catalog metadata queries and Delta storage
+  app_catalog:
+    description: Catalog that holds the app's own Delta tables
+    default: data_governance_app
+  app_schema:
+    description: Schema for the app's Delta tables
+    default: app
+  demo_catalog:
+    description: Catalog for the optional demo domain (tagged tables and ABAC policies)
+    default: data_governance_demo
+  seed_demo:
+    description: Create the demo domain during setup (true/false)
+    default: "true"
+  storage_backend:
+    description: Where the app stores its state (lakebase | delta)
+    default: lakebase
+  lakebase_project_id:
+    description: Lakebase project ID for app state
+    default: data-governance-app
+  lakebase_database_id:
+    description: Lakebase database ID inside the production branch
+    default: governance
+  admin_group:
+    description: Group whose members are app administrators
+    default: admins
+
+sync:
+  exclude:
+    - .venv
+    - frontend/node_modules
+    - frontend/src
+    - backend/tests
+  include:
+    - frontend/dist/**
+
+targets:
+  # Resource names are not prefixed, so catalogs and the app keep the names configured above.
+  dev:
+    default: true
+    workspace:
+      host: https://dbc-16303671-e52d.cloud.databricks.com
+      profile: dbc-16303671-e52d
+    variables:
+      warehouse_id: dd0a656c3ddc883e
+
+  # Same workspace, Delta storage backend. Uses its own names because each bundle target
+  # owns the resources it creates.
+  dev-delta:
+    workspace:
+      host: https://dbc-16303671-e52d.cloud.databricks.com
+      profile: dbc-16303671-e52d
+    variables:
+      warehouse_id: dd0a656c3ddc883e
+      app_name: data-governance-app-dlt
+      storage_backend: delta
+      app_catalog: data_governance_app_delta
+      demo_catalog: data_governance_demo_delta
+      lakebase_project_id: data-governance-app-dlt

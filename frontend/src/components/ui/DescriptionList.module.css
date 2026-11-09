@@ -1,0 +1,22 @@
+.list {
+  margin: 0;
+  display: grid;
+  gap: var(--space-3);
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  gap: var(--space-3);
+  align-items: baseline;
+}
+
+.label {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.value {
+  margin: 0;
+  word-break: break-word;
+}

@@ -1,0 +1,51 @@
+/* Databricks workspace look: same tokens as the proposal mockups. */
+:root {
+  --db-orange: #ff3621;
+  --db-navy: #1b3139;
+
+  --color-text: #11171c;
+  --color-text-muted: #5f7281;
+  --color-border: #d1d9e1;
+  --color-border-subtle: #e8ecf0;
+  --color-bg: #f6f7f9;
+  --color-surface: #ffffff;
+  --color-tag: #edf1f4;
+
+  --color-primary: #2272b4;
+  --color-primary-hover: #0e538b;
+  --color-primary-subtle: #e8f2fb;
+
+  --color-success-bg: #ecfdf5;
+  --color-success-border: #a7f3d0;
+  --color-success-text: #065f46;
+  --color-warning-bg: #fff7ed;
+  --color-warning-border: #fed7aa;
+  --color-warning-text: #9a3412;
+  --color-danger-bg: #fef2f2;
+  --color-danger-border: #fecaca;
+  --color-danger-text: #991b1b;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "SFMono-Regular", Menlo, Consolas, monospace;
+  --font-size-xs: 12px;
+  --font-size-sm: 13px;
+  --font-size-md: 14px;
+  --font-size-lg: 18px;
+  --font-size-xl: 22px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --shadow-sm: 0 1px 2px rgba(17, 23, 28, 0.06);
+  --shadow-md: 0 4px 16px rgba(17, 23, 28, 0.12);
+
+  --topbar-height: 48px;
+  --sidenav-width: 220px;
+}

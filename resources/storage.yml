@@ -1,0 +1,37 @@
+resources:
+  catalogs:
+    app_catalog:
+      name: ${var.app_catalog}
+      comment: Data Governance App state (settings, audit, identity attributes)
+
+    demo_catalog:
+      name: ${var.demo_catalog}
+      comment: Demo domain for the Data Governance App (tagged tables and ABAC policies)
+
+  schemas:
+    app_schema:
+      catalog_name: ${resources.catalogs.app_catalog.name}
+      name: ${var.app_schema}
+      comment: Data Governance App Delta tables
+
+  postgres_projects:
+    app_lakebase:
+      project_id: ${var.lakebase_project_id}
+      display_name: Data Governance App
+      lifecycle:
+        prevent_destroy: true
+
+  # Non-login role that owns the app database. The app service principal gets CONNECT and
+  # CREATE through its app resource permission and owns the schema it creates.
+  postgres_roles:
+    app_database_owner:
+      parent: ${resources.postgres_projects.app_lakebase.name}/branches/production
+      role_id: governance-owner
+      postgres_role: governance_owner
+
+  postgres_databases:
+    app_database:
+      parent: ${resources.postgres_projects.app_lakebase.name}/branches/production
+      database_id: ${var.lakebase_database_id}
+      postgres_database: ${var.lakebase_database_id}
+      role: ${resources.postgres_roles.app_database_owner.name}

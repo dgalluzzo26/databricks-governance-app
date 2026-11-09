@@ -1,0 +1,22 @@
+[project]
+name = "databricks-governance-app"
+version = "0.1.0"
+description = "Federated data access governance app for Databricks Unity Catalog"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+# B027: optional lifecycle hooks on abstract base classes are intentionally no-ops.
+ignore = ["B027"]
+
+[tool.ruff.lint.per-file-ignores]
+# Seed data and ABAC condition strings read better unwrapped.
+"provisioning/steps/*" = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["backend/tests"]
+pythonpath = ["."]
