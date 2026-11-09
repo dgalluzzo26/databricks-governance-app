@@ -25,8 +25,11 @@ variables:
     description: Catalog for the optional demo domain (tagged tables and ABAC policies)
     default: data_governance_demo
   seed_demo:
-    description: Create the demo domain during setup (true/false)
-    default: "true"
+    description: Create the demo domain (governed tags, tagged tables, ABAC policies) during setup
+    default: "false"
+  catalog_managed_location:
+    description: Storage location for new catalogs; empty uses the metastore root or Default Storage
+    default: ""
   storage_backend:
     description: Where the app stores its state (lakebase | delta)
     default: lakebase

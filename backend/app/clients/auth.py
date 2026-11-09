@@ -16,6 +16,7 @@ class RequestContext:
 
     email: str
     user_name: str
+    display_name: str | None = None
     access_token: str | None = None
 
 

@@ -47,6 +47,7 @@ class ProvisioningContext:
     demo_catalog: str
     seed_demo: bool
     demo_except_principals: list[str] = field(default_factory=list)
+    catalog_managed_location: str | None = None
 
     @property
     def app_schema_fqn(self) -> str:

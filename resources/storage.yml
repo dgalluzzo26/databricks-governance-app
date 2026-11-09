@@ -1,19 +1,6 @@
+# Lakebase storage. Catalogs and the Delta schema are created by the setup job
+# (provisioning/steps/catalogs.py) so they work with Default Storage metastores.
 resources:
-  catalogs:
-    app_catalog:
-      name: ${var.app_catalog}
-      comment: Data Governance App state (settings, audit, identity attributes)
-
-    demo_catalog:
-      name: ${var.demo_catalog}
-      comment: Demo domain for the Data Governance App (tagged tables and ABAC policies)
-
-  schemas:
-    app_schema:
-      catalog_name: ${resources.catalogs.app_catalog.name}
-      name: ${var.app_schema}
-      comment: Data Governance App Delta tables
-
   postgres_projects:
     app_lakebase:
       project_id: ${var.lakebase_project_id}

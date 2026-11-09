@@ -19,13 +19,17 @@ Requires the Databricks CLI (authenticated to the target workspace), Node 22+, a
 The script builds the UI, deploys the bundle, runs the setup job, and starts the app. Re-running
 it is safe; every step is idempotent.
 
-| Created by the bundle | Purpose |
-| --- | --- |
-| Catalog `data_governance_app`, schema `app` | Delta storage tables (`app_settings`, `audit_events`) |
-| Catalog `data_governance_demo` | Optional demo domain (tagged tables and ABAC policies) |
-| Lakebase project `data-governance-app`, database `governance` | Lakebase storage |
-| Job `data-governance-app-setup` | Creates tables, seeds the demo, grants the app service principal |
-| App `data-governance-app` | The app, with SQL warehouse and Lakebase resources |
+| Created | By | Purpose |
+| --- | --- | --- |
+| Lakebase project `data-governance-app`, database `governance` | bundle | Lakebase storage |
+| App `data-governance-app` | bundle | The app, with SQL warehouse and Lakebase resources |
+| Job `data-governance-app-setup` | bundle | Runs the setup steps below |
+| Catalog `data_governance_app`, schema `app`, Delta tables | setup job | Delta storage (`app_settings`, `audit_events`) |
+| Catalog `data_governance_demo` | setup job | Demo domain, only when `seed_demo=true` |
+| Grants to the app service principal | setup job | Access to the app schema (and demo catalog) |
+
+The setup job creates catalogs with SQL, so they work on metastores that use Default Storage.
+On a metastore without Default Storage or a root location, set `catalog_managed_location`.
 
 ## Configuration
 
@@ -37,11 +41,14 @@ deploy time, for example `./scripts/deploy.sh dev --var seed_demo=false`.
 | `storage_backend` | `lakebase` | `lakebase` or `delta` |
 | `warehouse_id` | per target | SQL warehouse for metadata queries and Delta storage |
 | `app_catalog` / `app_schema` | `data_governance_app` / `app` | Delta storage location |
-| `demo_catalog`, `seed_demo` | `data_governance_demo`, `true` | Demo domain |
+| `demo_catalog`, `seed_demo` | `data_governance_demo`, `false` | Demo domain (creates governed tags, so it needs room under the account's tag policy limit) |
+| `catalog_managed_location` | empty | Storage location for new catalogs |
 | `lakebase_project_id`, `lakebase_database_id` | `data-governance-app`, `governance` | Lakebase storage |
 | `admin_group` | `admins` | Members are app administrators |
 
-The app reads these as environment variables (`backend/app/core/config.py`). With Lakebase, the
+The app reads these as environment variables (`backend/app/core/config.py`). The signed-in
+user's groups come from `/Me` using the user token the Apps proxy forwards (default
+`iam.current-user:read` scope). Membership in `admin_group` makes a user an app admin. With Lakebase, the
 app service principal creates and owns the `governance_app` schema on first start, so deploy
 before pointing a local run at the same database.
 

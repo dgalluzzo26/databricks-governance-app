@@ -12,12 +12,13 @@ from backend.app.core.errors import UnauthorizedError
 class RequestContextResolver:
     """Builds the caller identity from Databricks Apps proxy headers.
 
-    Outside Databricks Apps (local development) there are no proxy headers, so the caller is
-    DEV_USER_EMAIL, or else the identity of the local CLI profile.
+    The forwarded email is the workspace userName; the preferred-username header carries the
+    display name. Outside Databricks Apps (local development) there are no proxy headers, so the
+    caller is DEV_USER_EMAIL, or else the identity of the local CLI profile.
     """
 
     EMAIL_HEADER = "x-forwarded-email"
-    USER_HEADER = "x-forwarded-preferred-username"
+    DISPLAY_NAME_HEADER = "x-forwarded-preferred-username"
     TOKEN_HEADER = "x-forwarded-access-token"
 
     def __init__(self, config: AppConfig, factory: WorkspaceClientFactory, cache: TtlCache) -> None:
@@ -30,7 +31,8 @@ class RequestContextResolver:
         if email:
             return RequestContext(
                 email=email,
-                user_name=headers.get(self.USER_HEADER) or email,
+                user_name=email,
+                display_name=headers.get(self.DISPLAY_NAME_HEADER),
                 access_token=headers.get(self.TOKEN_HEADER),
             )
         local_user = self._local_user()

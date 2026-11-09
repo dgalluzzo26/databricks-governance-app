@@ -20,14 +20,23 @@ def test_me_resolves_forwarded_user_and_admin_group(client: TestClient) -> None:
     assert body["workspaceHost"] == HOST
 
 
+def test_me_prefers_user_token_for_groups(client: TestClient) -> None:
+    headers = {**headers_for("analyst@example.com"), "X-Forwarded-Access-Token": "user-token"}
+    body = client.get("/api/me", headers=headers).json()
+    assert body["groups"] == ["admins", "data-stewards"]
+    assert body["displayName"] == "Token User"
+    assert body["isAdmin"] is True
+
+
 def test_me_non_admin(client: TestClient) -> None:
     body = client.get("/api/me", headers=headers_for("analyst@example.com")).json()
     assert body["isAdmin"] is False
 
 
 def test_me_unknown_user_falls_back_to_header_identity(client: TestClient) -> None:
-    body = client.get("/api/me", headers=headers_for("new@example.com")).json()
-    assert body["displayName"] == "new@example.com"
+    body = client.get("/api/me", headers=headers_for("new@example.com", "New Person")).json()
+    assert body["userName"] == "new@example.com"
+    assert body["displayName"] == "New Person"
     assert body["groups"] == []
 
 

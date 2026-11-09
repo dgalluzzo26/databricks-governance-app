@@ -39,6 +39,11 @@ class FakeWorkspaceFactory:
     def service_principal(self):
         return self._client
 
+    def for_user(self, access_token: str):
+        groups = [SimpleNamespace(display=g) for g in ("admins", "data-stewards")]
+        me = SimpleNamespace(id="999", display_name="Token User", groups=groups)
+        return SimpleNamespace(current_user=SimpleNamespace(me=lambda: me))
+
 
 @pytest.fixture
 def config(tmp_path: Path) -> AppConfig:
@@ -67,5 +72,5 @@ def client(config: AppConfig, container: ServiceContainer) -> TestClient:
         yield test_client
 
 
-def headers_for(email: str) -> dict[str, str]:
-    return {"X-Forwarded-Email": email, "X-Forwarded-Preferred-Username": email}
+def headers_for(email: str, display_name: str = "Header Name") -> dict[str, str]:
+    return {"X-Forwarded-Email": email, "X-Forwarded-Preferred-Username": display_name}

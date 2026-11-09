@@ -38,6 +38,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--demo-catalog", default="data_governance_demo")
     parser.add_argument("--seed-demo", default="true")
     parser.add_argument(
+        "--catalog-managed-location",
+        default="",
+        help="Storage location for new catalogs; leave empty to use the metastore root or Default Storage",
+    )
+    parser.add_argument(
         "--demo-except-principals",
         default="",
         help="Comma-separated principals excepted from demo masks/filters (default: the caller)",
@@ -58,6 +63,7 @@ def build_context(args: argparse.Namespace) -> ProvisioningContext:
         demo_catalog=args.demo_catalog,
         seed_demo=_bool(args.seed_demo),
         demo_except_principals=excepted,
+        catalog_managed_location=args.catalog_managed_location.strip() or None,
     )
 
 

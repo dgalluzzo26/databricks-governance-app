@@ -17,11 +17,11 @@ resources:
           - name: STORAGE_BACKEND
             value: ${var.storage_backend}
           - name: APP_CATALOG
-            value: ${resources.catalogs.app_catalog.name}
+            value: ${var.app_catalog}
           - name: APP_SCHEMA
-            value: ${resources.schemas.app_schema.name}
+            value: ${var.app_schema}
           - name: DEMO_CATALOG
-            value: ${resources.catalogs.demo_catalog.name}
+            value: ${var.demo_catalog}
           - name: APP_ADMIN_GROUP
             value: ${var.admin_group}
       resources:

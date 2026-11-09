@@ -15,13 +15,15 @@ resources:
               - --app-name
               - ${resources.apps.governance_app.name}
               - --app-catalog
-              - ${resources.catalogs.app_catalog.name}
+              - ${var.app_catalog}
               - --app-schema
-              - ${resources.schemas.app_schema.name}
+              - ${var.app_schema}
               - --demo-catalog
-              - ${resources.catalogs.demo_catalog.name}
+              - ${var.demo_catalog}
               - --seed-demo
               - ${var.seed_demo}
+              - --catalog-managed-location
+              - ${var.catalog_managed_location}
       environments:
         - environment_key: default
           spec:
