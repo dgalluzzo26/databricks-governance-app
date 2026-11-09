@@ -36,6 +36,42 @@ export const ChevronDownIcon = (p: IconProps) => (
   </Icon>
 );
 
+export const PanelCollapseIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M2.5 3h11v10h-11z" />
+    <path d="M6 3v10" />
+    <path d="m9.5 6.5-2 1.5 2 1.5" />
+  </Icon>
+);
+
+export const PanelExpandIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M2.5 3h11v10h-11z" />
+    <path d="M6 3v10" />
+    <path d="m7.5 6.5 2 1.5-2 1.5" />
+  </Icon>
+);
+
+export const SunIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <circle cx="8" cy="8" r="2.5" />
+    <path d="M8 2.5v1.5M8 12v1.5M2.5 8H4M12 8h1.5M4.2 4.2l1.1 1.1M10.7 10.7l1.1 1.1M4.2 11.8l1.1-1.1M10.7 5.3l1.1-1.1" />
+  </Icon>
+);
+
+export const MoonIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M12.5 9.2A4.8 4.8 0 0 1 6.8 3.5 5.2 5.2 0 1 0 12.5 9.2Z" />
+  </Icon>
+);
+
+export const SystemThemeIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <rect x="2.5" y="3.5" width="11" height="8" rx="1.2" />
+    <path d="M6 13.5h4M8 11.5v2" />
+  </Icon>
+);
+
 export function DatabricksLogo({ size = 22 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden>

@@ -1,5 +1,6 @@
 /* Databricks workspace look: same tokens as the proposal mockups. */
-:root {
+:root,
+[data-theme="light"] {
   --db-orange: #ff3621;
   --db-navy: #1b3139;
 
@@ -10,6 +11,7 @@
   --color-bg: #f6f7f9;
   --color-surface: #ffffff;
   --color-tag: #edf1f4;
+  --color-overlay: rgba(17, 23, 28, 0.72);
 
   --color-primary: #2272b4;
   --color-primary-hover: #0e538b;
@@ -25,6 +27,42 @@
   --color-danger-border: #fecaca;
   --color-danger-text: #991b1b;
 
+  --shadow-sm: 0 1px 2px rgba(17, 23, 28, 0.06);
+  --shadow-md: 0 4px 16px rgba(17, 23, 28, 0.12);
+}
+
+[data-theme="dark"] {
+  --db-orange: #ff3621;
+  --db-navy: #0b1418;
+
+  --color-text: #e8edf2;
+  --color-text-muted: #9aabba;
+  --color-border: #2f3d48;
+  --color-border-subtle: #24313a;
+  --color-bg: #11181d;
+  --color-surface: #1a2329;
+  --color-tag: #24313a;
+  --color-overlay: rgba(0, 0, 0, 0.55);
+
+  --color-primary: #4ea1db;
+  --color-primary-hover: #7bb8e6;
+  --color-primary-subtle: #1d3344;
+
+  --color-success-bg: #0f2e24;
+  --color-success-border: #1f6a4f;
+  --color-success-text: #8ee0bf;
+  --color-warning-bg: #33210f;
+  --color-warning-border: #8a4b1a;
+  --color-warning-text: #f3c28a;
+  --color-danger-bg: #3a1515;
+  --color-danger-border: #8f3a3a;
+  --color-danger-text: #f0a8a8;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+:root {
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: "SFMono-Regular", Menlo, Consolas, monospace;
   --font-size-xs: 12px;
@@ -43,9 +81,8 @@
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
-  --shadow-sm: 0 1px 2px rgba(17, 23, 28, 0.06);
-  --shadow-md: 0 4px 16px rgba(17, 23, 28, 0.12);
 
   --topbar-height: 48px;
   --sidenav-width: 220px;
+  --sidenav-collapsed-width: 56px;
 }

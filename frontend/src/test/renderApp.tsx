@@ -4,6 +4,7 @@ import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { ApiProvider } from "@/api/ApiProvider";
 import type { ApiServices } from "@/api/services";
 import type { AppInfo, CurrentUser } from "@/api/types";
+import { PreferencesProvider } from "@/app/preferences";
 import { routes } from "@/app/routes";
 
 export const testUser: CurrentUser = {
@@ -41,9 +42,11 @@ export function renderApp(path = "/", services: ApiServices = fakeServices()) {
   const router = createMemoryRouter(routes, { initialEntries: [path] });
   return render(
     <QueryClientProvider client={queryClient}>
-      <ApiProvider services={services}>
-        <RouterProvider router={router} />
-      </ApiProvider>
+      <PreferencesProvider>
+        <ApiProvider services={services}>
+          <RouterProvider router={router} />
+        </ApiProvider>
+      </PreferencesProvider>
     </QueryClientProvider>,
   );
 }

@@ -3,6 +3,7 @@ import { useState } from "react";
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
 import { ApiProvider } from "@/api/ApiProvider";
 import { ApiError } from "@/api/httpClient";
+import { PreferencesProvider } from "./preferences";
 import { routes } from "./routes";
 
 function createQueryClient(): QueryClient {
@@ -23,9 +24,11 @@ export function App() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <ApiProvider>
-        <RouterProvider router={router} />
-      </ApiProvider>
+      <PreferencesProvider>
+        <ApiProvider>
+          <RouterProvider router={router} />
+        </ApiProvider>
+      </PreferencesProvider>
     </QueryClientProvider>
   );
 }
