@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 
 from backend.app.clients.auth import AuthStrategy, build_auth_strategy
 from backend.app.clients.cache import TtlCache
+from backend.app.clients.secrets import hydrate_admin_secrets
 from backend.app.clients.sql import SqlExecutor
 from backend.app.clients.workspace import WorkspaceClientFactory
 from backend.app.core.config import AppConfig
@@ -33,7 +35,8 @@ class ServiceContainer:
     @classmethod
     def build(cls, config: AppConfig, storage: StorageProvider | None = None) -> ServiceContainer:
         workspace = WorkspaceClientFactory(config)
-        sql = SqlExecutor(workspace.service_principal, config.warehouse_id)
+        # UC / SQL metadata uses the Account Admin SP when configured.
+        sql = SqlExecutor(workspace.admin, config.warehouse_id)
         storage = storage or build_storage(config, workspace, sql)
         identity_cache = TtlCache(config.identity_cache_ttl_seconds)
         return cls(
@@ -48,6 +51,7 @@ class ServiceContainer:
         )
 
     def startup(self) -> None:
+        self._ensure_admin_credentials()
         try:
             self.storage.initialize()
         except Exception:
@@ -56,3 +60,20 @@ class ServiceContainer:
 
     def shutdown(self) -> None:
         self.storage.close()
+
+    def _ensure_admin_credentials(self) -> None:
+        """Load Account Admin SP from the secret scope when not already injected."""
+        os.environ.setdefault("ADMIN_SECRET_SCOPE", self.config.admin_secret_scope)
+        loaded = hydrate_admin_secrets()
+        self.workspace.invalidate_admin()
+        if self.workspace.admin_configured:
+            logger.info(
+                "Account Admin SP ready (scope=%s, source=%s)",
+                self.config.admin_secret_scope,
+                ",".join(loaded) if loaded else "env",
+            )
+        else:
+            logger.warning(
+                "Account Admin SP is not configured; metastore-level ABAC requires secrets in scope %s",
+                self.config.admin_secret_scope,
+            )

@@ -26,6 +26,8 @@ export const testAppInfo: AppInfo = {
   appCatalog: "data_governance_app",
   appSchema: "app",
   adminGroup: "admins",
+  adminSecretScope: "databricks-governance-app",
+  adminSpConfigured: true,
   storage: { backend: "lakebase", healthy: true, detail: "governance.governance_app" },
 };
 

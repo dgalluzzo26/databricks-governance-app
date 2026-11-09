@@ -44,5 +44,5 @@ class RequestContextResolver:
         if self._config.dev_user_email:
             return self._config.dev_user_email
         return self._cache.get_or_load(
-            ("local-user",), lambda: self._factory.service_principal().current_user.me().user_name
+            ("local-user",), lambda: self._factory.app().current_user.me().user_name
         )

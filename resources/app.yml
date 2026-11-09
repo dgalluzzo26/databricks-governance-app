@@ -24,6 +24,13 @@ resources:
             value: ${var.demo_catalog}
           - name: APP_ADMIN_GROUP
             value: ${var.admin_group}
+          # Account Admin SP for metastore-level ABAC (from secret scope).
+          - name: ADMIN_SECRET_SCOPE
+            value: ${var.admin_secret_scope}
+          - name: ADMIN_CLIENT_ID
+            value_from: admin-client-id
+          - name: ADMIN_CLIENT_SECRET
+            value_from: admin-client-secret
       resources:
         - name: sql-warehouse
           sql_warehouse:
@@ -34,3 +41,13 @@ resources:
             branch: ${resources.postgres_projects.app_lakebase.name}/branches/production
             database: ${resources.postgres_databases.app_database.name}
             permission: CAN_CONNECT_AND_CREATE
+        - name: admin-client-id
+          secret:
+            scope: ${var.admin_secret_scope}
+            key: client_id
+            permission: READ
+        - name: admin-client-secret
+          secret:
+            scope: ${var.admin_secret_scope}
+            key: client_secret
+            permission: READ

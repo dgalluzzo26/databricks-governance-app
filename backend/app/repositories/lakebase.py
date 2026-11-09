@@ -34,7 +34,9 @@ class LakebaseTokenProvider:
     def token(self) -> str:
         with self._lock:
             if self._token is None or time.monotonic() - self._issued_at > _TOKEN_REFRESH_SECONDS:
-                credential = self._factory.service_principal().postgres.generate_database_credential(
+                # Lakebase credentials must come from the Apps SP (CAN_CONNECT_AND_CREATE),
+                # not the Account Admin SP used for Unity Catalog.
+                credential = self._factory.app().postgres.generate_database_credential(
                     endpoint=self._endpoint
                 )
                 self._token = credential.token

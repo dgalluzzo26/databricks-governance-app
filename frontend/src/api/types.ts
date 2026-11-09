@@ -23,5 +23,7 @@ export interface AppInfo {
   appCatalog: string;
   appSchema: string;
   adminGroup: string;
+  adminSecretScope: string;
+  adminSpConfigured: boolean;
   storage: StorageHealth;
 }

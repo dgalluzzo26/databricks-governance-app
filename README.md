@@ -52,6 +52,31 @@ user's groups come from `/Me` using the user token the Apps proxy forwards (defa
 app service principal creates and owns the `governance_app` schema on first start, so deploy
 before pointing a local run at the same database.
 
+## Account Admin SP (metastore ABAC)
+
+Metastore-level ABAC policies need an **Account Admin** service principal. The Databricks Apps
+runtime SP is not enough. Credentials live in secret scope **`databricks-governance-app`**
+(override with `admin_secret_scope` / `ADMIN_SECRET_SCOPE`):
+
+| Secret key | Env var injected into the app |
+| --- | --- |
+| `client_id` | `ADMIN_CLIENT_ID` |
+| `client_secret` | `ADMIN_CLIENT_SECRET` |
+
+The app resource declaration grants the Apps SP `READ` on those secrets and injects them at
+runtime. The app also hydrates from the scope on startup as a fallback (same pattern as
+`data-access-app`). Lakebase still uses the Apps SP; Unity Catalog / ABAC uses the Account Admin SP.
+
+```bash
+# Create / refresh (copy from data-access-app if that already holds the Account Admin SP)
+databricks secrets create-scope databricks-governance-app --profile "$PROFILE"
+databricks secrets put-acl databricks-governance-app <your-email> MANAGE --profile "$PROFILE"
+# After the app exists:
+APP_SP=$(databricks apps get data-governance-app --profile "$PROFILE" -o json \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["service_principal_client_id"])')
+databricks secrets put-acl databricks-governance-app "$APP_SP" READ --profile "$PROFILE"
+```
+
 ## Architecture
 
 ```

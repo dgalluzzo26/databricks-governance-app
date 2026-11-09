@@ -45,7 +45,7 @@ def test_me_without_headers_uses_local_identity(client: TestClient) -> None:
     assert body["userName"] == "local@example.com"
 
 
-def test_app_info_reports_storage(client: TestClient) -> None:
+def test_app_info_reports_storage_and_admin_sp(client: TestClient) -> None:
     body = client.get("/api/app-info", headers=headers_for("analyst@example.com")).json()
     assert body["storage"] == {
         "backend": "memory",
@@ -53,6 +53,8 @@ def test_app_info_reports_storage(client: TestClient) -> None:
         "detail": "In-memory storage; data is not persisted",
     }
     assert body["authMode"] == "service_principal"
+    assert body["adminSecretScope"] == "databricks-governance-app"
+    assert body["adminSpConfigured"] is True
 
 
 def test_unknown_api_route_is_json_404(client: TestClient) -> None:

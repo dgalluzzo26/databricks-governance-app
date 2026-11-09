@@ -14,6 +14,13 @@ from backend.app.repositories.memory import InMemoryStorageProvider
 HOST = "https://example.cloud.databricks.com"
 
 
+@pytest.fixture(autouse=True)
+def _skip_admin_secret_hydrate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tests must not call the workspace Secrets API (can hang on auth)."""
+    monkeypatch.setattr("backend.app.core.container.hydrate_admin_secrets", lambda **_kwargs: [])
+    monkeypatch.setattr("backend.app.main.hydrate_admin_secrets", lambda **_kwargs: [])
+
+
 class FakeUsersApi:
     def __init__(self, groups_by_user: dict[str, list[str]]) -> None:
         self._groups = groups_by_user
@@ -28,16 +35,27 @@ class FakeUsersApi:
 
 class FakeWorkspaceFactory:
     host = HOST
+    admin_configured = False
 
-    def __init__(self, groups_by_user: dict[str, list[str]]) -> None:
+    def __init__(self, groups_by_user: dict[str, list[str]], *, admin_configured: bool = False) -> None:
+        self.admin_configured = admin_configured
         self._client = SimpleNamespace(
             users=FakeUsersApi(groups_by_user),
             current_user=SimpleNamespace(me=lambda: SimpleNamespace(user_name="local@example.com")),
             config=SimpleNamespace(host=HOST),
         )
 
-    def service_principal(self):
+    def app(self):
         return self._client
+
+    def admin(self):
+        return self._client
+
+    def service_principal(self):
+        return self.admin()
+
+    def invalidate_admin(self) -> None:
+        return None
 
     def for_user(self, access_token: str):
         groups = [SimpleNamespace(display=g) for g in ("admins", "data-stewards")]
@@ -58,7 +76,10 @@ def config(tmp_path: Path) -> AppConfig:
 @pytest.fixture
 def container(config: AppConfig) -> ServiceContainer:
     container = ServiceContainer.build(config, storage=InMemoryStorageProvider())
-    fake = FakeWorkspaceFactory({"admin@example.com": ["admins", "users"], "analyst@example.com": ["users"]})
+    fake = FakeWorkspaceFactory(
+        {"admin@example.com": ["admins", "users"], "analyst@example.com": ["users"]},
+        admin_configured=True,
+    )
     container.workspace = fake
     container.identity._factory = fake
     container.request_context._factory = fake

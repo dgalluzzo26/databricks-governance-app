@@ -50,12 +50,20 @@ class AppConfig(BaseSettings):
 
     auth_mode: AuthMode = Field(AuthMode.SERVICE_PRINCIPAL, alias="AUTH_MODE")
     admin_group: str = Field("admins", alias="APP_ADMIN_GROUP")
+    # Account Admin SP for Unity Catalog / metastore ABAC (from secret scope or env).
+    admin_secret_scope: str = Field("databricks-governance-app", alias="ADMIN_SECRET_SCOPE")
+    admin_client_id: str | None = Field(None, alias="ADMIN_CLIENT_ID")
+    admin_client_secret: str | None = Field(None, alias="ADMIN_CLIENT_SECRET")
     metadata_cache_ttl_seconds: int = Field(120, alias="METADATA_CACHE_TTL_SECONDS")
     identity_cache_ttl_seconds: int = Field(300, alias="IDENTITY_CACHE_TTL_SECONDS")
     log_level: str = Field("INFO", alias="LOG_LEVEL")
 
     dev_user_email: str | None = Field(None, alias="DEV_USER_EMAIL")
     frontend_dist: Path = Field(REPO_ROOT / "frontend" / "dist", alias="FRONTEND_DIST")
+
+    @property
+    def admin_sp_configured(self) -> bool:
+        return bool(self.admin_client_id and self.admin_client_secret)
 
 
 @lru_cache

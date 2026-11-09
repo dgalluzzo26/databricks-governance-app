@@ -18,4 +18,6 @@ class AppInfo(ApiModel):
     app_catalog: str
     app_schema: str
     admin_group: str
+    admin_secret_scope: str
+    admin_sp_configured: bool
     storage: StorageHealth

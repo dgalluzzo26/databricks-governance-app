@@ -26,5 +26,7 @@ class AppInfoService:
             app_catalog=self._config.app_catalog,
             app_schema=self._config.app_schema,
             admin_group=self._config.admin_group,
+            admin_secret_scope=self._config.admin_secret_scope,
+            admin_sp_configured=self._factory.admin_configured,
             storage=self.storage_health(),
         )

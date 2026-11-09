@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -13,6 +14,7 @@ from starlette.concurrency import run_in_threadpool
 
 from backend.app import __version__
 from backend.app.api.routes import api_router
+from backend.app.clients.secrets import hydrate_admin_secrets
 from backend.app.core.config import AppConfig, get_config
 from backend.app.core.container import ServiceContainer
 from backend.app.core.errors import NotFoundError, register_exception_handlers
@@ -40,7 +42,11 @@ def _mount_frontend(app: FastAPI, dist: Path) -> None:
 
 
 def create_app(config: AppConfig | None = None, container: ServiceContainer | None = None) -> FastAPI:
-    config = config or get_config()
+    # Prefer secrets injected by app resources; otherwise hydrate from the secret scope.
+    if config is None:
+        hydrate_admin_secrets()
+        get_config.cache_clear()
+        config = get_config()
     configure_logging(config.log_level)
     container = container or ServiceContainer.build(config)
 
@@ -48,11 +54,12 @@ def create_app(config: AppConfig | None = None, container: ServiceContainer | No
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await run_in_threadpool(container.startup)
         logger.info(
-            "%s %s started (storage=%s, auth=%s)",
+            "%s %s started (storage=%s, auth=%s, admin_sp=%s)",
             config.app_name,
             __version__,
             container.storage.kind,
             config.auth_mode.value,
+            "yes" if container.workspace.admin_configured else "no",
         )
         yield
         await run_in_threadpool(container.shutdown)
@@ -66,5 +73,8 @@ def create_app(config: AppConfig | None = None, container: ServiceContainer | No
 
 
 if __name__ == "__main__":
+    if not os.environ.get("ADMIN_CLIENT_ID"):
+        hydrate_admin_secrets()
+        get_config.cache_clear()
     cfg = get_config()
     uvicorn.run(create_app(cfg), host="0.0.0.0", port=cfg.port, proxy_headers=True)

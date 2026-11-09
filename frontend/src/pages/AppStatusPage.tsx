@@ -17,6 +17,12 @@ export function AppStatusPage() {
               {info.storage.detail}
             </Alert>
           )}
+          {!info.adminSpConfigured && (
+            <Alert tone="warning" title="Account Admin service principal is not configured">
+              Metastore-level ABAC needs <code>client_id</code> / <code>client_secret</code> in secret scope{" "}
+              <code>{info.adminSecretScope}</code>.
+            </Alert>
+          )}
           <Card title="Storage">
             <DescriptionList
               items={[
@@ -30,6 +36,21 @@ export function AppStatusPage() {
                   ),
                 },
                 { label: "Location", value: info.storage.detail },
+              ]}
+            />
+          </Card>
+          <Card title="Unity Catalog access">
+            <DescriptionList
+              items={[
+                { label: "Secret scope", value: <code>{info.adminSecretScope}</code> },
+                {
+                  label: "Account Admin SP",
+                  value: (
+                    <Badge tone={info.adminSpConfigured ? "success" : "warning"}>
+                      {info.adminSpConfigured ? "Configured" : "Missing"}
+                    </Badge>
+                  ),
+                },
               ]}
             />
           </Card>

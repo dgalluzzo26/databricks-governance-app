@@ -42,6 +42,9 @@ variables:
   admin_group:
     description: Group whose members are app administrators
     default: admins
+  admin_secret_scope:
+    description: Secret scope holding Account Admin SP client_id / client_secret (metastore ABAC)
+    default: databricks-governance-app
 
 sync:
   exclude:
