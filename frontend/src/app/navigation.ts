@@ -1,6 +1,7 @@
 import type { ComponentType, SVGProps } from "react";
 import {
   ExplorerIcon,
+  HelpIcon,
   HomeIcon,
   IdentityIcon,
   MaskRuleIcon,
@@ -34,5 +35,11 @@ export const navigation: NavSection[] = [
       { label: "Mask rules", to: "/mask-rules", icon: MaskRuleIcon },
     ],
   },
-  { title: "App", items: [{ label: "App status", to: "/status", icon: StatusIcon }] },
+  {
+    title: "App",
+    items: [
+      { label: "Help", to: "/help", icon: HelpIcon },
+      { label: "App status", to: "/status", icon: StatusIcon },
+    ],
+  },
 ];

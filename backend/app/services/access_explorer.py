@@ -539,7 +539,11 @@ class AccessExplorerService:
                             )
                         ),
                         requestable=dim_def is not None,
-                        request_path=None,
+                        request_path=(
+                            f"/identity?tab=request&key={dim}&value=*"
+                            if dim_def is not None
+                            else None
+                        ),
                         column_names=[row_filter.column_name] if row_filter.column_name else [],
                         covers_paths=["*"],
                         is_hierarchy_parent=False,
@@ -562,7 +566,7 @@ class AccessExplorerService:
                             f"{dim}={value} to see matching rows. App admins will review."
                         ),
                         requestable=True,
-                        request_path=None,
+                        request_path=f"/identity?tab=request&key={dim}&value={value}",
                         column_names=[row_filter.column_name] if row_filter.column_name else [],
                         covers_paths=[value],
                         is_hierarchy_parent=False,

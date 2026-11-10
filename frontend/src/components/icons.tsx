@@ -57,6 +57,13 @@ export const ExplorerIcon = (p: IconProps) => (
   </Icon>
 );
 
+export const HelpIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <circle cx="8" cy="8" r="5.5" />
+    <path d="M6.2 6.2a1.9 1.9 0 1 1 2.6 2.5c-.6.4-1 .8-1 1.5M8 11.8v.2" />
+  </Icon>
+);
+
 export const ExternalIcon = (p: IconProps) => (
   <Icon {...p}>
     <path d="M9 2.5h4.5V7M13.5 2.5 7.5 8.5M11.5 9.5v4h-9v-9h4" />

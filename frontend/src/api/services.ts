@@ -321,6 +321,14 @@ export class AccessExplorerApi {
   }
 }
 
+export class HelpApi {
+  constructor(private readonly http: HttpClient) {}
+
+  flows(signal?: AbortSignal): Promise<string> {
+    return this.http.getText("/help/flows", signal);
+  }
+}
+
 export interface ApiServices {
   identity: IdentityApi;
   appInfo: AppInfoApi;
@@ -329,6 +337,7 @@ export interface ApiServices {
   rowFilters: RowFiltersApi;
   maskRules: MaskRulesApi;
   accessExplorer: AccessExplorerApi;
+  help: HelpApi;
 }
 
 export function createApiServices(http: HttpClient = new HttpClient()): ApiServices {
@@ -340,5 +349,6 @@ export function createApiServices(http: HttpClient = new HttpClient()): ApiServi
     rowFilters: new RowFiltersApi(http),
     maskRules: new MaskRulesApi(http),
     accessExplorer: new AccessExplorerApi(http),
+    help: new HelpApi(http),
   };
 }

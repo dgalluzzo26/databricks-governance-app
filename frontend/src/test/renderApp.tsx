@@ -680,6 +680,10 @@ export function fakeServices(
         truncated: false,
       }),
     },
+    help: {
+      flows: async () =>
+        "# Developer guide\n\n## Mental model\n\nMasks and row filters.\n\n## Row filter flow\n\nUse `state=*`.\n",
+    },
   } as unknown as ApiServices;
 }
 

@@ -32,6 +32,7 @@ export const queryKeys = {
   rowFilterAttachments: ["row-filters", "attachments"] as const,
   maskRules: ["mask-rules"] as const,
   maskRulePack: ["mask-rules", "pack"] as const,
+  helpFlows: ["help", "flows"] as const,
 };
 
 export function useCurrentUser() {
@@ -468,5 +469,14 @@ export function useTreeTables(catalog: string, schema: string, enabled: boolean)
     queryKey: ["access-explorer", "tree", "tables", catalog, schema],
     queryFn: ({ signal }) => api.accessExplorer.tables(catalog, schema, signal),
     enabled,
+  });
+}
+
+export function useHelpFlows() {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.helpFlows,
+    queryFn: ({ signal }) => api.help.flows(signal),
+    staleTime: 10 * 60_000,
   });
 }

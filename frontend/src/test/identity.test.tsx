@@ -71,7 +71,7 @@ describe("Identity attributes", () => {
     const user = userEvent.setup();
     renderApp("/identity?tab=request");
 
-    expect(await screen.findByText("Request sensitivity access")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Request access" })).toBeInTheDocument();
     await screen.findByRole("option", { name: "finance.budget.PII.Name" });
     await user.selectOptions(screen.getByLabelText("Sensitivity path"), "finance.budget.PII.Name");
     await user.type(screen.getByLabelText("Justification"), "Quarterly close");
@@ -84,7 +84,7 @@ describe("Identity attributes", () => {
   it("shows approvals inbox items for approvers", async () => {
     renderApp("/identity?tab=approvals");
     expect(await screen.findByText("Approvals inbox")).toBeInTheDocument();
-    expect(await screen.findByText("finance.budget.PII.Name")).toBeInTheDocument();
+    expect((await screen.findAllByText(/finance\.budget\.PII\.Name/)).length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Deny" })).toBeInTheDocument();
   });

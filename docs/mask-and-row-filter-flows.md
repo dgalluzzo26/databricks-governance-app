@@ -235,7 +235,7 @@ Builder: `build_policy_sql`. Recreated on every `ensure_pack`.
 
 ---
 
-## Access Explorer (read path)
+## Access Explorer (read + request path)
 
 UI: `/access-explorer` · API: `POST /api/access-explorer/analyze`, `GET /api/access-explorer/search`
 
@@ -245,12 +245,24 @@ For a table the service:
 2. Evaluates mask match the same way as `mask_sensitivity_variant` (and flags geo separately)
 3. Resolves `mask_rule` through the **app registry** (same fallback to `full`)
 4. Compares the user’s `sensitivity` attributes with `has_sensitivity_access`
-5. Detects a `row_filter` attachment and whether the user holds that dimension (`*` or values)
-6. Suggests:
-   - **Sensitivity paths** → requestable via `/identity?tab=request&value=…`
-   - **Row-filter attributes** → not requestable yet (admin assign); shown as suggestions only
+5. Detects a `row_filter` tag on the table’s columns (falls back to the pack attachment index)
+6. Suggests requestable attributes the user can submit from the explorer (or Identity → Request):
+   - **Sensitivity** — one suggestion per distinct missing required path, plus optional **hierarchy
+     parents** that cover 2+ missing leaves (when that parent is an allowed value)
+   - **Row filter** — dimension `*` (all rows) and any concrete allowed values the user does not
+     already hold
 
 UC grants are intentionally omitted for now.
+
+### Who reviews a request
+
+| Attribute | Routing |
+| --- | --- |
+| `sensitivity` | Most-specific configured **category approver** for a path prefix of the requested value. If none is configured (or the matched category has zero approvers) → **app admins**. |
+| Row-filter dimensions (`state`, …) | Always **app admins** (no category hierarchy for dimensions). |
+
+Create requests via `POST /api/identity/access-requests` with `attribute_key` + `attribute_value`
+(defaults to `sensitivity` when `attribute_key` is omitted). Approvals appear in Identity → Approvals.
 
 ---
 
@@ -258,8 +270,8 @@ UC grants are intentionally omitted for now.
 
 | Attribute key | Used by | How users get it |
 | --- | --- | --- |
-| `sensitivity` | `has_sensitivity` / column unmask | Access request → category approver → assign |
-| Row-filter dimension keys (`state`, …) | `has_row_access` | Admin assign only (today) |
+| `sensitivity` | `has_sensitivity` / column unmask | Access request → category approver (or app admin) → assign |
+| Row-filter dimension keys (`state`, …) | `has_row_access` | Access request → app admin → assign (or admin assign) |
 
 Mirror table: `data_governance_app.app.identity_attributes` (synced from Lakebase when that
 backend is active).

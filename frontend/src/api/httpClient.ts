@@ -31,6 +31,10 @@ export class HttpClient {
     return this.request<T>("GET", path, undefined, signal);
   }
 
+  getText(path: string, signal?: AbortSignal): Promise<string> {
+    return this.requestText("GET", path, signal);
+  }
+
   post<T>(path: string, body?: unknown): Promise<T> {
     return this.request<T>("POST", path, body);
   }
@@ -58,6 +62,19 @@ export class HttpClient {
       return undefined as T;
     }
     return (await response.json()) as T;
+  }
+
+  private async requestText(method: string, path: string, signal?: AbortSignal): Promise<string> {
+    const response = await this.fetchFn(`${this.baseUrl}${path}`, {
+      method,
+      signal,
+      credentials: "same-origin",
+      headers: { Accept: "text/plain, text/markdown, */*" },
+    });
+    if (!response.ok) {
+      throw await HttpClient.toError(response);
+    }
+    return response.text();
   }
 
   private static async toError(response: Response): Promise<ApiError> {

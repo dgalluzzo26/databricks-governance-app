@@ -7,6 +7,7 @@ import { NotFoundPage } from "@/pages/NotFoundPage";
 import { PoliciesPage } from "@/pages/policies/PoliciesPage";
 import { PolicyDetailPage } from "@/pages/policies/PolicyDetailPage";
 import { AccessExplorerPage } from "@/pages/accessExplorer/AccessExplorerPage";
+import { HelpPage } from "@/pages/help/HelpPage";
 import { MaskRulesPage } from "@/pages/maskRules/MaskRulesPage";
 import { RowFiltersPage } from "@/pages/rowFilters/RowFiltersPage";
 
@@ -21,6 +22,7 @@ export const routes: RouteObject[] = [
       { path: "identity", element: <IdentityPage /> },
       { path: "row-filters", element: <RowFiltersPage /> },
       { path: "mask-rules", element: <MaskRulesPage /> },
+      { path: "help", element: <HelpPage /> },
       { path: "status", element: <AppStatusPage /> },
       { path: "*", element: <NotFoundPage /> },
     ],

@@ -19,6 +19,7 @@ import {
   useMyAccessRequests,
   useMyAttributes,
   useRevokeAttribute,
+  useRowFilterDimensions,
   useUpsertAttributeDefinition,
   useUpsertCategoryApprover,
 } from "@/api/queries";
@@ -212,20 +213,41 @@ function MyAttributesPanel() {
 function RequestAccessPanel() {
   const [searchParams] = useSearchParams();
   const definitions = useAttributeDefinitions();
+  const dimensions = useRowFilterDimensions();
   const create = useCreateAccessRequest();
-  const sensitivity = definitions.data?.definitions.find((item) => item.key === "sensitivity");
-  const values = sensitivity?.allowedValues ?? [];
-  const prefills = searchParams.get("value") ?? "";
-  const [attributeValue, setAttributeValue] = useState(prefills);
+  const prefillsKey = searchParams.get("key") ?? "sensitivity";
+  const prefillsValue = searchParams.get("value") ?? "";
+  const [attributeKey, setAttributeKey] = useState(prefillsKey);
+  const [attributeValue, setAttributeValue] = useState(prefillsValue);
   const [justification, setJustification] = useState("");
   const [expires, setExpires] = useState("");
 
+  const dimKeys = useMemo(
+    () => new Set((dimensions.data?.dimensions ?? []).map((item) => item.key)),
+    [dimensions.data],
+  );
+  const requestable = useMemo(() => {
+    const defs = definitions.data?.definitions ?? [];
+    return defs.filter((item) => item.key === "sensitivity" || dimKeys.has(item.key));
+  }, [definitions.data, dimKeys]);
+  const selected = requestable.find((item) => item.key === attributeKey) ?? null;
+  const values = selected?.allowedValues ?? [];
+  const isRowFilter = attributeKey !== "sensitivity";
+
   useEffect(() => {
-    if (prefills) setAttributeValue(prefills);
-  }, [prefills]);
+    if (prefillsKey) setAttributeKey(prefillsKey);
+    if (prefillsValue) setAttributeValue(prefillsValue);
+  }, [prefillsKey, prefillsValue]);
+
+  useEffect(() => {
+    if (attributeValue && values.length && !values.includes(attributeValue)) {
+      setAttributeValue("");
+    }
+  }, [attributeKey, values, attributeValue]);
 
   const onSubmit = async () => {
     await create.mutateAsync({
+      attributeKey,
       attributeValue,
       justification: justification.trim(),
       requestedExpiresAt: new Date(expires).toISOString(),
@@ -236,22 +258,47 @@ function RequestAccessPanel() {
   };
 
   return (
-    <Card title="Request sensitivity access">
-      {!sensitivity && !definitions.isPending && (
-        <Alert tone="warning" title="Sensitivity definition missing">
-          An admin must create the sensitivity attribute definition before requests can be submitted.
+    <Card title="Request access">
+      <p className={styles.muted}>
+        Request a sensitivity path (category approvers when configured) or a row-filter dimension value
+        such as <code>state=*</code> (app admins). Prefer Access Explorer to discover the right
+        attributes for a table.
+      </p>
+      {!requestable.length && !definitions.isPending && !dimensions.isPending && (
+        <Alert tone="warning" title="No requestable attributes">
+          An admin must create the sensitivity definition and/or row-filter dimensions before requests
+          can be submitted.
         </Alert>
       )}
       <div className={styles.formGrid}>
+        <label className={styles.field}>
+          <span className={styles.label}>Attribute</span>
+          <select
+            className={styles.select}
+            value={attributeKey}
+            onChange={(event) => {
+              setAttributeKey(event.target.value);
+              setAttributeValue("");
+            }}
+            disabled={!requestable.length}
+          >
+            {requestable.map((item) => (
+              <option key={item.key} value={item.key}>
+                {item.key}
+                {item.key === "sensitivity" ? " (mask)" : " (row filter)"}
+              </option>
+            ))}
+          </select>
+        </label>
         <label className={styles.fieldGrow}>
-          <span className={styles.label}>Sensitivity path</span>
+          <span className={styles.label}>{isRowFilter ? "Dimension value" : "Sensitivity path"}</span>
           <select
             className={styles.select}
             value={attributeValue}
             onChange={(event) => setAttributeValue(event.target.value)}
             disabled={!values.length}
           >
-            <option value="">Select path</option>
+            <option value="">Select value</option>
             {values.map((value) => (
               <option key={value} value={value}>
                 {value}
@@ -278,11 +325,17 @@ function RequestAccessPanel() {
           />
         </label>
       </div>
+      {isRowFilter && (
+        <div className={styles.muted} style={{ marginTop: "var(--space-2)" }}>
+          Row-filter requests are reviewed by app admins. Use <code>*</code> for all rows, or a
+          concrete value to match only those rows.
+        </div>
+      )}
       <div className={styles.buttonRow} style={{ marginTop: "var(--space-3)" }}>
         <button
           type="button"
           className={`${styles.button} ${styles.buttonPrimary}`}
-          disabled={!attributeValue || !justification.trim() || !expires || create.isPending}
+          disabled={!attributeKey || !attributeValue || !justification.trim() || !expires || create.isPending}
           onClick={() => void onSubmit()}
         >
           {create.isPending ? "Submitting…" : "Submit request"}
@@ -307,7 +360,9 @@ function MyRequestsPanel() {
           <table className={styles.table} aria-label="My access requests">
             <thead>
               <tr>
-                <th>Path</th>
+                <th>Attribute</th>
+                <th>Value</th>
+                <th>Routed to</th>
                 <th>Status</th>
                 <th>Requested expiry</th>
                 <th>Submitted</th>
@@ -318,7 +373,17 @@ function MyRequestsPanel() {
               {data.requests.map((item) => (
                 <tr key={item.requestId}>
                   <td>
+                    <code>{item.attributeKey}</code>
+                  </td>
+                  <td>
                     <code>{item.attributeValue}</code>
+                  </td>
+                  <td className={styles.muted}>
+                    {item.routedTo === "category_approvers"
+                      ? item.resolvedCategory
+                        ? `category ${item.resolvedCategory}`
+                        : "category approvers"
+                      : "app admins"}
                   </td>
                   <td>
                     <Badge tone={item.status === "APPROVED" ? "success" : item.status === "DENIED" ? "danger" : "neutral"}>
@@ -364,8 +429,9 @@ function ApprovalsPanel() {
   return (
     <Card title="Approvals inbox" actions={data ? <Badge>{data.total}</Badge> : null}>
       <p className={styles.muted}>
-        Pending sensitivity requests plus assignments expiring within 30 days. Most-specific category
-        approvers decide; app admins can break glass.
+        Pending sensitivity and row-filter requests plus sensitivity assignments expiring within 30
+        days. Category approvers decide matching sensitivity paths; row-filter requests and unrouted
+        sensitivity go to app admins.
       </p>
       {isPending && <Spinner label="Loading approvals" />}
       {error && <ErrorAlert error={error} title="Could not load approvals" />}
@@ -380,9 +446,16 @@ function ApprovalsPanel() {
               <div key={key} className={styles.approvalCard}>
                 <div className={styles.toolbar}>
                   <Badge tone={item.kind === "RENEWAL" ? "warning" : "info"}>{item.kind}</Badge>
-                  <code>{item.attributeValue}</code>
+                  <code>
+                    {item.request?.attributeKey ?? item.assignment?.attributeKey ?? "sensitivity"}=
+                    {item.attributeValue}
+                  </code>
                   <span className={styles.muted}>{item.principalName}</span>
-                  {item.resolvedCategory && <Badge>via {item.resolvedCategory}</Badge>}
+                  {item.resolvedCategory ? (
+                    <Badge>via {item.resolvedCategory}</Badge>
+                  ) : (
+                    <Badge tone="warning">app admins</Badge>
+                  )}
                 </div>
                 {item.kind === "REQUEST" && item.request && (
                   <div className={styles.muted}>Justification: {item.request.justification}</div>
