@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from datetime import datetime
 from typing import Any
 
 import psycopg
@@ -13,9 +14,25 @@ from psycopg_pool import ConnectionPool
 from backend.app.clients.workspace import WorkspaceClientFactory
 from backend.app.core.config import AppConfig
 from backend.app.core.errors import NotConfiguredError
+from backend.app.models.access_request import AccessRequest, AccessRequestStatus, CategoryApprover
 from backend.app.models.app_info import StorageHealth
 from backend.app.models.audit import AuditEvent
-from backend.app.repositories.base import AuditRepository, SettingsRepository, StorageProvider
+from backend.app.models.identity_attribute import (
+    AttributeAssignmentFilter,
+    AttributeDefinition,
+    AttributeSource,
+    IdentityAttributeAssignment,
+    ValueSource,
+)
+from backend.app.models.principal import PrincipalKind
+from backend.app.repositories.base import (
+    AccessRequestRepository,
+    AuditRepository,
+    CategoryApproverRepository,
+    IdentityAttributeRepository,
+    SettingsRepository,
+    StorageProvider,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +90,84 @@ CREATE TABLE IF NOT EXISTS {schema}.audit_events (
   payload    JSONB NOT NULL DEFAULT '{{}}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL
 );
-CREATE INDEX IF NOT EXISTS audit_events_created_idx ON {schema}.audit_events (created_at DESC);
+CREATE INDEX IF NOT EXISTS audit_events_created_idx
+  ON {schema}.audit_events (created_at DESC);
+
+CREATE TABLE IF NOT EXISTS {schema}.identity_attribute_definitions (
+  attribute_key       TEXT PRIMARY KEY,
+  description         TEXT,
+  governed_tag_keys   JSONB NOT NULL DEFAULT '[]'::jsonb,
+  allowed_values      JSONB NOT NULL DEFAULT '[]'::jsonb,
+  value_source        TEXT NOT NULL DEFAULT 'governed_tags',
+  value_sql           TEXT,
+  created_by          TEXT,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_by          TEXT,
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS {schema}.identity_attributes (
+  assignment_id   TEXT PRIMARY KEY,
+  principal_name  TEXT NOT NULL,
+  principal_type  TEXT NOT NULL,
+  attribute_key   TEXT NOT NULL,
+  attribute_value TEXT NOT NULL,
+  source          TEXT NOT NULL,
+  granted_by      TEXT,
+  justification   TEXT,
+  expires_at      TIMESTAMPTZ,
+  created_at      TIMESTAMPTZ NOT NULL,
+  revoked_at      TIMESTAMPTZ,
+  revoked_by      TEXT
+);
+CREATE INDEX IF NOT EXISTS identity_attributes_principal_idx
+  ON {schema}.identity_attributes (lower(principal_name), attribute_key);
+CREATE INDEX IF NOT EXISTS identity_attributes_key_idx
+  ON {schema}.identity_attributes (attribute_key, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS {schema}.sensitivity_category_approvers (
+  approver_id     TEXT PRIMARY KEY,
+  category_path   TEXT NOT NULL,
+  principal_name  TEXT NOT NULL,
+  principal_type  TEXT NOT NULL,
+  created_by      TEXT,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS sensitivity_category_approvers_uniq
+  ON {schema}.sensitivity_category_approvers (
+    lower(category_path), lower(principal_name), principal_type
+  );
+CREATE INDEX IF NOT EXISTS sensitivity_category_approvers_path_idx
+  ON {schema}.sensitivity_category_approvers (lower(category_path));
+
+CREATE TABLE IF NOT EXISTS {schema}.access_requests (
+  request_id             TEXT PRIMARY KEY,
+  requester_name         TEXT NOT NULL,
+  attribute_key          TEXT NOT NULL,
+  attribute_value        TEXT NOT NULL,
+  requested_expires_at   TIMESTAMPTZ NOT NULL,
+  justification          TEXT NOT NULL,
+  status                 TEXT NOT NULL,
+  decided_by             TEXT,
+  decided_at             TIMESTAMPTZ,
+  decision_note          TEXT,
+  approved_expires_at    TIMESTAMPTZ,
+  created_at             TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS access_requests_status_idx
+  ON {schema}.access_requests (status, created_at DESC);
+CREATE INDEX IF NOT EXISTS access_requests_requester_idx
+  ON {schema}.access_requests (lower(requester_name), created_at DESC);
+CREATE INDEX IF NOT EXISTS access_requests_value_idx
+  ON {schema}.access_requests (attribute_key, lower(attribute_value), status);
+
+CREATE TABLE IF NOT EXISTS {schema}.renewal_dismissals (
+  assignment_id   TEXT NOT NULL,
+  expires_at      TIMESTAMPTZ NOT NULL,
+  dismissed_by    TEXT NOT NULL,
+  dismissed_at    TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (assignment_id, expires_at)
+);
 """
 
 
@@ -134,9 +228,431 @@ class LakebaseAuditRepository(AuditRepository):
 
     def list_recent(self, limit: int = 100) -> list[AuditEvent]:
         rows = self._pg.fetch(
-            "SELECT * FROM {schema}.audit_events ORDER BY created_at DESC LIMIT %(limit)s", {"limit": limit}
+            "SELECT * FROM {schema}.audit_events ORDER BY created_at DESC LIMIT %(limit)s",
+            {"limit": limit},
         )
         return [AuditEvent(**r) for r in rows]
+
+
+class LakebaseIdentityAttributeRepository(IdentityAttributeRepository):
+    def __init__(self, pg: _Pg) -> None:
+        self._pg = pg
+
+    def list_definitions(self) -> list[AttributeDefinition]:
+        rows = self._pg.fetch(
+            "SELECT * FROM {schema}.identity_attribute_definitions ORDER BY attribute_key"
+        )
+        return [self._definition_from_row(r) for r in rows]
+
+    def get_definition(self, key: str) -> AttributeDefinition | None:
+        rows = self._pg.fetch(
+            "SELECT * FROM {schema}.identity_attribute_definitions "
+            "WHERE attribute_key = %(key)s",
+            {"key": key},
+        )
+        return self._definition_from_row(rows[0]) if rows else None
+
+    def upsert_definition(self, definition: AttributeDefinition) -> AttributeDefinition:
+        self._pg.run(
+            """
+            INSERT INTO {schema}.identity_attribute_definitions (
+              attribute_key, description, governed_tag_keys, allowed_values,
+              value_source, value_sql, created_by, created_at, updated_by, updated_at
+            ) VALUES (
+              %(key)s, %(description)s, %(governed_tag_keys)s, %(allowed_values)s,
+              %(value_source)s, %(value_sql)s,
+              %(created_by)s, %(created_at)s, %(updated_by)s, %(updated_at)s
+            )
+            ON CONFLICT (attribute_key) DO UPDATE SET
+              description = EXCLUDED.description,
+              governed_tag_keys = EXCLUDED.governed_tag_keys,
+              allowed_values = EXCLUDED.allowed_values,
+              value_source = EXCLUDED.value_source,
+              value_sql = EXCLUDED.value_sql,
+              updated_by = EXCLUDED.updated_by,
+              updated_at = EXCLUDED.updated_at
+            """,
+            {
+                "key": definition.key,
+                "description": definition.description,
+                "governed_tag_keys": Jsonb(definition.governed_tag_keys),
+                "allowed_values": Jsonb(definition.allowed_values),
+                "value_source": definition.value_source.value,
+                "value_sql": definition.value_sql,
+                "created_by": definition.created_by,
+                "created_at": definition.created_at or datetime.now().astimezone(),
+                "updated_by": definition.updated_by,
+                "updated_at": definition.updated_at or datetime.now().astimezone(),
+            },
+        )
+        return self.get_definition(definition.key) or definition
+
+    def delete_definition(self, key: str) -> bool:
+        before = self.get_definition(key)
+        if before is None:
+            return False
+        self._pg.run(
+            "DELETE FROM {schema}.identity_attribute_definitions WHERE attribute_key = %(key)s",
+            {"key": key},
+        )
+        return True
+
+    def list_assignments(self, criteria: AttributeAssignmentFilter) -> list[IdentityAttributeAssignment]:
+        clauses = ["1=1"]
+        params: dict[str, Any] = {}
+        if criteria.principal_name:
+            clauses.append("lower(principal_name) = lower(%(principal_name)s)")
+            params["principal_name"] = criteria.principal_name
+        if criteria.principal_type:
+            clauses.append("principal_type = %(principal_type)s")
+            params["principal_type"] = criteria.principal_type.value
+        if criteria.attribute_key:
+            clauses.append("attribute_key = %(attribute_key)s")
+            params["attribute_key"] = criteria.attribute_key
+        if not criteria.include_inactive:
+            clauses.append("revoked_at IS NULL")
+            clauses.append("(expires_at IS NULL OR expires_at > now())")
+        where = " AND ".join(clauses)
+        rows = self._pg.fetch(
+            f"SELECT * FROM {{schema}}.identity_attributes WHERE {where} "
+            "ORDER BY created_at DESC",
+            params,
+        )
+        return [self._assignment_from_row(r) for r in rows]
+
+    def get_assignment(self, assignment_id: str) -> IdentityAttributeAssignment | None:
+        rows = self._pg.fetch(
+            "SELECT * FROM {schema}.identity_attributes WHERE assignment_id = %(id)s",
+            {"id": assignment_id},
+        )
+        return self._assignment_from_row(rows[0]) if rows else None
+
+    def add_assignment(self, assignment: IdentityAttributeAssignment) -> IdentityAttributeAssignment:
+        self._pg.run(
+            """
+            INSERT INTO {schema}.identity_attributes (
+              assignment_id, principal_name, principal_type, attribute_key, attribute_value,
+              source, granted_by, justification, expires_at, created_at, revoked_at, revoked_by
+            ) VALUES (
+              %(assignment_id)s, %(principal_name)s, %(principal_type)s, %(attribute_key)s,
+              %(attribute_value)s, %(source)s, %(granted_by)s, %(justification)s, %(expires_at)s,
+              %(created_at)s, %(revoked_at)s, %(revoked_by)s
+            )
+            """,
+            {
+                "assignment_id": assignment.assignment_id,
+                "principal_name": assignment.principal_name,
+                "principal_type": assignment.principal_type.value,
+                "attribute_key": assignment.attribute_key,
+                "attribute_value": assignment.attribute_value,
+                "source": assignment.source.value,
+                "granted_by": assignment.granted_by,
+                "justification": assignment.justification,
+                "expires_at": assignment.expires_at,
+                "created_at": assignment.created_at,
+                "revoked_at": assignment.revoked_at,
+                "revoked_by": assignment.revoked_by,
+            },
+        )
+        return assignment
+
+    def revoke_assignment(
+        self, assignment_id: str, actor: str, at: datetime
+    ) -> IdentityAttributeAssignment | None:
+        current = self.get_assignment(assignment_id)
+        if current is None:
+            return None
+        self._pg.run(
+            """
+            UPDATE {schema}.identity_attributes
+            SET revoked_at = %(at)s, revoked_by = %(actor)s
+            WHERE assignment_id = %(id)s
+            """,
+            {"id": assignment_id, "actor": actor, "at": at},
+        )
+        return self.get_assignment(assignment_id)
+
+    def update_assignment_expiry(
+        self, assignment_id: str, expires_at: datetime, actor: str
+    ) -> IdentityAttributeAssignment | None:
+        current = self.get_assignment(assignment_id)
+        if current is None:
+            return None
+        self._pg.run(
+            """
+            UPDATE {schema}.identity_attributes
+            SET expires_at = %(expires_at)s, granted_by = %(actor)s
+            WHERE assignment_id = %(id)s
+            """,
+            {"id": assignment_id, "expires_at": expires_at, "actor": actor},
+        )
+        return self.get_assignment(assignment_id)
+
+    @staticmethod
+    def _definition_from_row(row: dict[str, Any]) -> AttributeDefinition:
+        values = row.get("allowed_values") or []
+        if not isinstance(values, list):
+            values = []
+        tag_keys = row.get("governed_tag_keys") or []
+        if not isinstance(tag_keys, list):
+            tag_keys = []
+        return AttributeDefinition(
+            key=row["attribute_key"],
+            description=row.get("description"),
+            governed_tag_keys=[str(v) for v in tag_keys],
+            allowed_values=[str(v) for v in values],
+            value_source=ValueSource(row.get("value_source") or ValueSource.GOVERNED_TAGS.value),
+            value_sql=row.get("value_sql"),
+            created_by=row.get("created_by"),
+            created_at=row.get("created_at"),
+            updated_by=row.get("updated_by"),
+            updated_at=row.get("updated_at"),
+        )
+
+    @staticmethod
+    def _assignment_from_row(row: dict[str, Any]) -> IdentityAttributeAssignment:
+        return IdentityAttributeAssignment(
+            assignment_id=row["assignment_id"],
+            principal_name=row["principal_name"],
+            principal_type=PrincipalKind(row["principal_type"]),
+            attribute_key=row["attribute_key"],
+            attribute_value=row["attribute_value"],
+            source=AttributeSource(row["source"]),
+            granted_by=row.get("granted_by"),
+            justification=row.get("justification"),
+            expires_at=row.get("expires_at"),
+            created_at=row["created_at"],
+            revoked_at=row.get("revoked_at"),
+            revoked_by=row.get("revoked_by"),
+        )
+
+
+class LakebaseCategoryApproverRepository(CategoryApproverRepository):
+    def __init__(self, pg: _Pg) -> None:
+        self._pg = pg
+
+    def list_approvers(self, category_path: str | None = None) -> list[CategoryApprover]:
+        if category_path:
+            rows = self._pg.fetch(
+                "SELECT * FROM {schema}.sensitivity_category_approvers "
+                "WHERE lower(category_path) = lower(%(path)s) "
+                "ORDER BY category_path, principal_type, principal_name",
+                {"path": category_path},
+            )
+        else:
+            rows = self._pg.fetch(
+                "SELECT * FROM {schema}.sensitivity_category_approvers "
+                "ORDER BY category_path, principal_type, principal_name"
+            )
+        return [self._from_row(r) for r in rows]
+
+    def list_configured_categories(self) -> list[str]:
+        rows = self._pg.fetch(
+            "SELECT DISTINCT category_path FROM {schema}.sensitivity_category_approvers "
+            "ORDER BY category_path"
+        )
+        return [str(r["category_path"]) for r in rows]
+
+    def get_approver(self, approver_id: str) -> CategoryApprover | None:
+        rows = self._pg.fetch(
+            "SELECT * FROM {schema}.sensitivity_category_approvers WHERE approver_id = %(id)s",
+            {"id": approver_id},
+        )
+        return self._from_row(rows[0]) if rows else None
+
+    def upsert_approver(self, approver: CategoryApprover) -> CategoryApprover:
+        existing = self._pg.fetch(
+            """
+            SELECT approver_id FROM {schema}.sensitivity_category_approvers
+            WHERE lower(category_path) = lower(%(path)s)
+              AND lower(principal_name) = lower(%(principal)s)
+              AND principal_type = %(ptype)s
+            """,
+            {
+                "path": approver.category_path,
+                "principal": approver.principal_name,
+                "ptype": approver.principal_type.value,
+            },
+        )
+        if existing:
+            return self.get_approver(str(existing[0]["approver_id"])) or approver
+        self._pg.run(
+            """
+            INSERT INTO {schema}.sensitivity_category_approvers (
+              approver_id, category_path, principal_name, principal_type, created_by, created_at
+            ) VALUES (
+              %(approver_id)s, %(category_path)s, %(principal_name)s, %(principal_type)s,
+              %(created_by)s, %(created_at)s
+            )
+            """,
+            {
+                "approver_id": approver.approver_id,
+                "category_path": approver.category_path,
+                "principal_name": approver.principal_name,
+                "principal_type": approver.principal_type.value,
+                "created_by": approver.created_by,
+                "created_at": approver.created_at,
+            },
+        )
+        return approver
+
+    def delete_approver(self, approver_id: str) -> bool:
+        before = self.get_approver(approver_id)
+        if before is None:
+            return False
+        self._pg.run(
+            "DELETE FROM {schema}.sensitivity_category_approvers WHERE approver_id = %(id)s",
+            {"id": approver_id},
+        )
+        return True
+
+    @staticmethod
+    def _from_row(row: dict[str, Any]) -> CategoryApprover:
+        return CategoryApprover(
+            approver_id=row["approver_id"],
+            category_path=row["category_path"],
+            principal_name=row["principal_name"],
+            principal_type=PrincipalKind(row["principal_type"]),
+            created_by=row.get("created_by"),
+            created_at=row["created_at"],
+        )
+
+
+class LakebaseAccessRequestRepository(AccessRequestRepository):
+    def __init__(self, pg: _Pg) -> None:
+        self._pg = pg
+
+    def create(self, request: AccessRequest) -> AccessRequest:
+        self._pg.run(
+            """
+            INSERT INTO {schema}.access_requests (
+              request_id, requester_name, attribute_key, attribute_value,
+              requested_expires_at, justification, status, decided_by, decided_at,
+              decision_note, approved_expires_at, created_at
+            ) VALUES (
+              %(request_id)s, %(requester_name)s, %(attribute_key)s, %(attribute_value)s,
+              %(requested_expires_at)s, %(justification)s, %(status)s, %(decided_by)s,
+              %(decided_at)s, %(decision_note)s, %(approved_expires_at)s, %(created_at)s
+            )
+            """,
+            self._params(request),
+        )
+        return request
+
+    def get(self, request_id: str) -> AccessRequest | None:
+        rows = self._pg.fetch(
+            "SELECT * FROM {schema}.access_requests WHERE request_id = %(id)s",
+            {"id": request_id},
+        )
+        return self._from_row(rows[0]) if rows else None
+
+    def list_for_requester(self, requester_name: str) -> list[AccessRequest]:
+        rows = self._pg.fetch(
+            "SELECT * FROM {schema}.access_requests "
+            "WHERE lower(requester_name) = lower(%(name)s) "
+            "ORDER BY created_at DESC",
+            {"name": requester_name},
+        )
+        return [self._from_row(r) for r in rows]
+
+    def list_by_status(self, status: AccessRequestStatus) -> list[AccessRequest]:
+        rows = self._pg.fetch(
+            "SELECT * FROM {schema}.access_requests WHERE status = %(status)s "
+            "ORDER BY created_at DESC",
+            {"status": status.value},
+        )
+        return [self._from_row(r) for r in rows]
+
+    def save(self, request: AccessRequest) -> AccessRequest:
+        self._pg.run(
+            """
+            UPDATE {schema}.access_requests SET
+              status = %(status)s,
+              decided_by = %(decided_by)s,
+              decided_at = %(decided_at)s,
+              decision_note = %(decision_note)s,
+              approved_expires_at = %(approved_expires_at)s
+            WHERE request_id = %(request_id)s
+            """,
+            self._params(request),
+        )
+        return request
+
+    def has_pending_for(
+        self, *, requester_name: str, attribute_key: str, attribute_value: str
+    ) -> bool:
+        rows = self._pg.fetch(
+            """
+            SELECT 1 AS ok FROM {schema}.access_requests
+            WHERE lower(requester_name) = lower(%(name)s)
+              AND attribute_key = %(key)s
+              AND lower(attribute_value) = lower(%(value)s)
+              AND status = 'PENDING'
+            LIMIT 1
+            """,
+            {"name": requester_name, "key": attribute_key, "value": attribute_value},
+        )
+        return bool(rows)
+
+    def dismiss_renewal(
+        self, assignment_id: str, expires_at: datetime, actor: str, at: datetime
+    ) -> None:
+        self._pg.run(
+            """
+            INSERT INTO {schema}.renewal_dismissals (
+              assignment_id, expires_at, dismissed_by, dismissed_at
+            ) VALUES (%(id)s, %(expires_at)s, %(actor)s, %(at)s)
+            ON CONFLICT (assignment_id, expires_at) DO UPDATE SET
+              dismissed_by = EXCLUDED.dismissed_by,
+              dismissed_at = EXCLUDED.dismissed_at
+            """,
+            {"id": assignment_id, "expires_at": expires_at, "actor": actor, "at": at},
+        )
+
+    def is_renewal_dismissed(self, assignment_id: str, expires_at: datetime) -> bool:
+        rows = self._pg.fetch(
+            """
+            SELECT 1 AS ok FROM {schema}.renewal_dismissals
+            WHERE assignment_id = %(id)s AND expires_at = %(expires_at)s
+            LIMIT 1
+            """,
+            {"id": assignment_id, "expires_at": expires_at},
+        )
+        return bool(rows)
+
+    @staticmethod
+    def _params(request: AccessRequest) -> dict[str, Any]:
+        return {
+            "request_id": request.request_id,
+            "requester_name": request.requester_name,
+            "attribute_key": request.attribute_key,
+            "attribute_value": request.attribute_value,
+            "requested_expires_at": request.requested_expires_at,
+            "justification": request.justification,
+            "status": request.status.value,
+            "decided_by": request.decided_by,
+            "decided_at": request.decided_at,
+            "decision_note": request.decision_note,
+            "approved_expires_at": request.approved_expires_at,
+            "created_at": request.created_at,
+        }
+
+    @staticmethod
+    def _from_row(row: dict[str, Any]) -> AccessRequest:
+        return AccessRequest(
+            request_id=row["request_id"],
+            requester_name=row["requester_name"],
+            attribute_key=row["attribute_key"],
+            attribute_value=row["attribute_value"],
+            requested_expires_at=row["requested_expires_at"],
+            justification=row["justification"],
+            status=AccessRequestStatus(row["status"]),
+            decided_by=row.get("decided_by"),
+            decided_at=row.get("decided_at"),
+            decision_note=row.get("decision_note"),
+            approved_expires_at=row.get("approved_expires_at"),
+            created_at=row["created_at"],
+        )
 
 
 class LakebaseStorageProvider(StorageProvider):
@@ -180,6 +696,9 @@ class LakebaseStorageProvider(StorageProvider):
         self._pg = _Pg(self._pool, self._schema)
         self._settings = LakebaseSettingsRepository(self._pg)
         self._audit = LakebaseAuditRepository(self._pg)
+        self._attributes = LakebaseIdentityAttributeRepository(self._pg)
+        self._category_approvers = LakebaseCategoryApproverRepository(self._pg)
+        self._access_requests = LakebaseAccessRequestRepository(self._pg)
 
     @property
     def settings(self) -> SettingsRepository:
@@ -189,9 +708,34 @@ class LakebaseStorageProvider(StorageProvider):
     def audit(self) -> AuditRepository:
         return self._audit
 
+    @property
+    def identity_attributes(self) -> IdentityAttributeRepository:
+        return self._attributes
+
+    @property
+    def category_approvers(self) -> CategoryApproverRepository:
+        return self._category_approvers
+
+    @property
+    def access_requests(self) -> AccessRequestRepository:
+        return self._access_requests
+
     def initialize(self) -> None:
         self._pool.open(wait=True, timeout=30)
         self._pg.run(_DDL)
+        # Existing workspaces created the table before governed_tag_keys existed.
+        self._pg.run(
+            "ALTER TABLE {schema}.identity_attribute_definitions "
+            "ADD COLUMN IF NOT EXISTS governed_tag_keys JSONB NOT NULL DEFAULT '[]'::jsonb"
+        )
+        self._pg.run(
+            "ALTER TABLE {schema}.identity_attribute_definitions "
+            "ADD COLUMN IF NOT EXISTS value_source TEXT NOT NULL DEFAULT 'governed_tags'"
+        )
+        self._pg.run(
+            "ALTER TABLE {schema}.identity_attribute_definitions "
+            "ADD COLUMN IF NOT EXISTS value_sql TEXT"
+        )
         logger.info("Lakebase schema %s ready", self._location)
 
     def health(self) -> StorageHealth:

@@ -3,7 +3,29 @@ import { render } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { ApiProvider } from "@/api/ApiProvider";
 import type { ApiServices } from "@/api/services";
-import type { AppInfo, CurrentUser } from "@/api/types";
+import type {
+  AccessRequestList,
+  AppInfo,
+  ApprovalInbox,
+  AssignAttributeRequest,
+  AttachRowFilterRequest,
+  AttributeAssignmentList,
+  AttributeDefinitionList,
+  CategoryApproverList,
+  CreateAccessRequestBody,
+  CurrentUser,
+  DecideAccessRequestBody,
+  GovernedTagList,
+  IdentityAttributeAssignment,
+  PolicyDetail,
+  PolicyListResponse,
+  RowFilterAttachmentList,
+  RowFilterDimensionList,
+  RowFilterPackStatus,
+  UpsertAttributeDefinitionRequest,
+  UpsertCategoryApproverRequest,
+  UpsertRowFilterDimensionRequest,
+} from "@/api/types";
 import { PreferencesProvider } from "@/app/preferences";
 import { routes } from "@/app/routes";
 
@@ -31,11 +53,406 @@ export const testAppInfo: AppInfo = {
   storage: { backend: "lakebase", healthy: true, detail: "governance.governance_app" },
 };
 
-export function fakeServices(overrides: { user?: CurrentUser | Error; appInfo?: AppInfo } = {}): ApiServices {
+export const testPolicies: PolicyListResponse = {
+  metastoreName: "metastore_aws_us_east_1",
+  metastore: [
+    {
+      id: "meta-1",
+      name: "metastore_default_mask",
+      policyType: "COLUMN_MASK",
+      scopeKind: "metastore",
+      onSecurableType: "METASTORE",
+      onSecurableFullname: "metastore_aws_us_east_1",
+      catalogName: null,
+      forSecurableType: "TABLE",
+      toPrincipals: ["account users"],
+      exceptPrincipals: [],
+      whenCondition: "has_tag('dga_sensitivity')",
+      governedTags: [{ key: "dga_sensitivity", value: null }],
+      privileges: [],
+      createdBy: "admin",
+    },
+  ],
+  catalog: [
+    {
+      id: "cat-1",
+      name: "approved_models",
+      policyType: "GRANT",
+      scopeKind: "catalog",
+      onSecurableType: "SCHEMA",
+      onSecurableFullname: "system.ai",
+      catalogName: "system",
+      forSecurableType: "MODEL",
+      toPrincipals: ["account users"],
+      exceptPrincipals: [],
+      whenCondition: "has_tag('ai.model_family')",
+      governedTags: [{ key: "ai.model_family", value: null }],
+      privileges: ["EXECUTE"],
+      createdBy: "admin",
+    },
+  ],
+  total: 2,
+};
+
+const sampleCatalogPolicy = testPolicies.catalog[0]!;
+
+export const testPolicyDetail: PolicyDetail = {
+  ...sampleCatalogPolicy,
+  comment: "Only approved model families",
+  matchColumns: [],
+  columnMask: null,
+  rowFilter: null,
+  grant: { privileges: ["EXECUTE"] },
+  deny: null,
+  createdAt: 1,
+  updatedAt: 2,
+  updatedBy: "admin",
+  affectedAssets: [],
+  affectedAssetsTruncated: false,
+  affectedAssetsNote:
+    "Affected-asset discovery for MODEL is not available yet; showing principals, tags, and conditions only.",
+};
+
+export const testGovernedTags: GovernedTagList = {
+  tags: [
+    {
+      tagKey: "dga_domain",
+      description: "Business domain",
+      values: ["finance", "finance.budget", "hr"],
+      valueCount: 3,
+    },
+    {
+      tagKey: "sub_domain",
+      description: "Subdomain hierarchy",
+      values: ["finance.contracts"],
+      valueCount: 1,
+    },
+    {
+      tagKey: "sensitivity_category",
+      description: "Business sensitivity category",
+      values: ["public", "finance", "finance.budget"],
+      valueCount: 3,
+    },
+    {
+      tagKey: "sensitivity",
+      description: "Shared PII hierarchy",
+      values: ["PII", "PII.Name"],
+      valueCount: 2,
+    },
+  ],
+  total: 4,
+  truncated: false,
+};
+
+export const testDefinitions: AttributeDefinitionList = {
+  definitions: [
+    {
+      key: "dga_domain",
+      description: "Business domain",
+      governedTagKeys: ["dga_domain"],
+      valueSource: "governed_tags",
+      valueSql: null,
+      allowedValues: ["finance", "finance.budget", "hr"],
+      createdBy: "admin",
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedBy: "admin",
+      updatedAt: "2026-01-01T00:00:00Z",
+    },
+    {
+      key: "sensitivity",
+      description: "used to control access to masking",
+      governedTagKeys: ["sensitivity_category", "sensitivity"],
+      valueSource: "governed_tags",
+      valueSql: null,
+      allowedValues: ["public", "finance", "finance.budget", "public.PII.Name", "finance.budget.PII.Name"],
+      createdBy: "admin",
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedBy: "admin",
+      updatedAt: "2026-01-01T00:00:00Z",
+    },
+    {
+      key: "state",
+      description: "Row filter dimension: US state abbreviation",
+      governedTagKeys: [],
+      valueSource: "sql",
+      valueSql: "SELECT DISTINCT abbreviation FROM cat.sch.us_states",
+      allowedValues: ["*", "CA", "NY", "TX"],
+      createdBy: "admin",
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedBy: "admin",
+      updatedAt: "2026-01-01T00:00:00Z",
+    },
+  ],
+  total: 3,
+};
+
+export const testRowFilterDimensions: RowFilterDimensionList = {
+  dimensions: [
+    {
+      key: "state",
+      description: "Row filter dimension: US state abbreviation",
+      valueSource: "sql",
+      valueSql: "SELECT DISTINCT abbreviation FROM cat.sch.us_states",
+      allowedValueCount: 3,
+      sampleValues: ["CA", "NY", "TX"],
+      attachmentCount: 1,
+    },
+  ],
+  total: 1,
+};
+
+export const testRowFilterPack: RowFilterPackStatus = {
+  tagKey: "row_filter",
+  tagValues: ["geo_region", "state", "region"],
+  functionName: "`data_governance_app`.`masking_functions`.`has_row_access`",
+  policyName: "rf_by_dimension",
+  policyExists: true,
+  policyMatchColumns: "has_tag_value('row_filter', 'state') AS c",
+  policyExceptPrincipals: ["app-sp"],
+  dimensions: ["state"],
+  missingTagValues: [],
+  inSync: true,
+};
+
+export const testRowFilterAttachments: RowFilterAttachmentList = {
+  attachments: [{ tableFullName: "cat.sch.us_states", columnName: "abbreviation", dimension: "state" }],
+  total: 1,
+};
+
+export const testMyAttributes: AttributeAssignmentList = {
+  assignments: [
+    {
+      assignmentId: "a1",
+      principalName: "ana.lopez@example.com",
+      principalType: "USER",
+      attributeKey: "dga_domain",
+      attributeValue: "finance.budget",
+      source: "MANUAL",
+      grantedBy: "admin",
+      justification: null,
+      expiresAt: "2026-12-31T23:59:00Z",
+      createdAt: "2026-01-01T00:00:00Z",
+      revokedAt: null,
+      revokedBy: null,
+      active: true,
+    },
+  ],
+  total: 1,
+};
+
+export const testCategoryApprovers: CategoryApproverList = {
+  approvers: [
+    {
+      approverId: "ap1",
+      categoryPath: "finance",
+      principalName: "finance-owners",
+      principalType: "GROUP",
+      createdBy: "admin",
+      createdAt: "2026-01-01T00:00:00Z",
+    },
+  ],
+  total: 1,
+};
+
+export const testMyAccessRequests: AccessRequestList = {
+  requests: [
+    {
+      requestId: "req1",
+      requesterName: "ana.lopez@example.com",
+      attributeKey: "sensitivity",
+      attributeValue: "finance.budget.PII.Name",
+      requestedExpiresAt: "2026-12-31T00:00:00Z",
+      justification: "Quarterly close",
+      status: "PENDING",
+      decidedBy: null,
+      decidedAt: null,
+      decisionNote: null,
+      approvedExpiresAt: null,
+      createdAt: "2026-01-01T00:00:00Z",
+      resolvedCategory: "finance",
+    },
+  ],
+  total: 1,
+};
+
+export const testApprovals: ApprovalInbox = {
+  items: [
+    {
+      kind: "REQUEST",
+      request: testMyAccessRequests.requests[0]!,
+      assignment: null,
+      resolvedCategory: "finance",
+      attributeValue: "finance.budget.PII.Name",
+      principalName: "ana.lopez@example.com",
+      expiresAt: "2026-12-31T00:00:00Z",
+    },
+  ],
+  total: 1,
+};
+
+export function fakeServices(
+  overrides: {
+    user?: CurrentUser | Error;
+    appInfo?: AppInfo;
+    policies?: PolicyListResponse | Error;
+    policy?: PolicyDetail | Error;
+    definitions?: AttributeDefinitionList | Error;
+    assignments?: AttributeAssignmentList | Error;
+    myAttributes?: AttributeAssignmentList | Error;
+    governedTags?: GovernedTagList | Error;
+    categoryApprovers?: CategoryApproverList | Error;
+    myAccessRequests?: AccessRequestList | Error;
+    approvals?: ApprovalInbox | Error;
+    rowFilterDimensions?: RowFilterDimensionList | Error;
+    rowFilterAttachments?: RowFilterAttachmentList | Error;
+  } = {},
+): ApiServices {
+  const governedTags = overrides.governedTags ?? testGovernedTags;
   const user = overrides.user ?? testUser;
+  const policies = overrides.policies ?? testPolicies;
+  const policy = overrides.policy ?? testPolicyDetail;
+  const definitions = overrides.definitions ?? testDefinitions;
+  const assignments = overrides.assignments ?? testMyAttributes;
+  const myAttributes = overrides.myAttributes ?? testMyAttributes;
+  const categoryApprovers = overrides.categoryApprovers ?? testCategoryApprovers;
+  const myAccessRequests = overrides.myAccessRequests ?? testMyAccessRequests;
+  const approvals = overrides.approvals ?? testApprovals;
+  const rowFilterDimensions = overrides.rowFilterDimensions ?? testRowFilterDimensions;
+  const rowFilterAttachments = overrides.rowFilterAttachments ?? testRowFilterAttachments;
+
   return {
     identity: { me: () => (user instanceof Error ? Promise.reject(user) : Promise.resolve(user)) },
     appInfo: { get: () => Promise.resolve(overrides.appInfo ?? testAppInfo) },
+    policies: {
+      list: () => (policies instanceof Error ? Promise.reject(policies) : Promise.resolve(policies)),
+      get: () => (policy instanceof Error ? Promise.reject(policy) : Promise.resolve(policy)),
+    },
+    identityAttributes: {
+      listDefinitions: () =>
+        definitions instanceof Error ? Promise.reject(definitions) : Promise.resolve(definitions),
+      listGovernedTags: () =>
+        governedTags instanceof Error ? Promise.reject(governedTags) : Promise.resolve(governedTags),
+      upsertDefinition: async (body: UpsertAttributeDefinitionRequest) => ({
+        key: body.key ?? body.governedTagKeys[0] ?? "",
+        description: body.description ?? null,
+        governedTagKeys: body.governedTagKeys,
+        valueSource: body.valueSource ?? "governed_tags",
+        valueSql: body.valueSql ?? null,
+        allowedValues: [],
+        createdBy: "admin",
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedBy: "admin",
+        updatedAt: "2026-01-01T00:00:00Z",
+      }),
+      deleteDefinition: async () => undefined,
+      listAssignments: () =>
+        assignments instanceof Error ? Promise.reject(assignments) : Promise.resolve(assignments),
+      myAssignments: () =>
+        myAttributes instanceof Error ? Promise.reject(myAttributes) : Promise.resolve(myAttributes),
+      assign: async (body: AssignAttributeRequest) =>
+        ({
+          assignmentId: "new",
+          principalName: body.principalName,
+          principalType: body.principalType,
+          attributeKey: body.attributeKey,
+          attributeValue: body.attributeValue,
+          source: "MANUAL",
+          grantedBy: "admin",
+          justification: body.justification ?? null,
+          expiresAt: body.expiresAt ?? null,
+          createdAt: "2026-01-01T00:00:00Z",
+          revokedAt: null,
+          revokedBy: null,
+          active: true,
+        }) satisfies IdentityAttributeAssignment,
+      revoke: async (assignmentId: string) => ({
+        ...testMyAttributes.assignments[0]!,
+        assignmentId,
+        active: false,
+        revokedAt: "2026-01-02T00:00:00Z",
+        revokedBy: "admin",
+      }),
+      listCategoryApprovers: () =>
+        categoryApprovers instanceof Error
+          ? Promise.reject(categoryApprovers)
+          : Promise.resolve(categoryApprovers),
+      upsertCategoryApprover: async (body: UpsertCategoryApproverRequest) => ({
+        approverId: "new-ap",
+        categoryPath: body.categoryPath,
+        principalName: body.principalName,
+        principalType: body.principalType,
+        createdBy: "admin",
+        createdAt: "2026-01-01T00:00:00Z",
+      }),
+      deleteCategoryApprover: async () => undefined,
+      createAccessRequest: async (body: CreateAccessRequestBody) => ({
+        requestId: "new-req",
+        requesterName: "ana.lopez@example.com",
+        attributeKey: "sensitivity",
+        attributeValue: body.attributeValue,
+        requestedExpiresAt: body.requestedExpiresAt,
+        justification: body.justification,
+        status: "PENDING" as const,
+        decidedBy: null,
+        decidedAt: null,
+        decisionNote: null,
+        approvedExpiresAt: null,
+        createdAt: "2026-01-01T00:00:00Z",
+        resolvedCategory: "finance",
+      }),
+      myAccessRequests: () =>
+        myAccessRequests instanceof Error
+          ? Promise.reject(myAccessRequests)
+          : Promise.resolve(myAccessRequests),
+      cancelAccessRequest: async (requestId: string) => ({
+        ...testMyAccessRequests.requests[0]!,
+        requestId,
+        status: "CANCELLED" as const,
+      }),
+      approvalsInbox: () =>
+        approvals instanceof Error ? Promise.reject(approvals) : Promise.resolve(approvals),
+      approveAccessRequest: async (requestId: string, _body?: DecideAccessRequestBody) => ({
+        ...testMyAccessRequests.requests[0]!,
+        requestId,
+        status: "APPROVED" as const,
+      }),
+      denyAccessRequest: async (requestId: string, _body?: DecideAccessRequestBody) => ({
+        ...testMyAccessRequests.requests[0]!,
+        requestId,
+        status: "DENIED" as const,
+      }),
+      approveRenewal: async (assignmentId: string) => ({
+        ...testMyAttributes.assignments[0]!,
+        assignmentId,
+      }),
+      dismissRenewal: async () => undefined,
+    },
+    rowFilters: {
+      listDimensions: () =>
+        rowFilterDimensions instanceof Error
+          ? Promise.reject(rowFilterDimensions)
+          : Promise.resolve(rowFilterDimensions),
+      upsertDimension: async (body: UpsertRowFilterDimensionRequest) => ({
+        key: body.key,
+        description: body.description ?? null,
+        valueSource: body.valueSource,
+        valueSql: body.valueSql ?? null,
+        allowedValueCount: body.allowedValues?.length ?? 0,
+        sampleValues: body.allowedValues ?? [],
+        attachmentCount: 0,
+      }),
+      deleteDimension: async () => undefined,
+      refreshDimension: async () => testRowFilterDimensions.dimensions[0]!,
+      previewSeed: async () => ({ values: ["CA", "NY", "TX"], total: 3 }),
+      packStatus: () => Promise.resolve(testRowFilterPack),
+      ensurePack: async () => testRowFilterPack,
+      listAttachments: () =>
+        rowFilterAttachments instanceof Error
+          ? Promise.reject(rowFilterAttachments)
+          : Promise.resolve(rowFilterAttachments),
+      attach: async (body: AttachRowFilterRequest) => body,
+      detach: async () => undefined,
+    },
   } as unknown as ApiServices;
 }
 

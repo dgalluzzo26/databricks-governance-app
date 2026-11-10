@@ -1,0 +1,406 @@
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, datetime
+
+from backend.app.clients.sql import SqlExecutor
+from backend.app.core.errors import InvalidRequestError, NotFoundError
+from backend.app.models.audit import AuditEvent
+from backend.app.models.identity_attribute import (
+    ALL_VALUES,
+    AssignAttributeRequest,
+    AttributeAssignmentFilter,
+    AttributeAssignmentList,
+    AttributeDefinition,
+    AttributeDefinitionList,
+    AttributeSource,
+    GovernedTagList,
+    IdentityAttributeAssignment,
+    UpsertAttributeDefinitionRequest,
+    ValueSource,
+)
+from backend.app.models.principal import PrincipalKind
+from backend.app.models.user import CurrentUser
+from backend.app.repositories.base import StorageProvider
+from backend.app.services.governed_tags import GovernedTagService
+from backend.app.services.identity_uc_sync import IdentityUcSync
+from backend.app.services.value_seed import run_seed_sql
+
+
+class IdentityAttributeService:
+    """App-managed identity attribute definitions and assignments.
+
+    Definitions are bound to governed tags; assignment values must come from those tags.
+    When Lakebase is primary, writes are mirrored to Unity Catalog Delta so column-mask
+    UDFs can look up attributes (UC SQL cannot query Lakebase).
+    """
+
+    def __init__(
+        self,
+        storage: StorageProvider,
+        governed_tags: GovernedTagService,
+        uc_sync: IdentityUcSync | None = None,
+        sql: SqlExecutor | None = None,
+    ) -> None:
+        self._storage = storage
+        self._governed_tags = governed_tags
+        self._uc_sync = uc_sync
+        self._sql = sql
+
+    def list_governed_tags(self, *, q: str | None = None, limit: int = 50) -> GovernedTagList:
+        return self._governed_tags.list_tags(q=q, limit=limit)
+
+    def list_definitions(self) -> AttributeDefinitionList:
+        definitions = [self._enrich(item) for item in self._storage.identity_attributes.list_definitions()]
+        return AttributeDefinitionList(definitions=definitions, total=len(definitions))
+
+    def get_definition(self, key: str) -> AttributeDefinition:
+        definition = self._storage.identity_attributes.get_definition(key)
+        if definition is None:
+            raise NotFoundError(f"Attribute definition '{key}' was not found")
+        return self._enrich(definition)
+
+    def preview_seed(self, value_sql: str) -> list[str]:
+        return run_seed_sql(self._sql, value_sql)
+
+    def refresh_definition(self, key: str, actor: CurrentUser) -> AttributeDefinition:
+        """Re-run a SQL definition's seed query and store the result."""
+        current = self.get_definition(key)
+        if current.value_source != ValueSource.SQL:
+            raise InvalidRequestError(f"Attribute '{key}' is not SQL-seeded")
+        return self.upsert_definition(
+            UpsertAttributeDefinitionRequest(
+                key=current.key,
+                description=current.description,
+                value_source=ValueSource.SQL,
+                value_sql=current.value_sql,
+            ),
+            actor,
+        )
+
+    def upsert_definition(
+        self, request: UpsertAttributeDefinitionRequest, actor: CurrentUser
+    ) -> AttributeDefinition:
+        repo = self._storage.identity_attributes
+        existing = repo.get_definition(request.key)
+        now = datetime.now(UTC)
+        description = request.description
+        tag_keys: list[str] = []
+        stored_values: list[str] = []
+        if request.value_source == ValueSource.GOVERNED_TAGS:
+            tags = self._governed_tags.require_tags(request.governed_tag_keys)
+            tag_keys = [tag.tag_key for tag in tags]
+            if not description:
+                description = next((tag.description for tag in tags if tag.description), None)
+        elif request.value_source == ValueSource.SQL:
+            stored_values = run_seed_sql(self._sql, request.value_sql or "")
+        else:
+            stored_values = request.allowed_values
+        definition = AttributeDefinition(
+            key=request.key,
+            description=description,
+            governed_tag_keys=tag_keys,
+            value_source=request.value_source,
+            value_sql=request.value_sql,
+            # Governed-tag values are resolved live by _enrich, so only other sources store them.
+            allowed_values=(
+                [] if request.value_source == ValueSource.GOVERNED_TAGS else _with_all_values(stored_values)
+            ),
+            created_by=existing.created_by if existing else actor.user_name,
+            created_at=existing.created_at if existing else now,
+            updated_by=actor.user_name,
+            updated_at=now,
+        )
+        saved = self._enrich(repo.upsert_definition(definition))
+        self._mirror_definition(saved)
+        self._audit(
+            "identity_attribute_definition.upserted",
+            actor.user_name,
+            {
+                "key": saved.key,
+                "governed_tag_keys": saved.governed_tag_keys,
+                "value_source": saved.value_source.value,
+                "value_sql": saved.value_sql,
+                "allowed_value_count": len(saved.allowed_values),
+            },
+        )
+        return saved
+
+    def delete_definition(self, key: str, actor: CurrentUser) -> None:
+        active = self._storage.identity_attributes.list_assignments(
+            AttributeAssignmentFilter(attribute_key=key, include_inactive=False)
+        )
+        if active:
+            raise InvalidRequestError(
+                f"Cannot delete attribute '{key}' while {len(active)} active assignment(s) exist"
+            )
+        if not self._storage.identity_attributes.delete_definition(key):
+            raise NotFoundError(f"Attribute definition '{key}' was not found")
+        if self._uc_sync is not None:
+            self._uc_sync.repo.delete_definition(key)
+        self._audit("identity_attribute_definition.deleted", actor.user_name, {"key": key})
+
+    def list_assignments(
+        self,
+        *,
+        principal_name: str | None = None,
+        principal_type: PrincipalKind | None = None,
+        attribute_key: str | None = None,
+        include_inactive: bool = False,
+    ) -> AttributeAssignmentList:
+        items = self._storage.identity_attributes.list_assignments(
+            AttributeAssignmentFilter(
+                principal_name=principal_name,
+                principal_type=principal_type,
+                attribute_key=attribute_key,
+                include_inactive=include_inactive,
+            )
+        )
+        return AttributeAssignmentList(assignments=items, total=len(items))
+
+    def list_for_user(self, user: CurrentUser) -> AttributeAssignmentList:
+        """Active attributes for the signed-in user and their groups."""
+        repo = self._storage.identity_attributes
+        direct = repo.list_assignments(
+            AttributeAssignmentFilter(
+                principal_name=user.user_name,
+                principal_type=PrincipalKind.USER,
+                include_inactive=False,
+            )
+        )
+        via_groups: list[IdentityAttributeAssignment] = []
+        for group in user.groups:
+            via_groups.extend(
+                repo.list_assignments(
+                    AttributeAssignmentFilter(
+                        principal_name=group,
+                        principal_type=PrincipalKind.GROUP,
+                        include_inactive=False,
+                    )
+                )
+            )
+        seen: set[tuple[str, str]] = set()
+        merged: list[IdentityAttributeAssignment] = []
+        for item in [*direct, *via_groups]:
+            key = (item.attribute_key, item.attribute_value)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(item)
+        return AttributeAssignmentList(assignments=merged, total=len(merged))
+
+    def assign(
+        self,
+        request: AssignAttributeRequest,
+        actor: CurrentUser,
+        *,
+        source: AttributeSource = AttributeSource.MANUAL,
+    ) -> IdentityAttributeAssignment:
+        definition = self._storage.identity_attributes.get_definition(request.attribute_key)
+        if definition is None:
+            raise InvalidRequestError(
+                f"Unknown attribute key '{request.attribute_key}'. Create the definition first."
+            )
+        enriched = self._enrich(definition)
+        allowed = {value.lower(): value for value in enriched.allowed_values}
+        requested_value = request.attribute_value.strip()
+        if allowed and requested_value.lower() not in allowed:
+            if enriched.value_source == ValueSource.GOVERNED_TAGS:
+                origin = f"governed tag(s) {', '.join(enriched.governed_tag_keys)}"
+            else:
+                origin = "the definition's value list"
+            raise InvalidRequestError(
+                f"Value '{request.attribute_value}' is not allowed for '{request.attribute_key}'. "
+                f"Allowed values come from {origin}: {', '.join(enriched.allowed_values[:50])}"
+            )
+        if (
+            enriched.value_source == ValueSource.GOVERNED_TAGS
+            and not enriched.governed_tag_keys
+            and not enriched.allowed_values
+        ):
+            raise InvalidRequestError(
+                f"Attribute '{request.attribute_key}' is not linked to any governed tags"
+            )
+        canonical_value = allowed.get(requested_value.lower(), requested_value)
+
+        existing = self._storage.identity_attributes.list_assignments(
+            AttributeAssignmentFilter(
+                principal_name=request.principal_name,
+                principal_type=request.principal_type,
+                attribute_key=request.attribute_key,
+                include_inactive=False,
+            )
+        )
+        now = datetime.now(UTC)
+        for item in existing:
+            if item.attribute_value.lower() == canonical_value.lower() and item.active:
+                if request.expires_at is not None and request.expires_at != item.expires_at:
+                    return self.update_expiry(item.assignment_id, request.expires_at, actor)
+                return item
+
+        assignment = IdentityAttributeAssignment(
+            assignment_id=str(uuid.uuid4()),
+            principal_name=request.principal_name.strip(),
+            principal_type=request.principal_type,
+            attribute_key=request.attribute_key,
+            attribute_value=canonical_value,
+            source=source,
+            granted_by=actor.user_name,
+            justification=request.justification,
+            expires_at=request.expires_at,
+            created_at=now,
+        )
+        saved = self._storage.identity_attributes.add_assignment(assignment)
+        self._mirror_assignment(saved)
+        self._audit(
+            "identity_attribute.assigned",
+            actor.user_name,
+            {
+                "assignment_id": saved.assignment_id,
+                "principal_name": saved.principal_name,
+                "principal_type": saved.principal_type.value,
+                "attribute_key": saved.attribute_key,
+                "attribute_value": saved.attribute_value,
+                "source": saved.source.value,
+            },
+        )
+        return saved
+
+    def update_expiry(
+        self, assignment_id: str, expires_at: datetime, actor: CurrentUser
+    ) -> IdentityAttributeAssignment:
+        current = self._storage.identity_attributes.get_assignment(assignment_id)
+        if current is None or not current.active:
+            raise NotFoundError(f"Assignment {assignment_id} was not found")
+        updated = self._storage.identity_attributes.update_assignment_expiry(
+            assignment_id, expires_at, actor.user_name
+        )
+        if updated is None:
+            raise NotFoundError(f"Assignment {assignment_id} was not found")
+        self._mirror_assignment(updated)
+        self._audit(
+            "identity_attribute.renewed",
+            actor.user_name,
+            {
+                "assignment_id": updated.assignment_id,
+                "principal_name": updated.principal_name,
+                "attribute_key": updated.attribute_key,
+                "attribute_value": updated.attribute_value,
+                "expires_at": updated.expires_at.isoformat() if updated.expires_at else None,
+            },
+        )
+        return updated
+
+    def revoke(self, assignment_id: str, actor: CurrentUser) -> IdentityAttributeAssignment:
+        current = self._storage.identity_attributes.get_assignment(assignment_id)
+        if current is None:
+            raise NotFoundError(f"Assignment {assignment_id} was not found")
+        if not current.active:
+            return current
+        updated = self._storage.identity_attributes.revoke_assignment(
+            assignment_id, actor.user_name, datetime.now(UTC)
+        )
+        if updated is None:
+            raise NotFoundError(f"Assignment {assignment_id} was not found")
+        if self._uc_sync is not None:
+            revoked_at = updated.revoked_at or datetime.now(UTC)
+            self._uc_sync.repo.revoke_assignment(assignment_id, actor.user_name, revoked_at)
+        self._audit(
+            "identity_attribute.revoked",
+            actor.user_name,
+            {
+                "assignment_id": assignment_id,
+                "principal_name": updated.principal_name,
+                "attribute_key": updated.attribute_key,
+                "attribute_value": updated.attribute_value,
+            },
+        )
+        return updated
+
+    def sync_to_uc(self) -> dict[str, int]:
+        """Full replace of the UC Delta mirror from primary storage."""
+        if self._uc_sync is None:
+            raise InvalidRequestError("UC identity sync is not configured for this deployment")
+        return self._uc_sync.full_sync(self._storage.identity_attributes)
+
+    def _mirror_definition(self, definition: AttributeDefinition) -> None:
+        if self._uc_sync is None:
+            return
+        self._uc_sync.repo.upsert_definition(
+            definition.model_copy(update={"allowed_values": []})
+        )
+
+    def _mirror_assignment(self, assignment: IdentityAttributeAssignment) -> None:
+        if self._uc_sync is None:
+            return
+        self._uc_sync.repo.upsert_assignment(assignment)
+
+    def _enrich(self, definition: AttributeDefinition) -> AttributeDefinition:
+        if definition.value_source != ValueSource.GOVERNED_TAGS:
+            return definition.model_copy(
+                update={"allowed_values": _with_all_values(definition.allowed_values)}
+            )
+        tag_keys = definition.governed_tag_keys or (
+            [definition.key] if definition.key and not definition.governed_tag_keys else []
+        )
+        # Legacy rows may only have manual allowed_values and no tag link yet.
+        if not tag_keys:
+            return definition
+        try:
+            values = self._allowed_values_for_tags(tag_keys)
+        except Exception as exc:  # noqa: BLE001
+            # Keep the definition usable even if tag lookup fails temporarily.
+            return definition.model_copy(
+                update={
+                    "governed_tag_keys": tag_keys,
+                    "allowed_values": definition.allowed_values,
+                    "description": definition.description or str(exc),
+                }
+            )
+        return definition.model_copy(
+            update={"governed_tag_keys": tag_keys, "allowed_values": values}
+        )
+
+    def _allowed_values_for_tags(self, tag_keys: list[str]) -> list[str]:
+        """Resolve assignment vocabulary from governed tags.
+
+        When a definition binds both ``sensitivity_category`` and ``sensitivity``,
+        allowed values are category prefixes plus composed ``category.leaf`` paths
+        so one ``sensitivity`` attribute can hold hierarchical grants.
+        """
+        key_set = set(tag_keys)
+        if "sensitivity_category" in key_set and "sensitivity" in key_set:
+            categories = self._governed_tags.get_tag("sensitivity_category").values
+            leaves = self._governed_tags.get_tag("sensitivity").values
+            values: list[str] = []
+            seen: set[str] = set()
+            for category in categories:
+                if category not in seen:
+                    values.append(category)
+                    seen.add(category)
+            for category in categories:
+                for leaf in leaves:
+                    path = f"{category}.{leaf}"
+                    if path in seen:
+                        continue
+                    values.append(path)
+                    seen.add(path)
+            return values
+        return self._governed_tags.values_for_keys(tag_keys)
+
+    def _audit(self, event_type: str, actor: str, payload: dict) -> None:
+        self._storage.audit.record(
+            AuditEvent(
+                event_id=str(uuid.uuid4()),
+                event_type=event_type,
+                actor=actor,
+                payload=payload,
+                created_at=datetime.now(UTC),
+            )
+        )
+
+
+def _with_all_values(values: list[str]) -> list[str]:
+    """Free-form / SQL vocabularies always allow ``*`` (all rows for a row-filter dimension)."""
+    rest = [value for value in values if value != ALL_VALUES]
+    return [ALL_VALUES, *rest]

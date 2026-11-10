@@ -56,6 +56,14 @@ class WorkspaceClientFactory:
     def admin_configured(self) -> bool:
         return bool(self._admin_credentials()[0] and self._admin_credentials()[1])
 
+    @property
+    def app_client_id(self) -> str | None:
+        return (os.environ.get("DATABRICKS_CLIENT_ID") or self.app().config.client_id or "").strip() or None
+
+    @property
+    def admin_client_id(self) -> str | None:
+        return self._admin_credentials()[0] or None
+
     def invalidate_admin(self) -> None:
         """Drop the cached admin client so the next call picks up freshly hydrated credentials."""
         with self._lock:

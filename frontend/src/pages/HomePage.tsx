@@ -1,10 +1,12 @@
-import { useAppInfo, useCurrentUser } from "@/api/queries";
+import { Link } from "react-router-dom";
+import { useAppInfo, useCurrentUser, useMyAttributes } from "@/api/queries";
 import { Alert, Avatar, Badge, Card, DescriptionList, PageHeader, Spinner } from "@/components/ui";
 import styles from "./HomePage.module.css";
 
 export function HomePage() {
   const { data: user } = useCurrentUser();
   const appInfo = useAppInfo();
+  const myAttributes = useMyAttributes();
   if (!user) return null;
 
   const firstName = user.displayName.split(" ")[0] ?? user.displayName;
@@ -38,6 +40,24 @@ export function HomePage() {
                   </span>
                 ) : (
                   <span className={styles.muted}>No group memberships found</span>
+                ),
+              },
+              {
+                label: "Attributes",
+                value: myAttributes.isPending ? (
+                  <Spinner />
+                ) : myAttributes.data?.assignments.length ? (
+                  <span className={styles.groups}>
+                    {myAttributes.data.assignments.map((item) => (
+                      <Badge key={item.assignmentId} tone="info">
+                        {item.attributeKey}={item.attributeValue}
+                      </Badge>
+                    ))}
+                  </span>
+                ) : (
+                  <span className={styles.muted}>
+                    None yet · <Link to="/identity?tab=request">request access</Link>
+                  </span>
                 ),
               },
             ]}

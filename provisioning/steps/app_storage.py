@@ -42,4 +42,38 @@ class DeltaStorageStep(ProvisioningStep):
             COMMENT 'Governance app audit trail'
             """
         )
+        ctx.sql.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {schema}.identity_attribute_definitions (
+              attribute_key STRING NOT NULL,
+              description STRING,
+              governed_tag_keys STRING NOT NULL,
+              allowed_values STRING NOT NULL,
+              created_by STRING,
+              created_at TIMESTAMP,
+              updated_by STRING,
+              updated_at TIMESTAMP
+            )
+            COMMENT 'App-managed identity attribute definitions linked to governed tags'
+            """
+        )
+        ctx.sql.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {schema}.identity_attributes (
+              assignment_id STRING NOT NULL,
+              principal_name STRING NOT NULL,
+              principal_type STRING NOT NULL,
+              attribute_key STRING NOT NULL,
+              attribute_value STRING NOT NULL,
+              source STRING NOT NULL,
+              granted_by STRING,
+              justification STRING,
+              expires_at TIMESTAMP,
+              created_at TIMESTAMP,
+              revoked_at TIMESTAMP,
+              revoked_by STRING
+            )
+            COMMENT 'App-managed identity attributes (until native identity attributes are available)'
+            """
+        )
         logger.info("Delta storage tables ready in %s", schema)

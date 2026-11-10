@@ -40,6 +40,10 @@ class AppConfig(BaseSettings):
     app_catalog: str = Field("data_governance_app", alias="APP_CATALOG")
     app_schema: str = Field("app", alias="APP_SCHEMA")
     demo_catalog: str | None = Field(None, alias="DEMO_CATALOG")
+    # ABAC functions live in {app_catalog}.{abac_function_schema}.
+    abac_function_schema: str = Field("masking_functions", alias="ABAC_FUNCTION_SCHEMA")
+    row_filter_tag_key: str = Field("row_filter", alias="ROW_FILTER_TAG_KEY")
+    row_filter_policy_name: str = Field("rf_by_dimension", alias="ROW_FILTER_POLICY_NAME")
 
     pg_host: str | None = Field(None, alias="PGHOST")
     pg_port: int = Field(5432, alias="PGPORT")

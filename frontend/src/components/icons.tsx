@@ -24,6 +24,26 @@ export const StatusIcon = (p: IconProps) => (
   </Icon>
 );
 
+export const PoliciesIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M3 3.5h10v9H3z" />
+    <path d="M5.5 6.5h5M5.5 9h3.5" />
+  </Icon>
+);
+
+export const IdentityIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <circle cx="8" cy="5.5" r="2.5" />
+    <path d="M3.5 13.5c0-2.5 2-4 4.5-4s4.5 1.5 4.5 4" />
+  </Icon>
+);
+
+export const RowFilterIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M2.5 3.5h11L9.5 8.5v4l-3 1.5V8.5z" />
+  </Icon>
+);
+
 export const ExternalIcon = (p: IconProps) => (
   <Icon {...p}>
     <path d="M9 2.5h4.5V7M13.5 2.5 7.5 8.5M11.5 9.5v4h-9v-9h4" />

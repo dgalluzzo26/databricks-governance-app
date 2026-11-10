@@ -4,8 +4,12 @@ A Databricks App for federated data access governance in Unity Catalog. FastAPI 
 frontend, deployed with one Declarative Automation Bundle that also creates everything the app
 needs (catalogs, schema, Lakebase database, setup job).
 
-Features are added one at a time. Current scope: the app shell. It shows the signed-in user and
-their groups, and reports deployment and storage health.
+Features are added one at a time. Current scope:
+
+- App shell (signed-in user, theme, collapsible nav)
+- Read-only **ABAC policy explorer** (metastore vs catalog buckets)
+- **App-managed identity attributes** (definitions + assignments in Lakebase/Delta until native
+  UC identity attributes exist)
 
 ## Deploy
 
