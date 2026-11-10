@@ -12,6 +12,7 @@ from backend.app.models.identity_attribute import (
     AttributeDefinition,
     IdentityAttributeAssignment,
 )
+from backend.app.models.mask_rule import MaskRuleDefinition
 
 
 class SettingsRepository(ABC):
@@ -110,6 +111,26 @@ class AccessRequestRepository(ABC):
     def is_renewal_dismissed(self, assignment_id: str, expires_at: datetime) -> bool: ...
 
 
+class MaskRuleRepository(ABC):
+    @abstractmethod
+    def list_rules(self) -> list[MaskRuleDefinition]: ...
+
+    @abstractmethod
+    def get_rule(self, rule_key: str) -> MaskRuleDefinition | None: ...
+
+    @abstractmethod
+    def upsert_rule(self, rule: MaskRuleDefinition) -> MaskRuleDefinition: ...
+
+    @abstractmethod
+    def delete_rule(self, rule_key: str) -> bool: ...
+
+    @abstractmethod
+    def get_config(self, key: str) -> str | None: ...
+
+    @abstractmethod
+    def put_config(self, key: str, value: str, actor: str) -> None: ...
+
+
 class StorageProvider(ABC):
     """Strategy for where app state lives. One provider supplies every repository."""
 
@@ -134,6 +155,10 @@ class StorageProvider(ABC):
     @property
     @abstractmethod
     def access_requests(self) -> AccessRequestRepository: ...
+
+    @property
+    @abstractmethod
+    def mask_rules(self) -> MaskRuleRepository: ...
 
     def initialize(self) -> None:
         """Prepare storage (create schema, open pools). Must be idempotent."""

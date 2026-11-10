@@ -21,12 +21,14 @@ from backend.app.repositories.base import (
     AuditRepository,
     CategoryApproverRepository,
     IdentityAttributeRepository,
+    MaskRuleRepository,
     SettingsRepository,
     StorageProvider,
 )
 from backend.app.repositories.memory import (
     InMemoryAccessRequestRepository,
     InMemoryCategoryApproverRepository,
+    InMemoryMaskRuleRepository,
 )
 
 
@@ -330,6 +332,7 @@ class DeltaStorageProvider(StorageProvider):
         # Access-request workflow is Lakebase-first; keep in-memory stubs on Delta.
         self._category_approvers = InMemoryCategoryApproverRepository()
         self._access_requests = InMemoryAccessRequestRepository()
+        self._mask_rules = InMemoryMaskRuleRepository()
         self._probe_table = settings_table.fqn
 
     @property
@@ -351,6 +354,10 @@ class DeltaStorageProvider(StorageProvider):
     @property
     def access_requests(self) -> AccessRequestRepository:
         return self._access_requests
+
+    @property
+    def mask_rules(self) -> MaskRuleRepository:
+        return self._mask_rules
 
     def health(self) -> StorageHealth:
         try:

@@ -7,9 +7,14 @@ needs (catalogs, schema, Lakebase database, setup job).
 Features are added one at a time. Current scope:
 
 - App shell (signed-in user, theme, collapsible nav)
+- **Access explorer** (per-table masks, row filters, and attribute suggestions)
 - Read-only **ABAC policy explorer** (metastore vs catalog buckets)
 - **App-managed identity attributes** (definitions + assignments in Lakebase/Delta until native
   UC identity attributes exist)
+- **Mask rules** and **row filters** (registry + regenerated UC functions/policies)
+
+Developer reference for the mask and row-filter chains:
+[docs/mask-and-row-filter-flows.md](docs/mask-and-row-filter-flows.md).
 
 ## Deploy
 

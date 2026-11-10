@@ -12,11 +12,13 @@ from backend.app.models.identity_attribute import (
     AttributeDefinition,
     IdentityAttributeAssignment,
 )
+from backend.app.models.mask_rule import MaskRuleDefinition
 from backend.app.repositories.base import (
     AccessRequestRepository,
     AuditRepository,
     CategoryApproverRepository,
     IdentityAttributeRepository,
+    MaskRuleRepository,
     SettingsRepository,
     StorageProvider,
 )
@@ -126,6 +128,26 @@ class _UnavailableAccessRequests(_Unavailable, AccessRequestRepository):
         self._fail()
 
 
+class _UnavailableMaskRules(_Unavailable, MaskRuleRepository):
+    def list_rules(self) -> list[MaskRuleDefinition]:
+        self._fail()
+
+    def get_rule(self, rule_key: str) -> MaskRuleDefinition | None:
+        self._fail()
+
+    def upsert_rule(self, rule: MaskRuleDefinition) -> MaskRuleDefinition:
+        self._fail()
+
+    def delete_rule(self, rule_key: str) -> bool:
+        self._fail()
+
+    def get_config(self, key: str) -> str | None:
+        self._fail()
+
+    def put_config(self, key: str, value: str, actor: str) -> None:
+        self._fail()
+
+
 class UnavailableStorageProvider(StorageProvider):
     """Stands in for a backend that could not be built, so the app starts and reports why."""
 
@@ -137,6 +159,7 @@ class UnavailableStorageProvider(StorageProvider):
         self._attributes = _UnavailableIdentityAttributes(reason)
         self._category_approvers = _UnavailableCategoryApprovers(reason)
         self._access_requests = _UnavailableAccessRequests(reason)
+        self._mask_rules = _UnavailableMaskRules(reason)
 
     @property
     def settings(self) -> SettingsRepository:
@@ -157,6 +180,10 @@ class UnavailableStorageProvider(StorageProvider):
     @property
     def access_requests(self) -> AccessRequestRepository:
         return self._access_requests
+
+    @property
+    def mask_rules(self) -> MaskRuleRepository:
+        return self._mask_rules
 
     def health(self) -> StorageHealth:
         return StorageHealth(backend=self.kind, healthy=False, detail=self._reason)

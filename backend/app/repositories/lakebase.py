@@ -24,12 +24,14 @@ from backend.app.models.identity_attribute import (
     IdentityAttributeAssignment,
     ValueSource,
 )
+from backend.app.models.mask_rule import MaskRuleDefinition, MaskRuleKind
 from backend.app.models.principal import PrincipalKind
 from backend.app.repositories.base import (
     AccessRequestRepository,
     AuditRepository,
     CategoryApproverRepository,
     IdentityAttributeRepository,
+    MaskRuleRepository,
     SettingsRepository,
     StorageProvider,
 )
@@ -167,6 +169,25 @@ CREATE TABLE IF NOT EXISTS {schema}.renewal_dismissals (
   dismissed_by    TEXT NOT NULL,
   dismissed_at    TIMESTAMPTZ NOT NULL,
   PRIMARY KEY (assignment_id, expires_at)
+);
+
+CREATE TABLE IF NOT EXISTS {schema}.mask_rule_definitions (
+  rule_key     TEXT PRIMARY KEY,
+  description  TEXT,
+  kind         TEXT NOT NULL DEFAULT 'builtin',
+  handler      TEXT NOT NULL,
+  expression   TEXT,
+  params       JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+  validated_at TIMESTAMPTZ,
+  updated_by   TEXT,
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS {schema}.masking_config (
+  config_key   TEXT PRIMARY KEY,
+  config_value TEXT NOT NULL,
+  updated_by   TEXT,
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 """
 
@@ -655,6 +676,105 @@ class LakebaseAccessRequestRepository(AccessRequestRepository):
         )
 
 
+class LakebaseMaskRuleRepository(MaskRuleRepository):
+    def __init__(self, pg: _Pg) -> None:
+        self._pg = pg
+
+    def list_rules(self) -> list[MaskRuleDefinition]:
+        rows = self._pg.fetch(
+            "SELECT * FROM {schema}.mask_rule_definitions ORDER BY rule_key"
+        )
+        return [self._from_row(r) for r in rows]
+
+    def get_rule(self, rule_key: str) -> MaskRuleDefinition | None:
+        rows = self._pg.fetch(
+            "SELECT * FROM {schema}.mask_rule_definitions WHERE lower(rule_key) = lower(%(key)s)",
+            {"key": rule_key},
+        )
+        return self._from_row(rows[0]) if rows else None
+
+    def upsert_rule(self, rule: MaskRuleDefinition) -> MaskRuleDefinition:
+        self._pg.run(
+            """
+            INSERT INTO {schema}.mask_rule_definitions (
+              rule_key, description, kind, handler, expression, params,
+              validated_at, updated_by, updated_at
+            ) VALUES (
+              %(rule_key)s, %(description)s, %(kind)s, %(handler)s, %(expression)s, %(params)s,
+              %(validated_at)s, %(updated_by)s, %(updated_at)s
+            )
+            ON CONFLICT (rule_key) DO UPDATE SET
+              description = EXCLUDED.description,
+              kind = EXCLUDED.kind,
+              handler = EXCLUDED.handler,
+              expression = EXCLUDED.expression,
+              params = EXCLUDED.params,
+              validated_at = EXCLUDED.validated_at,
+              updated_by = EXCLUDED.updated_by,
+              updated_at = EXCLUDED.updated_at
+            """,
+            {
+                "rule_key": rule.rule_key,
+                "description": rule.description,
+                "kind": rule.kind.value,
+                "handler": rule.handler,
+                "expression": rule.expression,
+                "params": Jsonb(rule.params),
+                "validated_at": rule.validated_at,
+                "updated_by": rule.updated_by,
+                "updated_at": rule.updated_at or datetime.now().astimezone(),
+            },
+        )
+        return self.get_rule(rule.rule_key) or rule
+
+    def delete_rule(self, rule_key: str) -> bool:
+        before = self.get_rule(rule_key)
+        if before is None:
+            return False
+        self._pg.run(
+            "DELETE FROM {schema}.mask_rule_definitions WHERE lower(rule_key) = lower(%(key)s)",
+            {"key": rule_key},
+        )
+        return True
+
+    def get_config(self, key: str) -> str | None:
+        rows = self._pg.fetch(
+            "SELECT config_value FROM {schema}.masking_config WHERE config_key = %(key)s",
+            {"key": key},
+        )
+        return None if not rows else str(rows[0]["config_value"])
+
+    def put_config(self, key: str, value: str, actor: str) -> None:
+        self._pg.run(
+            """
+            INSERT INTO {schema}.masking_config (config_key, config_value, updated_by, updated_at)
+            VALUES (%(key)s, %(value)s, %(actor)s, now())
+            ON CONFLICT (config_key) DO UPDATE SET
+              config_value = EXCLUDED.config_value,
+              updated_by = EXCLUDED.updated_by,
+              updated_at = EXCLUDED.updated_at
+            """,
+            {"key": key, "value": value, "actor": actor},
+        )
+
+    @staticmethod
+    def _from_row(row: dict[str, Any]) -> MaskRuleDefinition:
+        params = row.get("params") or {}
+        if not isinstance(params, dict):
+            params = {}
+        kind_raw = row.get("kind") or MaskRuleKind.BUILTIN.value
+        return MaskRuleDefinition(
+            rule_key=row["rule_key"],
+            description=row.get("description"),
+            kind=MaskRuleKind(kind_raw),
+            handler=str(row["handler"]),
+            expression=row.get("expression"),
+            params=params,
+            validated_at=row.get("validated_at"),
+            updated_by=row.get("updated_by"),
+            updated_at=row.get("updated_at"),
+        )
+
 class LakebaseStorageProvider(StorageProvider):
     """Stores app state in a Lakebase Postgres database.
 
@@ -699,6 +819,7 @@ class LakebaseStorageProvider(StorageProvider):
         self._attributes = LakebaseIdentityAttributeRepository(self._pg)
         self._category_approvers = LakebaseCategoryApproverRepository(self._pg)
         self._access_requests = LakebaseAccessRequestRepository(self._pg)
+        self._mask_rules = LakebaseMaskRuleRepository(self._pg)
 
     @property
     def settings(self) -> SettingsRepository:
@@ -720,6 +841,10 @@ class LakebaseStorageProvider(StorageProvider):
     def access_requests(self) -> AccessRequestRepository:
         return self._access_requests
 
+    @property
+    def mask_rules(self) -> MaskRuleRepository:
+        return self._mask_rules
+
     def initialize(self) -> None:
         self._pool.open(wait=True, timeout=30)
         self._pg.run(_DDL)
@@ -735,6 +860,18 @@ class LakebaseStorageProvider(StorageProvider):
         self._pg.run(
             "ALTER TABLE {schema}.identity_attribute_definitions "
             "ADD COLUMN IF NOT EXISTS value_sql TEXT"
+        )
+        self._pg.run(
+            "ALTER TABLE {schema}.mask_rule_definitions "
+            "ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'builtin'"
+        )
+        self._pg.run(
+            "ALTER TABLE {schema}.mask_rule_definitions "
+            "ADD COLUMN IF NOT EXISTS expression TEXT"
+        )
+        self._pg.run(
+            "ALTER TABLE {schema}.mask_rule_definitions "
+            "ADD COLUMN IF NOT EXISTS validated_at TIMESTAMPTZ"
         )
         logger.info("Lakebase schema %s ready", self._location)
 

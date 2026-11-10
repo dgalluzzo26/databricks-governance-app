@@ -9,6 +9,10 @@ import type {
   PolicyListParams,
   UpsertAttributeDefinitionRequest,
   UpsertCategoryApproverRequest,
+  AnalyzeTableRequest,
+  MaskHandlerDraftRequest,
+  MaskHandlerValidateRequest,
+  UpsertMaskRuleRequest,
   UpsertRowFilterDimensionRequest,
 } from "./types";
 
@@ -26,6 +30,8 @@ export const queryKeys = {
   rowFilterDimensions: ["row-filters", "dimensions"] as const,
   rowFilterPack: ["row-filters", "pack"] as const,
   rowFilterAttachments: ["row-filters", "attachments"] as const,
+  maskRules: ["mask-rules"] as const,
+  maskRulePack: ["mask-rules", "pack"] as const,
 };
 
 export function useCurrentUser() {
@@ -347,5 +353,120 @@ export function useDetachRowFilter() {
     mutationFn: ({ tableFullName, columnName }: { tableFullName: string; columnName: string }) =>
       api.rowFilters.detach(tableFullName, columnName),
     onSuccess: invalidate,
+  });
+}
+
+export function useMaskRules() {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.maskRules,
+    queryFn: ({ signal }) => api.maskRules.list(signal),
+  });
+}
+
+export function useMaskRulePack(enabled = true) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.maskRulePack,
+    queryFn: ({ signal }) => api.maskRules.packStatus(signal),
+    enabled,
+  });
+}
+
+function useInvalidateMaskRules() {
+  const client = useQueryClient();
+  return () => client.invalidateQueries({ queryKey: ["mask-rules"] });
+}
+
+export function useUpsertMaskRule() {
+  const api = useApi();
+  const invalidate = useInvalidateMaskRules();
+  return useMutation({
+    mutationFn: (body: UpsertMaskRuleRequest) => api.maskRules.upsert(body),
+    onSuccess: invalidate,
+  });
+}
+
+export function useDeleteMaskRule() {
+  const api = useApi();
+  const invalidate = useInvalidateMaskRules();
+  return useMutation({
+    mutationFn: (ruleKey: string) => api.maskRules.delete(ruleKey),
+    onSuccess: invalidate,
+  });
+}
+
+export function useSeedMaskRules() {
+  const api = useApi();
+  const invalidate = useInvalidateMaskRules();
+  return useMutation({ mutationFn: () => api.maskRules.seed(), onSuccess: invalidate });
+}
+
+export function useEnsureMaskRulePack() {
+  const api = useApi();
+  const invalidate = useInvalidateMaskRules();
+  return useMutation({ mutationFn: () => api.maskRules.ensurePack(), onSuccess: invalidate });
+}
+
+export function useRotateMaskSalt() {
+  const api = useApi();
+  const invalidate = useInvalidateMaskRules();
+  return useMutation({ mutationFn: () => api.maskRules.rotateSalt(), onSuccess: invalidate });
+}
+
+export function useDraftMaskHandler() {
+  const api = useApi();
+  return useMutation({
+    mutationFn: (body: MaskHandlerDraftRequest) => api.maskRules.draftHandler(body),
+  });
+}
+
+export function useValidateMaskHandler() {
+  const api = useApi();
+  return useMutation({
+    mutationFn: (body: MaskHandlerValidateRequest) => api.maskRules.validateHandler(body),
+  });
+}
+
+export function useTableSearch(q: string, enabled = true) {
+  const api = useApi();
+  const trimmed = q.trim();
+  return useQuery({
+    queryKey: ["access-explorer", "search", trimmed],
+    queryFn: ({ signal }) => api.accessExplorer.search(trimmed, 40, signal),
+    enabled: enabled && trimmed.length >= 2,
+  });
+}
+
+export function useAnalyzeTable() {
+  const api = useApi();
+  return useMutation({
+    mutationFn: (body: AnalyzeTableRequest) => api.accessExplorer.analyze(body),
+  });
+}
+
+export function useTreeCatalogs() {
+  const api = useApi();
+  return useQuery({
+    queryKey: ["access-explorer", "tree", "catalogs"],
+    queryFn: ({ signal }) => api.accessExplorer.catalogs(signal),
+  });
+}
+
+export function useTreeSchemas(catalog: string, enabled: boolean) {
+  const api = useApi();
+  return useQuery({
+    queryKey: ["access-explorer", "tree", "schemas", catalog],
+    queryFn: ({ signal }) => api.accessExplorer.schemas(catalog, signal),
+    enabled,
+  });
+}
+
+export function useTreeTables(catalog: string, schema: string, enabled: boolean) {
+  const api = useApi();
+  return useQuery({
+    queryKey: ["access-explorer", "tree", "tables", catalog, schema],
+    queryFn: ({ signal }) => api.accessExplorer.tables(catalog, schema, signal),
+    enabled,
   });
 }

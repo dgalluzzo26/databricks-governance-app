@@ -38,9 +38,22 @@ export const IdentityIcon = (p: IconProps) => (
   </Icon>
 );
 
+export const MaskRuleIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M3 8h10M5.5 4.5 3 8l2.5 3.5M10.5 4.5 13 8l-2.5 3.5" />
+  </Icon>
+);
+
 export const RowFilterIcon = (p: IconProps) => (
   <Icon {...p}>
     <path d="M2.5 3.5h11L9.5 8.5v4l-3 1.5V8.5z" />
+  </Icon>
+);
+
+export const ExplorerIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <circle cx="7" cy="7" r="4" />
+    <path d="m10 10 3.5 3.5" />
   </Icon>
 );
 

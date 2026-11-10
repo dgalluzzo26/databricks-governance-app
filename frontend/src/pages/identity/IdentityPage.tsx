@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   useApproveAccessRequest,
@@ -210,13 +210,19 @@ function MyAttributesPanel() {
 }
 
 function RequestAccessPanel() {
+  const [searchParams] = useSearchParams();
   const definitions = useAttributeDefinitions();
   const create = useCreateAccessRequest();
   const sensitivity = definitions.data?.definitions.find((item) => item.key === "sensitivity");
   const values = sensitivity?.allowedValues ?? [];
-  const [attributeValue, setAttributeValue] = useState("");
+  const prefills = searchParams.get("value") ?? "";
+  const [attributeValue, setAttributeValue] = useState(prefills);
   const [justification, setJustification] = useState("");
   const [expires, setExpires] = useState("");
+
+  useEffect(() => {
+    if (prefills) setAttributeValue(prefills);
+  }, [prefills]);
 
   const onSubmit = async () => {
     await create.mutateAsync({

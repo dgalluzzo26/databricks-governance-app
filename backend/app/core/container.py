@@ -12,12 +12,14 @@ from backend.app.clients.workspace import WorkspaceClientFactory
 from backend.app.core.config import AppConfig, StorageBackend
 from backend.app.repositories.base import StorageProvider
 from backend.app.repositories.factory import build_storage
+from backend.app.services.access_explorer import AccessExplorerService
 from backend.app.services.access_requests import AccessRequestService
 from backend.app.services.app_info import AppInfoService
 from backend.app.services.governed_tags import GovernedTagService
 from backend.app.services.identity import IdentityService
 from backend.app.services.identity_attributes import IdentityAttributeService
 from backend.app.services.identity_uc_sync import IdentityUcSync
+from backend.app.services.mask_rules import MaskRuleService
 from backend.app.services.policies import PolicyService
 from backend.app.services.request_context import RequestContextResolver
 from backend.app.services.row_filters import RowFilterService
@@ -41,6 +43,8 @@ class ServiceContainer:
     identity_attributes: IdentityAttributeService
     access_requests: AccessRequestService
     row_filters: RowFilterService
+    mask_rules: MaskRuleService
+    access_explorer: AccessExplorerService
     identity_uc_sync: IdentityUcSync | None = None
 
     @classmethod
@@ -61,6 +65,18 @@ class ServiceContainer:
             else None
         )
         identity_attributes = IdentityAttributeService(storage, governed_tags, uc_sync, sql)
+        row_filters = RowFilterService(
+            config, workspace, sql, storage, governed_tags, identity_attributes, metadata_cache
+        )
+        mask_rules = MaskRuleService(
+            config,
+            sql,
+            storage,
+            governed_tags,
+            metadata_cache,
+            mirror_sql=app_sql if storage.kind == StorageBackend.LAKEBASE.value else sql,
+            workspace=workspace,
+        )
         return cls(
             config=config,
             workspace=workspace,
@@ -73,8 +89,10 @@ class ServiceContainer:
             policies=PolicyService(workspace, sql, metadata_cache),
             identity_attributes=identity_attributes,
             access_requests=AccessRequestService(storage, identity_attributes),
-            row_filters=RowFilterService(
-                config, workspace, sql, storage, governed_tags, identity_attributes, metadata_cache
+            row_filters=row_filters,
+            mask_rules=mask_rules,
+            access_explorer=AccessExplorerService(
+                config, sql, identity_attributes, mask_rules, row_filters
             ),
             identity_uc_sync=uc_sync,
         )
@@ -94,6 +112,11 @@ class ServiceContainer:
                     "Failed to sync identity attributes to UC mirror at %s",
                     self.identity_uc_sync.location,
                 )
+        try:
+            if self.storage.mask_rules.list_rules():
+                self.mask_rules.sync_to_uc()
+        except Exception:
+            logger.exception("Failed to sync mask rules to UC mirror")
 
     def shutdown(self) -> None:
         self.storage.close()

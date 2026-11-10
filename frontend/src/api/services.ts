@@ -24,11 +24,26 @@ import type {
   RowFilterAttachmentList,
   RowFilterDimension,
   RowFilterDimensionList,
+  MaskHandlerDraft,
+  MaskHandlerDraftRequest,
+  MaskHandlerValidateRequest,
+  MaskHandlerValidateResult,
+  MaskRuleDefinition,
+  MaskRuleList,
+  MaskRulePackStatus,
+  MaskingConfigStatus,
   RowFilterPackStatus,
   SeedPreview,
   UpsertAttributeDefinitionRequest,
   UpsertCategoryApproverRequest,
+  UpsertMaskRuleRequest,
   UpsertRowFilterDimensionRequest,
+  AnalyzeTableRequest,
+  TableAccessInsight,
+  TableSearchResult,
+  TreeCatalogList,
+  TreeSchemaList,
+  TreeTableList,
 } from "./types";
 
 function toQuery(params: Record<string, string | undefined>): string {
@@ -229,12 +244,91 @@ export class RowFiltersApi {
   }
 }
 
+export class MaskRulesApi {
+  constructor(private readonly http: HttpClient) {}
+
+  list(signal?: AbortSignal): Promise<MaskRuleList> {
+    return this.http.get<MaskRuleList>("/mask-rules", signal);
+  }
+
+  upsert(body: UpsertMaskRuleRequest): Promise<MaskRuleDefinition> {
+    return this.http.put<MaskRuleDefinition>("/mask-rules", body);
+  }
+
+  delete(ruleKey: string): Promise<void> {
+    return this.http.delete<void>(`/mask-rules/${encodeURIComponent(ruleKey)}`);
+  }
+
+  seed(): Promise<MaskRuleList> {
+    return this.http.post<MaskRuleList>("/mask-rules/seed");
+  }
+
+  packStatus(signal?: AbortSignal): Promise<MaskRulePackStatus> {
+    return this.http.get<MaskRulePackStatus>("/mask-rules/pack", signal);
+  }
+
+  ensurePack(): Promise<MaskRulePackStatus> {
+    return this.http.post<MaskRulePackStatus>("/mask-rules/pack/ensure");
+  }
+
+  syncUc(): Promise<Record<string, number>> {
+    return this.http.post<Record<string, number>>("/mask-rules/sync-uc");
+  }
+
+  rotateSalt(): Promise<MaskingConfigStatus> {
+    return this.http.post<MaskingConfigStatus>("/mask-rules/salt/rotate");
+  }
+
+  draftHandler(body: MaskHandlerDraftRequest): Promise<MaskHandlerDraft> {
+    return this.http.post<MaskHandlerDraft>("/mask-rules/handlers/draft", body);
+  }
+
+  validateHandler(body: MaskHandlerValidateRequest): Promise<MaskHandlerValidateResult> {
+    return this.http.post<MaskHandlerValidateResult>("/mask-rules/handlers/validate", body);
+  }
+}
+
+export class AccessExplorerApi {
+  constructor(private readonly http: HttpClient) {}
+
+  search(q: string, limit = 40, signal?: AbortSignal): Promise<TableSearchResult> {
+    return this.http.get<TableSearchResult>(
+      `/access-explorer/search${toQuery({ q, limit: String(limit) })}`,
+      signal,
+    );
+  }
+
+  analyze(body: AnalyzeTableRequest): Promise<TableAccessInsight> {
+    return this.http.post<TableAccessInsight>("/access-explorer/analyze", body);
+  }
+
+  catalogs(signal?: AbortSignal): Promise<TreeCatalogList> {
+    return this.http.get<TreeCatalogList>("/access-explorer/tree/catalogs", signal);
+  }
+
+  schemas(catalog: string, signal?: AbortSignal): Promise<TreeSchemaList> {
+    return this.http.get<TreeSchemaList>(
+      `/access-explorer/tree/schemas${toQuery({ catalog })}`,
+      signal,
+    );
+  }
+
+  tables(catalog: string, schema: string, signal?: AbortSignal): Promise<TreeTableList> {
+    return this.http.get<TreeTableList>(
+      `/access-explorer/tree/tables${toQuery({ catalog, schema })}`,
+      signal,
+    );
+  }
+}
+
 export interface ApiServices {
   identity: IdentityApi;
   appInfo: AppInfoApi;
   policies: PoliciesApi;
   identityAttributes: IdentityAttributesApi;
   rowFilters: RowFiltersApi;
+  maskRules: MaskRulesApi;
+  accessExplorer: AccessExplorerApi;
 }
 
 export function createApiServices(http: HttpClient = new HttpClient()): ApiServices {
@@ -244,5 +338,7 @@ export function createApiServices(http: HttpClient = new HttpClient()): ApiServi
     policies: new PoliciesApi(http),
     identityAttributes: new IdentityAttributesApi(http),
     rowFilters: new RowFiltersApi(http),
+    maskRules: new MaskRulesApi(http),
+    accessExplorer: new AccessExplorerApi(http),
   };
 }

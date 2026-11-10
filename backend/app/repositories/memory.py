@@ -12,11 +12,13 @@ from backend.app.models.identity_attribute import (
     AttributeDefinition,
     IdentityAttributeAssignment,
 )
+from backend.app.models.mask_rule import MaskRuleDefinition
 from backend.app.repositories.base import (
     AccessRequestRepository,
     AuditRepository,
     CategoryApproverRepository,
     IdentityAttributeRepository,
+    MaskRuleRepository,
     SettingsRepository,
     StorageProvider,
 )
@@ -221,6 +223,45 @@ class InMemoryAccessRequestRepository(AccessRequestRepository):
             return (assignment_id, expires_at) in self._dismissals
 
 
+class InMemoryMaskRuleRepository(MaskRuleRepository):
+    def __init__(self) -> None:
+        self._rules: dict[str, MaskRuleDefinition] = {}
+        self._config: dict[str, str] = {}
+        self._lock = threading.Lock()
+
+    def list_rules(self) -> list[MaskRuleDefinition]:
+        with self._lock:
+            return sorted(self._rules.values(), key=lambda r: r.rule_key)
+
+    def get_rule(self, rule_key: str) -> MaskRuleDefinition | None:
+        with self._lock:
+            return self._rules.get(rule_key.lower()) or self._rules.get(rule_key)
+
+    def upsert_rule(self, rule: MaskRuleDefinition) -> MaskRuleDefinition:
+        with self._lock:
+            self._rules[rule.rule_key] = rule
+            return rule
+
+    def delete_rule(self, rule_key: str) -> bool:
+        with self._lock:
+            key = rule_key.lower()
+            if key in self._rules:
+                self._rules.pop(key)
+                return True
+            if rule_key in self._rules:
+                self._rules.pop(rule_key)
+                return True
+            return False
+
+    def get_config(self, key: str) -> str | None:
+        with self._lock:
+            return self._config.get(key)
+
+    def put_config(self, key: str, value: str, actor: str) -> None:
+        with self._lock:
+            self._config[key] = value
+
+
 class InMemoryStorageProvider(StorageProvider):
     """Non-persistent storage for local development and tests."""
 
@@ -232,6 +273,7 @@ class InMemoryStorageProvider(StorageProvider):
         self._attributes = InMemoryIdentityAttributeRepository()
         self._category_approvers = InMemoryCategoryApproverRepository()
         self._access_requests = InMemoryAccessRequestRepository()
+        self._mask_rules = InMemoryMaskRuleRepository()
 
     @property
     def settings(self) -> SettingsRepository:
@@ -252,6 +294,10 @@ class InMemoryStorageProvider(StorageProvider):
     @property
     def access_requests(self) -> AccessRequestRepository:
         return self._access_requests
+
+    @property
+    def mask_rules(self) -> MaskRuleRepository:
+        return self._mask_rules
 
     def health(self) -> StorageHealth:
         return StorageHealth(

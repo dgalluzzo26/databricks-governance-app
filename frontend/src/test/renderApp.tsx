@@ -19,12 +19,17 @@ import type {
   IdentityAttributeAssignment,
   PolicyDetail,
   PolicyListResponse,
+  MaskRuleList,
+  MaskRulePackStatus,
   RowFilterAttachmentList,
   RowFilterDimensionList,
   RowFilterPackStatus,
   UpsertAttributeDefinitionRequest,
   UpsertCategoryApproverRequest,
+  UpsertMaskRuleRequest,
   UpsertRowFilterDimensionRequest,
+  MaskHandlerValidateRequest,
+  TableAccessInsight,
 } from "@/api/types";
 import { PreferencesProvider } from "@/app/preferences";
 import { routes } from "@/app/routes";
@@ -219,6 +224,87 @@ export const testRowFilterAttachments: RowFilterAttachmentList = {
   total: 1,
 };
 
+export const testTableAccessInsight: TableAccessInsight = {
+  tableFullName: "demo.default.customers",
+  catalogName: "demo",
+  schemaName: "default",
+  tableName: "customers",
+  summary: "3 columns; 0 unmasked governed columns; 2 still masked; row filter state hides all rows",
+  columns: [
+    {
+      columnName: "s_name",
+      dataType: "string",
+      tags: {
+        sensitivityCategory: "finance.budget",
+        sensitivity: "PII.Name",
+        maskRule: "full",
+        dataType: "string",
+        rowFilter: null,
+      },
+      accessState: "masked",
+      requiredSensitivityPath: "finance.budget.PII.Name",
+      userHasAccess: false,
+      maskRuleKey: "full",
+      maskHandler: "full",
+      maskKind: "builtin",
+      maskDescription: "Full redact",
+      policyName: "mask_sensitivity_variant",
+      notes: "Denied presentation via apply_mask_rule handler 'full'.",
+    },
+    {
+      columnName: "id",
+      dataType: "int",
+      tags: {
+        sensitivityCategory: null,
+        sensitivity: null,
+        maskRule: null,
+        dataType: null,
+        rowFilter: null,
+      },
+      accessState: "not_governed",
+      requiredSensitivityPath: null,
+      userHasAccess: true,
+      maskRuleKey: null,
+      maskHandler: null,
+      maskKind: null,
+      maskDescription: null,
+      policyName: null,
+      notes: null,
+    },
+  ],
+  rowFilter: {
+    attached: true,
+    dimensionKey: "state",
+    columnName: "s_open",
+    policyName: "rf_by_dimension",
+    functionName: "data_governance_app.masking_functions.has_row_access",
+    userHasWildcard: false,
+    userValues: [],
+    userCanSeeRows: false,
+    notes: "No 'state' attribute — has_row_access denies every row.",
+  },
+  suggestions: [
+    {
+      kind: "sensitivity",
+      attributeKey: "sensitivity",
+      attributeValue: "finance.budget.PII.Name",
+      reason: "Unmask columns that require sensitivity path finance.budget.PII.Name",
+      requestable: true,
+      requestPath: "/identity?tab=request&value=finance.budget.PII.Name",
+      columnNames: ["s_name"],
+    },
+    {
+      kind: "row_filter",
+      attributeKey: "state",
+      attributeValue: "*",
+      reason: "Ask an admin to assign state",
+      requestable: false,
+      requestPath: null,
+      columnNames: ["s_open"],
+    },
+  ],
+};
+
 export const testMyAttributes: AttributeAssignmentList = {
   assignments: [
     {
@@ -290,6 +376,62 @@ export const testApprovals: ApprovalInbox = {
   total: 1,
 };
 
+
+export const testMaskRules: MaskRuleList = {
+  rules: [
+    {
+      ruleKey: "full",
+      description: "Full redact",
+      kind: "builtin",
+      handler: "full",
+      expression: null,
+      params: {},
+      validatedAt: null,
+      updatedBy: "admin",
+      updatedAt: "2026-01-01T00:00:00Z",
+    },
+    {
+      ruleKey: "email",
+      description: "Keep email domain",
+      kind: "builtin",
+      handler: "email",
+      expression: null,
+      params: {},
+      validatedAt: null,
+      updatedBy: "admin",
+      updatedAt: "2026-01-01T00:00:00Z",
+    },
+    {
+      ruleKey: "joinable",
+      description: "Deterministic hash for joins",
+      kind: "builtin",
+      handler: "joinable",
+      expression: null,
+      params: {},
+      validatedAt: null,
+      updatedBy: "admin",
+      updatedAt: "2026-01-01T00:00:00Z",
+    },
+  ],
+  total: 3,
+};
+
+export const testMaskRulePack: MaskRulePackStatus = {
+  config: {
+    joinableSaltConfigured: true,
+    tagKey: "mask_rule",
+    tagValues: ["full", "email", "phone", "joinable", "keep_last_4"],
+    missingTagValues: [],
+    policyName: "mask_sensitivity_variant",
+    policyExists: true,
+    policyPassesMaskRule: true,
+    functionName: "`data_governance_app`.`masking_functions`.`mask_variant`",
+    udfInSync: true,
+    inSync: true,
+  },
+  rules: testMaskRules.rules,
+};
+
 export function fakeServices(
   overrides: {
     user?: CurrentUser | Error;
@@ -305,6 +447,7 @@ export function fakeServices(
     approvals?: ApprovalInbox | Error;
     rowFilterDimensions?: RowFilterDimensionList | Error;
     rowFilterAttachments?: RowFilterAttachmentList | Error;
+    maskRules?: MaskRuleList | Error;
   } = {},
 ): ApiServices {
   const governedTags = overrides.governedTags ?? testGovernedTags;
@@ -319,6 +462,7 @@ export function fakeServices(
   const approvals = overrides.approvals ?? testApprovals;
   const rowFilterDimensions = overrides.rowFilterDimensions ?? testRowFilterDimensions;
   const rowFilterAttachments = overrides.rowFilterAttachments ?? testRowFilterAttachments;
+  const maskRules = overrides.maskRules ?? testMaskRules;
 
   return {
     identity: { me: () => (user instanceof Error ? Promise.reject(user) : Promise.resolve(user)) },
@@ -427,6 +571,41 @@ export function fakeServices(
       }),
       dismissRenewal: async () => undefined,
     },
+    maskRules: {
+      list: () =>
+        maskRules instanceof Error ? Promise.reject(maskRules) : Promise.resolve(maskRules),
+      upsert: async (body: UpsertMaskRuleRequest) => ({
+        ruleKey: body.ruleKey,
+        description: body.description ?? null,
+        kind: body.kind ?? "builtin",
+        handler: String(body.handler ?? body.ruleKey),
+        expression: body.expression ?? null,
+        params: body.params ?? {},
+        validatedAt: body.kind === "custom" ? "2026-01-01T00:00:00Z" : null,
+        updatedBy: "admin",
+        updatedAt: "2026-01-01T00:00:00Z",
+      }),
+      delete: async () => undefined,
+      seed: async () => testMaskRules,
+      packStatus: async () => testMaskRulePack,
+      ensurePack: async () => testMaskRulePack,
+      syncUc: async () => ({ rules: 3, salt_configured: 1 }),
+      rotateSalt: async () => testMaskRulePack.config,
+      draftHandler: async () => ({
+        expression: "concat('ID-', sha2(lower(trim(v)), 256))",
+        explanation: "Prefixed joinable hash",
+        sampleInputs: ["alice@gmail.com", "CA"],
+      }),
+      validateHandler: async (body: MaskHandlerValidateRequest) => ({
+        ok: true,
+        expression: body.expression,
+        samples: [
+          { input: "alice@gmail.com", output: "ID-abc", error: null },
+          { input: "CA", output: "ID-def", error: null },
+        ],
+        validationToken: "token",
+      }),
+    },
     rowFilters: {
       listDimensions: () =>
         rowFilterDimensions instanceof Error
@@ -452,6 +631,34 @@ export function fakeServices(
           : Promise.resolve(rowFilterAttachments),
       attach: async (body: AttachRowFilterRequest) => body,
       detach: async () => undefined,
+    },
+    accessExplorer: {
+      search: async () => ({
+        tables: [
+          { catalogName: "demo", schemaName: "default", tableName: "customers" },
+          { catalogName: "demo", schemaName: "default", tableName: "abac_type_test" },
+        ],
+        total: 2,
+      }),
+      analyze: async () => testTableAccessInsight,
+      catalogs: async () => ({
+        catalogs: [{ catalogName: "demo" }, { catalogName: "sandbox" }],
+        total: 2,
+        truncated: false,
+      }),
+      schemas: async (catalog: string) => ({
+        schemas: [{ catalogName: catalog, schemaName: "default" }],
+        total: 1,
+        truncated: false,
+      }),
+      tables: async (catalog: string, schema: string) => ({
+        tables: [
+          { catalogName: catalog, schemaName: schema, tableName: "customers", tableType: "MANAGED" },
+          { catalogName: catalog, schemaName: schema, tableName: "orders_view", tableType: "VIEW" },
+        ],
+        total: 2,
+        truncated: false,
+      }),
     },
   } as unknown as ApiServices;
 }

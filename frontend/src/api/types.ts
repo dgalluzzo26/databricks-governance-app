@@ -320,3 +320,175 @@ export interface ApprovalInbox {
   items: ApprovalInboxItem[];
   total: number;
 }
+
+
+export type MaskHandler = "full" | "joinable" | "email" | "phone" | "keep_last_n";
+export type MaskRuleKind = "builtin" | "custom";
+
+export interface MaskRuleDefinition {
+  ruleKey: string;
+  description: string | null;
+  kind: MaskRuleKind;
+  handler: string;
+  expression: string | null;
+  params: Record<string, unknown>;
+  validatedAt: string | null;
+  updatedBy: string | null;
+  updatedAt: string | null;
+}
+
+export interface MaskRuleList {
+  rules: MaskRuleDefinition[];
+  total: number;
+}
+
+export interface UpsertMaskRuleRequest {
+  ruleKey: string;
+  description?: string | null;
+  kind?: MaskRuleKind;
+  handler?: MaskHandler | string | null;
+  expression?: string | null;
+  params?: Record<string, unknown>;
+  validationToken?: string | null;
+}
+
+export interface MaskHandlerDraftRequest {
+  prompt: string;
+  expression?: string | null;
+  errors?: string[];
+}
+
+export interface MaskHandlerDraft {
+  expression: string;
+  explanation: string;
+  sampleInputs: string[];
+}
+
+export interface MaskHandlerValidateRequest {
+  expression: string;
+  sampleInputs?: string[];
+}
+
+export interface MaskHandlerSampleResult {
+  input: string;
+  output: string | null;
+  error: string | null;
+}
+
+export interface MaskHandlerValidateResult {
+  ok: boolean;
+  expression: string;
+  samples: MaskHandlerSampleResult[];
+  validationToken: string | null;
+}
+
+export interface MaskingConfigStatus {
+  joinableSaltConfigured: boolean;
+  tagKey: string;
+  tagValues: string[];
+  missingTagValues: string[];
+  policyName: string;
+  policyExists: boolean;
+  policyPassesMaskRule: boolean;
+  functionName: string;
+  udfInSync: boolean;
+  inSync: boolean;
+}
+
+export interface MaskRulePackStatus {
+  config: MaskingConfigStatus;
+  rules: MaskRuleDefinition[];
+}
+
+
+export type ColumnAccessState = "unmasked" | "masked" | "not_governed" | "geo_masked";
+export type SuggestedAttributeKind = "sensitivity" | "row_filter";
+
+export interface TableSearchHit {
+  catalogName: string;
+  schemaName: string;
+  tableName: string;
+}
+
+export interface TableSearchResult {
+  tables: TableSearchHit[];
+  total: number;
+}
+
+export interface ColumnTagMap {
+  sensitivityCategory: string | null;
+  sensitivity: string | null;
+  maskRule: string | null;
+  dataType: string | null;
+  rowFilter: string | null;
+}
+
+export interface ColumnAccessInsight {
+  columnName: string;
+  dataType: string | null;
+  tags: ColumnTagMap;
+  accessState: ColumnAccessState;
+  requiredSensitivityPath: string | null;
+  userHasAccess: boolean;
+  maskRuleKey: string | null;
+  maskHandler: string | null;
+  maskKind: string | null;
+  maskDescription: string | null;
+  policyName: string | null;
+  notes: string | null;
+}
+
+export interface RowFilterInsight {
+  attached: boolean;
+  dimensionKey: string | null;
+  columnName: string | null;
+  policyName: string | null;
+  functionName: string | null;
+  userHasWildcard: boolean;
+  userValues: string[];
+  userCanSeeRows: boolean;
+  notes: string | null;
+}
+
+export interface SuggestedAttribute {
+  kind: SuggestedAttributeKind;
+  attributeKey: string;
+  attributeValue: string;
+  reason: string;
+  requestable: boolean;
+  requestPath: string | null;
+  columnNames: string[];
+}
+
+export interface TableAccessInsight {
+  tableFullName: string;
+  catalogName: string;
+  schemaName: string;
+  tableName: string;
+  columns: ColumnAccessInsight[];
+  rowFilter: RowFilterInsight;
+  suggestions: SuggestedAttribute[];
+  summary: string;
+}
+
+export interface AnalyzeTableRequest {
+  tableFullName: string;
+}
+
+export interface TreeCatalogList {
+  catalogs: { catalogName: string }[];
+  total: number;
+  truncated: boolean;
+}
+
+export interface TreeSchemaList {
+  schemas: { catalogName: string; schemaName: string }[];
+  total: number;
+  truncated: boolean;
+}
+
+export interface TreeTableList {
+  tables: { catalogName: string; schemaName: string; tableName: string; tableType: string }[];
+  total: number;
+  truncated: boolean;
+}
