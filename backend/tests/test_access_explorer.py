@@ -123,6 +123,7 @@ def _explorer(container):  # noqa: ANN001
         container.identity_attributes,
         mask,
         container.row_filters,
+        container.access_requests,
     )
     container.access_explorer = service
     return service, sql
@@ -153,7 +154,12 @@ def test_analyze_suggests_sensitivity_and_row_filter(container) -> None:  # noqa
     assert "row_filter" in kinds
     sens = next(s for s in insight.suggestions if s.kind.value == "sensitivity")
     assert sens.requestable is True
-    assert "finance.budget.PII.Name" in sens.attribute_value
+    assert sens.attribute_value == "finance.budget.PII.Name"
+    rf = next(s for s in insight.suggestions if s.kind.value == "row_filter")
+    assert rf.attribute_key == "state"
+    assert rf.attribute_value == "*"
+    assert rf.requestable is True  # state definition seeded in _explorer
+
 
 
 def test_analyze_unmasks_when_user_has_prefix(container) -> None:  # noqa: ANN001
@@ -296,3 +302,109 @@ def test_api_tree_routes(client: TestClient, container) -> None:  # noqa: ANN001
     )
     assert tables.status_code == 200
     assert tables.json()["tables"][0]["tableType"] == "MANAGED"
+
+
+def test_hierarchy_and_admin_routing(container) -> None:  # noqa: ANN001
+    from datetime import UTC, datetime
+
+    from backend.app.models.access_explorer import RequestRouteKind
+    from backend.app.models.access_request import CategoryApprover
+
+    service, sql = _explorer(container)
+    # Two columns with related paths → leaf suggestions + parent
+    sql.tags = [
+        {"column_name": "a", "tag_name": "sensitivity_category", "tag_value": "finance.budget"},
+        {"column_name": "a", "tag_name": "sensitivity", "tag_value": "PII.Name"},
+        {"column_name": "a", "tag_name": "data_type", "tag_value": "string"},
+        {"column_name": "a", "tag_name": "mask_rule", "tag_value": "full"},
+        {"column_name": "b", "tag_name": "sensitivity_category", "tag_value": "finance.budget"},
+        {"column_name": "b", "tag_name": "sensitivity", "tag_value": "PII.SSN"},
+        {"column_name": "b", "tag_name": "data_type", "tag_value": "string"},
+        {"column_name": "b", "tag_name": "mask_rule", "tag_value": "full"},
+        {"column_name": "c", "tag_name": "sensitivity_category", "tag_value": "public"},
+        {"column_name": "c", "tag_name": "sensitivity", "tag_value": "PII.Name"},
+        {"column_name": "c", "tag_name": "data_type", "tag_value": "string"},
+        {"column_name": "c", "tag_name": "mask_rule", "tag_value": "full"},
+    ]
+    sql.columns = [
+        {"column_name": "a", "full_data_type": "string"},
+        {"column_name": "b", "full_data_type": "string"},
+        {"column_name": "c", "full_data_type": "string"},
+    ]
+    actor = _admin()
+    container.identity_attributes.upsert_definition(
+        UpsertAttributeDefinitionRequest(
+            key="sensitivity",
+            description="Sensitivity",
+            value_source=ValueSource.FREE_FORM,
+            allowed_values=[
+                "finance.budget",
+                "finance.budget.PII.Name",
+                "finance.budget.PII.SSN",
+                "public.PII.Name",
+            ],
+        ),
+        actor,  # type: ignore[arg-type]
+    )
+    # Seed approvers directly (avoids live governed-tag lookup in upsert_approver).
+    container.storage.category_approvers.upsert_approver(
+        CategoryApprover(
+            approver_id="apr-1",
+            category_path="finance.budget",
+            principal_name="budget-owners",
+            principal_type=PrincipalKind.GROUP,
+            created_by=actor.user_name,
+            created_at=datetime.now(UTC),
+        )
+    )
+    user = CurrentUser(
+        user_name="analyst@example.com",
+        email="analyst@example.com",
+        display_name="Analyst",
+        user_id="2",
+        groups=["users"],
+        is_admin=False,
+    )
+    insight = service.analyze_table(
+        AnalyzeTableRequest(table_full_name="demo.default.customers"), user
+    )
+    sens = [s for s in insight.suggestions if s.kind.value == "sensitivity"]
+    values = {s.attribute_value for s in sens}
+    assert "finance.budget.PII.Name" in values
+    assert "finance.budget.PII.SSN" in values
+    assert "public.PII.Name" in values
+    parents = [s for s in sens if s.is_hierarchy_parent]
+    assert any(s.attribute_value == "finance.budget" for s in parents)
+    budget_leaf = next(s for s in sens if s.attribute_value == "finance.budget.PII.Name")
+    assert budget_leaf.routed_to == RequestRouteKind.CATEGORY_APPROVERS
+    assert budget_leaf.approvers[0].principal_name == "budget-owners"
+    public_leaf = next(s for s in sens if s.attribute_value == "public.PII.Name")
+    assert public_leaf.routed_to == RequestRouteKind.APP_ADMINS
+
+
+def test_row_filter_only_table_suggests_dimension(container) -> None:  # noqa: ANN001
+    service, sql = _explorer(container)
+    sql.columns = [
+        {"column_name": "abbreviation", "full_data_type": "string"},
+        {"column_name": "name", "full_data_type": "string"},
+    ]
+    sql.tags = [
+        {"column_name": "abbreviation", "tag_name": "row_filter", "tag_value": "state"},
+    ]
+    user = CurrentUser(
+        user_name="analyst@example.com",
+        email="analyst@example.com",
+        display_name="Analyst",
+        user_id="2",
+        groups=["users"],
+        is_admin=False,
+    )
+    insight = service.analyze_table(
+        AnalyzeTableRequest(table_full_name="demo.default.us_states"), user
+    )
+    assert insight.row_filter.attached is True
+    assert insight.row_filter.dimension_key == "state"
+    assert insight.row_filter.user_can_see_rows is False
+    rf = [s for s in insight.suggestions if s.kind.value == "row_filter"]
+    assert rf, "expected row-filter suggestions on a filter-only table"
+    assert any(s.attribute_value == "*" and s.requestable for s in rf)

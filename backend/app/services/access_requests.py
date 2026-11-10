@@ -10,7 +10,9 @@ from backend.app.models.access_request import (
     RENEWAL_WINDOW_DAYS,
     SENSITIVITY_ATTRIBUTE_KEY,
     AccessRequest,
+    AccessRequestApprover,
     AccessRequestList,
+    AccessRequestRouteKind,
     AccessRequestStatus,
     ApprovalInbox,
     ApprovalInboxItem,
@@ -115,35 +117,36 @@ class AccessRequestService:
 
     def create_request(self, body: CreateAccessRequestBody, actor: CurrentUser) -> AccessRequest:
         expires = self._require_future(body.requested_expires_at, field="requested_expires_at")
-        allowed = {value.lower(): value for value in self._sensitivity_allowed_values()}
-        if body.attribute_value.lower() not in allowed:
-            raise InvalidRequestError(
-                f"Value '{body.attribute_value}' is not allowed for sensitivity"
-            )
-        value = allowed[body.attribute_value.lower()]
+        key = (body.attribute_key or SENSITIVITY_ATTRIBUTE_KEY).strip().lower()
+        value = self._canonicalize_request_value(key, body.attribute_value)
         if self._storage.access_requests.has_pending_for(
             requester_name=actor.user_name,
-            attribute_key=SENSITIVITY_ATTRIBUTE_KEY,
+            attribute_key=key,
             attribute_value=value,
         ):
             raise InvalidRequestError(
-                f"You already have a pending request for '{value}'"
+                f"You already have a pending request for {key}='{value}'"
             )
         now = datetime.now(UTC)
-        category = resolve_category(
-            value, self._storage.category_approvers.list_configured_categories()
-        )
+        routing = self.resolve_routing(value if key == SENSITIVITY_ATTRIBUTE_KEY else key)
+        # Row-filter / non-sensitivity attributes have no category hierarchy — app admins.
+        if key != SENSITIVITY_ATTRIBUTE_KEY:
+            routing = {
+                "resolved_category": None,
+                "routed_to": AccessRequestRouteKind.APP_ADMINS,
+                "approvers": [],
+            }
         created = self._storage.access_requests.create(
             AccessRequest(
                 request_id=str(uuid.uuid4()),
                 requester_name=actor.user_name,
-                attribute_key=SENSITIVITY_ATTRIBUTE_KEY,
+                attribute_key=key,
                 attribute_value=value,
                 requested_expires_at=expires,
                 justification=body.justification,
                 status=AccessRequestStatus.PENDING,
                 created_at=now,
-                resolved_category=category,
+                resolved_category=routing["resolved_category"],
             )
         )
         self._audit(
@@ -151,25 +154,67 @@ class AccessRequestService:
             actor.user_name,
             {
                 "request_id": created.request_id,
+                "attribute_key": created.attribute_key,
                 "attribute_value": created.attribute_value,
                 "requested_expires_at": created.requested_expires_at.isoformat(),
+                "routed_to": routing["routed_to"].value,
+                "resolved_category": routing["resolved_category"],
             },
         )
-        return created.model_copy(update={"resolved_category": category})
+        return self._with_routing(created)
 
     def list_mine(self, actor: CurrentUser) -> AccessRequestList:
         items = [
-            item.model_copy(
-                update={
-                    "resolved_category": resolve_category(
-                        item.attribute_value,
-                        self._storage.category_approvers.list_configured_categories(),
-                    )
-                }
-            )
+            self._with_routing(item)
             for item in self._storage.access_requests.list_for_requester(actor.user_name)
         ]
         return AccessRequestList(requests=items, total=len(items))
+
+    def resolve_routing(self, path: str) -> dict:
+        """Who reviews a sensitivity request for ``path``.
+
+        Most-specific configured category with at least one approver wins. If none is
+        configured (or the matched category has no approvers), app admins decide.
+        """
+        configured = self._storage.category_approvers.list_configured_categories()
+        category = resolve_category(path, configured)
+        approvers: list[AccessRequestApprover] = []
+        if category is not None:
+            approvers = [
+                AccessRequestApprover(
+                    principal_name=item.principal_name,
+                    principal_type=item.principal_type,
+                )
+                for item in self._storage.category_approvers.list_approvers(category)
+            ]
+        if not approvers:
+            return {
+                "resolved_category": category,
+                "routed_to": AccessRequestRouteKind.APP_ADMINS,
+                "approvers": [],
+            }
+        return {
+            "resolved_category": category,
+            "routed_to": AccessRequestRouteKind.CATEGORY_APPROVERS,
+            "approvers": approvers,
+        }
+
+    def _with_routing(self, request: AccessRequest) -> AccessRequest:
+        if request.attribute_key != SENSITIVITY_ATTRIBUTE_KEY:
+            routing = {
+                "resolved_category": None,
+                "routed_to": AccessRequestRouteKind.APP_ADMINS,
+                "approvers": [],
+            }
+        else:
+            routing = self.resolve_routing(request.attribute_value)
+        return request.model_copy(
+            update={
+                "resolved_category": routing["resolved_category"],
+                "routed_to": routing["routed_to"],
+                "approvers": routing["approvers"],
+            }
+        )
 
     def cancel(self, request_id: str, actor: CurrentUser) -> AccessRequest:
         current = self._storage.access_requests.get(request_id)
@@ -194,7 +239,9 @@ class AccessRequestService:
         self, request_id: str, body: DecideAccessRequestBody, actor: CurrentUser
     ) -> AccessRequest:
         current = self._require_pending(request_id)
-        self._require_can_decide(actor, current.attribute_value)
+        self._require_can_decide(
+            actor, current.attribute_value, attribute_key=current.attribute_key
+        )
         expires = self._require_future(
             body.expires_at or current.requested_expires_at, field="expires_at"
         )
@@ -235,7 +282,9 @@ class AccessRequestService:
         self, request_id: str, body: DecideAccessRequestBody, actor: CurrentUser
     ) -> AccessRequest:
         current = self._require_pending(request_id)
-        self._require_can_decide(actor, current.attribute_value)
+        self._require_can_decide(
+            actor, current.attribute_value, attribute_key=current.attribute_key
+        )
         updated = current.model_copy(
             update={
                 "status": AccessRequestStatus.DENIED,
@@ -302,13 +351,19 @@ class AccessRequestService:
         items: list[ApprovalInboxItem] = []
 
         for request in pending:
-            category = resolve_category(request.attribute_value, configured)
-            if not self._can_decide(actor, request.attribute_value, category):
+            if not self._can_decide_for(
+                actor, request.attribute_value, attribute_key=request.attribute_key
+            ):
                 continue
+            category = (
+                resolve_category(request.attribute_value, configured)
+                if request.attribute_key == SENSITIVITY_ATTRIBUTE_KEY
+                else None
+            )
             items.append(
                 ApprovalInboxItem(
                     kind=ApprovalItemKind.REQUEST,
-                    request=request.model_copy(update={"resolved_category": category}),
+                    request=self._with_routing(request),
                     resolved_category=category,
                     attribute_value=request.attribute_value,
                     principal_name=request.requester_name,
@@ -363,6 +418,20 @@ class AccessRequestService:
 
     # --- helpers ---
 
+    def _canonicalize_request_value(self, attribute_key: str, attribute_value: str) -> str:
+        definition = self._storage.identity_attributes.get_definition(attribute_key)
+        if definition is None:
+            raise InvalidRequestError(
+                f"Attribute definition '{attribute_key}' is not configured"
+            )
+        enriched = self._identity._enrich(definition)  # noqa: SLF001
+        allowed = {value.lower(): value for value in enriched.allowed_values}
+        if attribute_value.lower() not in allowed:
+            raise InvalidRequestError(
+                f"Value '{attribute_value}' is not allowed for '{attribute_key}'"
+            )
+        return allowed[attribute_value.lower()]
+
     def _sensitivity_allowed_values(self) -> list[str]:
         definition = self._storage.identity_attributes.get_definition(SENSITIVITY_ATTRIBUTE_KEY)
         if definition is None:
@@ -388,21 +457,36 @@ class AccessRequestService:
             raise InvalidRequestError("Request is not pending")
         return current
 
-    def _require_can_decide(self, actor: CurrentUser, path: str) -> None:
+    def _require_can_decide(
+        self, actor: CurrentUser, path: str, *, attribute_key: str = SENSITIVITY_ATTRIBUTE_KEY
+    ) -> None:
+        if not self._can_decide_for(actor, path, attribute_key=attribute_key):
+            if attribute_key == SENSITIVITY_ATTRIBUTE_KEY:
+                raise ForbiddenError("You are not an approver for this sensitivity category")
+            raise ForbiddenError("Only app admins can decide this attribute request")
+
+    def _can_decide_for(
+        self, actor: CurrentUser, path: str, *, attribute_key: str = SENSITIVITY_ATTRIBUTE_KEY
+    ) -> bool:
+        if attribute_key != SENSITIVITY_ATTRIBUTE_KEY:
+            return actor.is_admin
         category = resolve_category(
             path, self._storage.category_approvers.list_configured_categories()
         )
-        if not self._can_decide(actor, path, category):
-            raise ForbiddenError("You are not an approver for this sensitivity category")
+        return self._can_decide(actor, path, category)
 
     def _can_decide(
         self, actor: CurrentUser, path: str, category: str | None
     ) -> bool:
+        # App admins always see and decide unrouted requests and can override.
         if actor.is_admin:
             return True
         if category is None:
             return False
         approvers = self._storage.category_approvers.list_approvers(category)
+        if not approvers:
+            # Category exists but no reviewers — only app admins (handled above).
+            return False
         actor_groups = {group.lower() for group in actor.groups}
         for approver in approvers:
             if (

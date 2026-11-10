@@ -253,6 +253,12 @@ export interface AssignmentListParams {
 
 export type AccessRequestStatus = "PENDING" | "APPROVED" | "DENIED" | "CANCELLED";
 export type ApprovalItemKind = "REQUEST" | "RENEWAL";
+export type RequestRouteKind = "category_approvers" | "app_admins";
+
+export interface ApproverPreview {
+  principalName: string;
+  principalType: string;
+}
 
 export interface CategoryApprover {
   approverId: string;
@@ -288,6 +294,8 @@ export interface AccessRequest {
   approvedExpiresAt: string | null;
   createdAt: string;
   resolvedCategory: string | null;
+  routedTo: RequestRouteKind | null;
+  approvers: ApproverPreview[];
 }
 
 export interface AccessRequestList {
@@ -296,6 +304,7 @@ export interface AccessRequestList {
 }
 
 export interface CreateAccessRequestBody {
+  attributeKey?: string;
   attributeValue: string;
   requestedExpiresAt: string;
   justification: string;
@@ -458,6 +467,11 @@ export interface SuggestedAttribute {
   requestable: boolean;
   requestPath: string | null;
   columnNames: string[];
+  coversPaths: string[];
+  isHierarchyParent: boolean;
+  routedTo: RequestRouteKind | null;
+  resolvedCategory: string | null;
+  approvers: ApproverPreview[];
 }
 
 export interface TableAccessInsight {

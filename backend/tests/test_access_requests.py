@@ -300,3 +300,58 @@ def test_api_access_request_flow(client: TestClient, container) -> None:  # noqa
         },
     )
     assert forbidden.status_code == 403
+
+
+def test_row_filter_request_routes_to_admins(container) -> None:  # noqa: ANN001
+    identity = _service(container)
+    access = AccessRequestService(container.storage, identity)
+    actor = _admin()
+    from backend.app.models.identity_attribute import ValueSource
+
+    identity.upsert_definition(
+        UpsertAttributeDefinitionRequest(
+            key="state",
+            description="US state",
+            value_source=ValueSource.FREE_FORM,
+            allowed_values=["CA", "NY", "*"],
+        ),
+        actor,
+    )
+    requester = type(
+        "U",
+        (),
+        {
+            "user_name": "analyst@example.com",
+            "is_admin": False,
+            "groups": [],
+            "email": "analyst@example.com",
+            "display_name": "Analyst",
+        },
+    )()
+    created = access.create_request(
+        CreateAccessRequestBody(
+            attribute_key="state",
+            attribute_value="*",
+            requested_expires_at=datetime.now(UTC) + timedelta(days=30),
+            justification="Need all states for us_states",
+        ),
+        requester,  # type: ignore[arg-type]
+    )
+    assert created.attribute_key == "state"
+    assert created.attribute_value == "*"
+    assert created.routed_to.value == "app_admins"
+    inbox_admin = access.approvals_inbox(actor)  # type: ignore[arg-type]
+    assert any(i.request and i.request.request_id == created.request_id for i in inbox_admin.items)
+    non_admin = type(
+        "U",
+        (),
+        {
+            "user_name": "other@example.com",
+            "is_admin": False,
+            "groups": [],
+            "email": "other@example.com",
+            "display_name": "Other",
+        },
+    )()
+    inbox_other = access.approvals_inbox(non_admin)  # type: ignore[arg-type]
+    assert inbox_other.total == 0

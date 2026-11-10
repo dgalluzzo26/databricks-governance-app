@@ -77,6 +77,7 @@ class ServiceContainer:
             mirror_sql=app_sql if storage.kind == StorageBackend.LAKEBASE.value else sql,
             workspace=workspace,
         )
+        access_requests = AccessRequestService(storage, identity_attributes)
         return cls(
             config=config,
             workspace=workspace,
@@ -88,11 +89,16 @@ class ServiceContainer:
             app_info=AppInfoService(config, workspace, storage),
             policies=PolicyService(workspace, sql, metadata_cache),
             identity_attributes=identity_attributes,
-            access_requests=AccessRequestService(storage, identity_attributes),
+            access_requests=access_requests,
             row_filters=row_filters,
             mask_rules=mask_rules,
             access_explorer=AccessExplorerService(
-                config, sql, identity_attributes, mask_rules, row_filters
+                config,
+                sql,
+                identity_attributes,
+                mask_rules,
+                row_filters,
+                access_requests,
             ),
             identity_uc_sync=uc_sync,
         )

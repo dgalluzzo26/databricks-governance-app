@@ -21,6 +21,16 @@ class SuggestedAttributeKind(StrEnum):
     ROW_FILTER = "row_filter"
 
 
+class RequestRouteKind(StrEnum):
+    CATEGORY_APPROVERS = "category_approvers"
+    APP_ADMINS = "app_admins"
+
+
+class ApproverPreview(ApiModel):
+    principal_name: str
+    principal_type: str
+
+
 class TableSearchHit(ApiModel):
     catalog_name: str
     schema_name: str
@@ -79,6 +89,11 @@ class SuggestedAttribute(ApiModel):
     requestable: bool = False
     request_path: str | None = None
     column_names: list[str] = []
+    covers_paths: list[str] = []
+    is_hierarchy_parent: bool = False
+    routed_to: RequestRouteKind | None = None
+    resolved_category: str | None = None
+    approvers: list[ApproverPreview] = []
 
 
 class TableAccessInsight(ApiModel):

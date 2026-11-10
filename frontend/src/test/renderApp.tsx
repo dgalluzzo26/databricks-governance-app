@@ -288,19 +288,29 @@ export const testTableAccessInsight: TableAccessInsight = {
       kind: "sensitivity",
       attributeKey: "sensitivity",
       attributeValue: "finance.budget.PII.Name",
-      reason: "Unmask columns that require sensitivity path finance.budget.PII.Name",
+      reason: "Unmask 1 column(s) that require sensitivity path finance.budget.PII.Name. App admins will review (no category approvers configured).",
       requestable: true,
       requestPath: "/identity?tab=request&value=finance.budget.PII.Name",
       columnNames: ["s_name"],
+      coversPaths: ["finance.budget.PII.Name"],
+      isHierarchyParent: false,
+      routedTo: "app_admins",
+      resolvedCategory: null,
+      approvers: [],
     },
     {
       kind: "row_filter",
       attributeKey: "state",
       attributeValue: "*",
-      reason: "Ask an admin to assign state",
-      requestable: false,
+      reason: "Row filter uses state. Request * to see all rows. App admins will review.",
+      requestable: true,
       requestPath: null,
       columnNames: ["s_open"],
+      coversPaths: ["*"],
+      isHierarchyParent: false,
+      routedTo: "app_admins",
+      resolvedCategory: null,
+      approvers: [],
     },
   ],
 };
@@ -356,6 +366,8 @@ export const testMyAccessRequests: AccessRequestList = {
       approvedExpiresAt: null,
       createdAt: "2026-01-01T00:00:00Z",
       resolvedCategory: "finance",
+      routedTo: "category_approvers",
+      approvers: [{ principalName: "finance-owners", principalType: "GROUP" }],
     },
   ],
   total: 1,
@@ -532,7 +544,7 @@ export function fakeServices(
       createAccessRequest: async (body: CreateAccessRequestBody) => ({
         requestId: "new-req",
         requesterName: "ana.lopez@example.com",
-        attributeKey: "sensitivity",
+        attributeKey: body.attributeKey ?? "sensitivity",
         attributeValue: body.attributeValue,
         requestedExpiresAt: body.requestedExpiresAt,
         justification: body.justification,
@@ -542,7 +554,15 @@ export function fakeServices(
         decisionNote: null,
         approvedExpiresAt: null,
         createdAt: "2026-01-01T00:00:00Z",
-        resolvedCategory: "finance",
+        resolvedCategory: body.attributeKey && body.attributeKey !== "sensitivity" ? null : "finance",
+        routedTo:
+          body.attributeKey && body.attributeKey !== "sensitivity"
+            ? ("app_admins" as const)
+            : ("category_approvers" as const),
+        approvers:
+          body.attributeKey && body.attributeKey !== "sensitivity"
+            ? []
+            : [{ principalName: "finance-owners", principalType: "GROUP" }],
       }),
       myAccessRequests: () =>
         myAccessRequests instanceof Error

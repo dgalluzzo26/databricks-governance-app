@@ -18,11 +18,22 @@ describe("Access explorer", () => {
     expect(await screen.findByText("demo.default.customers")).toBeInTheDocument();
 
     const suggestions = screen.getByRole("table", { name: "Suggested attributes" });
-    expect(within(suggestions).getByText("finance.budget.PII.Name")).toBeInTheDocument();
-    expect(within(suggestions).getByText("Admin assign")).toBeInTheDocument();
-    expect(within(suggestions).getByRole("link", { name: "Request" })).toHaveAttribute(
+    expect(within(suggestions).getAllByText("finance.budget.PII.Name").length).toBeGreaterThan(0);
+    expect(within(suggestions).getAllByText("App admins").length).toBeGreaterThan(0);
+    expect(
+      within(suggestions).getByRole("checkbox", {
+        name: "Select sensitivity=finance.budget.PII.Name",
+      }),
+    ).toBeChecked();
+    expect(
+      within(suggestions).getByRole("checkbox", {
+        name: "Select state=*",
+      }),
+    ).toBeChecked();
+    expect(screen.getByRole("button", { name: /Request/ })).toBeDisabled();
+    expect(screen.getByRole("link", { name: "My requests" })).toHaveAttribute(
       "href",
-      "/identity?tab=request&value=finance.budget.PII.Name",
+      "/identity?tab=my-requests",
     );
 
     const columns = screen.getByRole("table", { name: "Column access" });

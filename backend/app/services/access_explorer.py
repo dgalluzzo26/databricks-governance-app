@@ -10,9 +10,11 @@ from backend.app.core.config import AppConfig
 from backend.app.core.errors import InvalidRequestError, NotFoundError
 from backend.app.models.access_explorer import (
     AnalyzeTableRequest,
+    ApproverPreview,
     ColumnAccessInsight,
     ColumnAccessState,
     ColumnTagMap,
+    RequestRouteKind,
     RowFilterInsight,
     SuggestedAttribute,
     SuggestedAttributeKind,
@@ -26,8 +28,10 @@ from backend.app.models.access_explorer import (
     TreeTable,
     TreeTableList,
 )
+from backend.app.models.access_request import SENSITIVITY_ATTRIBUTE_KEY
 from backend.app.models.mask_rule import MaskRuleKind
 from backend.app.models.user import CurrentUser
+from backend.app.services.access_requests import AccessRequestService, path_prefixes
 from backend.app.services.identity_attributes import IdentityAttributeService
 from backend.app.services.mask_rules import MaskRuleService
 from backend.app.services.row_filters import RowFilterService, split_table_name
@@ -75,12 +79,14 @@ class AccessExplorerService:
         identity_attributes: IdentityAttributeService,
         mask_rules: MaskRuleService,
         row_filters: RowFilterService,
+        access_requests: AccessRequestService | None = None,
     ) -> None:
         self._config = config
         self._sql = sql
         self._identity = identity_attributes
         self._mask_rules = mask_rules
         self._row_filters = row_filters
+        self._access_requests = access_requests
 
     def search_tables(self, query: str, *, limit: int = 40) -> TableSearchResult:
         q = (query or "").strip()
@@ -235,8 +241,8 @@ class AccessExplorerService:
                 )
             )
 
-        row_filter = self._row_filter_insight(catalog, schema, table, held)
-        suggestions = self._suggestions(insights, row_filter)
+        row_filter = self._row_filter_insight(catalog, schema, table, held, tags_by_col)
+        suggestions = self._suggestions(insights, row_filter, sensitivity_held, held)
         masked = sum(
             1
             for c in insights
@@ -359,33 +365,50 @@ class AccessExplorerService:
         )
 
     def _row_filter_insight(
-        self, catalog: str, schema: str, table: str, held: dict[str, set[str]]
+        self,
+        catalog: str,
+        schema: str,
+        table: str,
+        held: dict[str, set[str]],
+        tags_by_col: dict[str, dict[str, str]],
     ) -> RowFilterInsight:
         policy_name = self._config.row_filter_policy_name
         function_name = (
             f"{self._config.app_catalog}.{self._config.abac_function_schema}.has_row_access"
         )
-        full = f"{catalog}.{schema}.{table}".lower()
-        try:
-            attachments = self._row_filters.list_attachments().attachments
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Could not load row filter attachments: %s", exc)
-            return RowFilterInsight(
-                attached=False,
-                policy_name=policy_name,
-                function_name=function_name,
-                notes=f"Could not inspect row_filter tags: {exc}",
-            )
-        match = next((a for a in attachments if a.table_full_name.lower() == full), None)
-        if match is None:
-            return RowFilterInsight(
-                attached=False,
-                policy_name=policy_name,
-                function_name=function_name,
-                notes="No row_filter tag on this table.",
-            )
-        dim = match.dimension
-        col = match.column_name
+        # Prefer the column tags already loaded for this table (works even if the
+        # dimension is not yet registered in the app pack).
+        tag_match: tuple[str, str] | None = None
+        for column_name, tags in tags_by_col.items():
+            dim = (tags.get("row_filter") or "").strip()
+            if dim:
+                tag_match = (column_name, dim)
+                break
+        if tag_match is None:
+            # Fall back to the pack attachment index.
+            full = f"{catalog}.{schema}.{table}".lower()
+            try:
+                attachments = self._row_filters.list_attachments().attachments
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Could not load row filter attachments: %s", exc)
+                return RowFilterInsight(
+                    attached=False,
+                    policy_name=policy_name,
+                    function_name=function_name,
+                    notes=f"Could not inspect row_filter tags: {exc}",
+                )
+            match = next((a for a in attachments if a.table_full_name.lower() == full), None)
+            if match is None:
+                return RowFilterInsight(
+                    attached=False,
+                    policy_name=policy_name,
+                    function_name=function_name,
+                    notes="No row_filter tag on this table.",
+                )
+            col, dim = match.column_name, match.dimension
+        else:
+            col, dim = tag_match
+
         values = sorted(held.get(dim.lower(), set()), key=str.lower)
         has_star = any(v == "*" for v in values)
         can_see = bool(values)  # any value (including *) means some rows; empty = none
@@ -410,45 +433,227 @@ class AccessExplorerService:
         )
 
     def _suggestions(
-        self, columns: list[ColumnAccessInsight], row_filter: RowFilterInsight
+        self,
+        columns: list[ColumnAccessInsight],
+        row_filter: RowFilterInsight,
+        sensitivity_held: set[str],
+        held: dict[str, set[str]],
     ) -> list[SuggestedAttribute]:
-        by_path: dict[str, SuggestedAttribute] = {}
+        path_to_cols: dict[str, list[str]] = defaultdict(list)
+        path_canonical: dict[str, str] = {}
         for col in columns:
             if col.user_has_access or not col.required_sensitivity_path:
                 continue
             if col.access_state == ColumnAccessState.NOT_GOVERNED:
                 continue
             path = col.required_sensitivity_path
-            existing = by_path.get(path.lower())
-            if existing is None:
-                by_path[path.lower()] = SuggestedAttribute(
-                    kind=SuggestedAttributeKind.SENSITIVITY,
-                    attribute_key="sensitivity",
-                    attribute_value=path,
-                    reason=f"Unmask columns that require sensitivity path {path}",
-                    requestable=True,
-                    request_path=f"/identity?tab=request&value={path}",
-                    column_names=[col.column_name],
-                )
-            else:
-                existing.column_names.append(col.column_name)
+            key = path.lower()
+            path_canonical[key] = path
+            path_to_cols[key].append(col.column_name)
 
-        suggestions = list(by_path.values())
-        if row_filter.attached and not row_filter.user_can_see_rows and row_filter.dimension_key:
+        allowed = {v.lower(): v for v in self._sensitivity_allowed_values()}
+        suggestions: list[SuggestedAttribute] = []
+
+        # One suggestion per distinct required leaf path (deduped across columns).
+        for key, cols in sorted(path_to_cols.items(), key=lambda item: item[0]):
+            path = path_canonical[key]
             suggestions.append(
-                SuggestedAttribute(
-                    kind=SuggestedAttributeKind.ROW_FILTER,
-                    attribute_key=row_filter.dimension_key,
-                    attribute_value="*",
+                self._sensitivity_suggestion(
+                    path=path,
+                    column_names=cols,
+                    covers_paths=[path],
+                    is_parent=False,
                     reason=(
-                        f"Row filter on column {row_filter.column_name} requires a "
-                        f"'{row_filter.dimension_key}' attribute (specific value or *). "
-                        "Ask an admin to assign it — row-filter attributes are not "
-                        "requestable in the access-request flow yet."
+                        f"Unmask {len(cols)} column(s) that require sensitivity path {path}"
                     ),
-                    requestable=False,
-                    request_path=None,
-                    column_names=[row_filter.column_name] if row_filter.column_name else [],
+                    requestable=key in allowed or not allowed,
                 )
             )
+
+        # Broader hierarchy parents that cover 2+ missing leaves (and user does not already hold).
+        for parent, covered in self._hierarchy_parents(list(path_canonical.values())):
+            if has_sensitivity_access(sensitivity_held, parent):
+                continue
+            parent_key = parent.lower()
+            if parent_key in path_to_cols:
+                continue
+            if allowed and parent_key not in allowed:
+                continue
+            covered_cols: list[str] = []
+            for leaf in covered:
+                covered_cols.extend(path_to_cols.get(leaf.lower(), []))
+            # Preserve order, unique
+            seen_cols: set[str] = set()
+            unique_cols: list[str] = []
+            for name in covered_cols:
+                if name not in seen_cols:
+                    seen_cols.add(name)
+                    unique_cols.append(name)
+            suggestions.append(
+                self._sensitivity_suggestion(
+                    path=allowed.get(parent_key, parent),
+                    column_names=unique_cols,
+                    covers_paths=covered,
+                    is_parent=True,
+                    reason=(
+                        f"Broader path covering {len(covered)} required tags "
+                        f"({', '.join(covered)}) across {len(unique_cols)} column(s)"
+                    ),
+                    requestable=True,
+                )
+            )
+
+        if (
+            row_filter.attached
+            and row_filter.dimension_key
+            and not row_filter.user_has_wildcard
+        ):
+            dim = row_filter.dimension_key
+            held_dim = held.get(dim.lower(), set())
+            dim_def = None
+            allowed: list[str] = []
+            try:
+                dim_def = self._identity.get_definition(dim)
+                allowed = list(dim_def.allowed_values)
+            except Exception:  # noqa: BLE001 - missing definition is a valid explorer state
+                dim_def = None
+            # Always offer * (full row access) when the user does not hold it.
+            star_allowed = not allowed or any(v == "*" for v in allowed)
+            if "*" not in {v.lower() for v in held_dim} and star_allowed:
+                suggestions.append(
+                    SuggestedAttribute(
+                        kind=SuggestedAttributeKind.ROW_FILTER,
+                        attribute_key=dim,
+                        attribute_value="*",
+                        reason=(
+                            (
+                                f"Row filter dimension '{dim}' is tagged on this table but has no "
+                                "identity attribute definition yet — an admin must create it "
+                                "(Row filters page) before requests can be submitted."
+                            )
+                            if dim_def is None
+                            else (
+                                f"Row filter on column {row_filter.column_name} uses dimension "
+                                f"'{dim}'. Request * to see all rows. App admins will review "
+                                "(row-filter attributes have no category approvers)."
+                            )
+                        ),
+                        requestable=dim_def is not None,
+                        request_path=None,
+                        column_names=[row_filter.column_name] if row_filter.column_name else [],
+                        covers_paths=["*"],
+                        is_hierarchy_parent=False,
+                        routed_to=RequestRouteKind.APP_ADMINS,
+                        resolved_category=None,
+                        approvers=[],
+                    )
+                )
+            # Also offer concrete dimension values the user does not already hold.
+            for value in allowed:
+                if value == "*" or value.lower() in {v.lower() for v in held_dim}:
+                    continue
+                suggestions.append(
+                    SuggestedAttribute(
+                        kind=SuggestedAttributeKind.ROW_FILTER,
+                        attribute_key=dim,
+                        attribute_value=value,
+                        reason=(
+                            f"Row filter on column {row_filter.column_name}: request "
+                            f"{dim}={value} to see matching rows. App admins will review."
+                        ),
+                        requestable=True,
+                        request_path=None,
+                        column_names=[row_filter.column_name] if row_filter.column_name else [],
+                        covers_paths=[value],
+                        is_hierarchy_parent=False,
+                        routed_to=RequestRouteKind.APP_ADMINS,
+                        resolved_category=None,
+                        approvers=[],
+                    )
+                )
         return suggestions
+
+    def _sensitivity_suggestion(
+        self,
+        *,
+        path: str,
+        column_names: list[str],
+        covers_paths: list[str],
+        is_parent: bool,
+        reason: str,
+        requestable: bool,
+    ) -> SuggestedAttribute:
+        routing = (
+            self._access_requests.resolve_routing(path)
+            if self._access_requests is not None
+            else {
+                "resolved_category": None,
+                "routed_to": RequestRouteKind.APP_ADMINS,
+                "approvers": [],
+            }
+        )
+        routed = routing["routed_to"]
+        if isinstance(routed, RequestRouteKind):
+            route_kind = routed
+        else:
+            route_kind = RequestRouteKind(str(routed))
+        approvers = [
+            ApproverPreview(
+                principal_name=a.principal_name,
+                principal_type=a.principal_type.value
+                if hasattr(a.principal_type, "value")
+                else str(a.principal_type),
+            )
+            for a in routing["approvers"]
+        ]
+        route_note = (
+            "App admins will review (no category approvers configured)."
+            if route_kind == RequestRouteKind.APP_ADMINS
+            else (
+                f"Routed to {routing['resolved_category']} approvers: "
+                + ", ".join(f"{a.principal_name} ({a.principal_type})" for a in approvers)
+            )
+        )
+        return SuggestedAttribute(
+            kind=SuggestedAttributeKind.SENSITIVITY,
+            attribute_key=SENSITIVITY_ATTRIBUTE_KEY,
+            attribute_value=path,
+            reason=f"{reason}. {route_note}",
+            requestable=requestable,
+            request_path=f"/identity?tab=request&value={path}",
+            column_names=column_names,
+            covers_paths=covers_paths,
+            is_hierarchy_parent=is_parent,
+            routed_to=route_kind,
+            resolved_category=routing["resolved_category"],
+            approvers=approvers,
+        )
+
+    def _sensitivity_allowed_values(self) -> list[str]:
+        try:
+            definition = self._identity.get_definition(SENSITIVITY_ATTRIBUTE_KEY)
+        except Exception:  # noqa: BLE001
+            return []
+        return list(definition.allowed_values)
+
+    @staticmethod
+    def _hierarchy_parents(paths: list[str]) -> list[tuple[str, list[str]]]:
+        """Return (parent_path, covered_leaf_paths) for parents that cover 2+ leaves.
+
+        Most-specific parents first.
+        """
+        if len(paths) < 2:
+            return []
+        coverage: dict[str, set[str]] = defaultdict(set)
+        for path in paths:
+            for prefix in path_prefixes(path)[1:]:  # skip the leaf itself
+                coverage[prefix].add(path)
+        ranked = sorted(
+            (
+                (parent, sorted(covered))
+                for parent, covered in coverage.items()
+                if len(covered) >= 2
+            ),
+            key=lambda item: (-len(item[0].split(".")), item[0].lower()),
+        )
+        return ranked

@@ -55,6 +55,16 @@ class CategoryApproverList(ApiModel):
     total: int
 
 
+class AccessRequestRouteKind(StrEnum):
+    CATEGORY_APPROVERS = "category_approvers"
+    APP_ADMINS = "app_admins"
+
+
+class AccessRequestApprover(ApiModel):
+    principal_name: str
+    principal_type: PrincipalKind
+
+
 class AccessRequest(ApiModel):
     request_id: str
     requester_name: str
@@ -69,20 +79,30 @@ class AccessRequest(ApiModel):
     approved_expires_at: datetime | None = None
     created_at: datetime
     resolved_category: str | None = None
+    routed_to: AccessRequestRouteKind | None = None
+    approvers: list[AccessRequestApprover] = []
 
 
 class CreateAccessRequestBody(ApiModel):
+    attribute_key: str = Field(
+        default=SENSITIVITY_ATTRIBUTE_KEY, min_length=1, max_length=128
+    )
     attribute_value: str = Field(min_length=1, max_length=512)
     requested_expires_at: datetime
     justification: str = Field(min_length=1, max_length=2000)
 
-    @field_validator("attribute_value", "justification")
+    @field_validator("attribute_key", "attribute_value", "justification")
     @classmethod
     def _strip(cls, value: str) -> str:
         text = value.strip()
         if not text:
             raise ValueError("Value cannot be empty")
         return text
+
+    @field_validator("attribute_key")
+    @classmethod
+    def _lower_key(cls, value: str) -> str:
+        return value.strip().lower()
 
 
 class DecideAccessRequestBody(ApiModel):

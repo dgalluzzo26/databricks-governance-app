@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { useAnalyzeTable, useTableSearch } from "@/api/queries";
-import type { ColumnAccessInsight, TableAccessInsight } from "@/api/types";
+import { useAnalyzeTable, useCreateAccessRequest, useTableSearch } from "@/api/queries";
+import type { ColumnAccessInsight, SuggestedAttribute, TableAccessInsight } from "@/api/types";
 import { Alert, Badge, Card, ErrorAlert, PageHeader, Spinner } from "@/components/ui";
 import styles from "../identity/IdentityPage.module.css";
 import { AccessExplorerTree } from "./AccessExplorerTree";
@@ -173,59 +173,7 @@ function InsightView({ insight }: { insight: TableAccessInsight }) {
         <div className={styles.muted}>{insight.summary}</div>
       </Card>
 
-      <Card title="Suggested attributes">
-        {insight.suggestions.length === 0 ? (
-          <Alert title="Nothing to request">
-            Based on your current attributes, no additional sensitivity or row-filter attributes are
-            required for the governed columns on this table.
-          </Alert>
-        ) : (
-          <div className={styles.tableWrap}>
-            <table className={styles.table} aria-label="Suggested attributes">
-              <thead>
-                <tr>
-                  <th>Attribute</th>
-                  <th>Value</th>
-                  <th>Why</th>
-                  <th>Columns</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {insight.suggestions.map((item) => (
-                  <tr key={`${item.attributeKey}:${item.attributeValue}`}>
-                    <td>
-                      <code>{item.attributeKey}</code>
-                    </td>
-                    <td>
-                      <Badge tone={item.kind === "sensitivity" ? "info" : "warning"}>
-                        {item.attributeValue}
-                      </Badge>
-                    </td>
-                    <td className={styles.muted}>{item.reason}</td>
-                    <td>
-                      {item.columnNames.map((name) => (
-                        <code key={name} style={{ marginRight: 6 }}>
-                          {name}
-                        </code>
-                      ))}
-                    </td>
-                    <td>
-                      {item.requestable && item.requestPath ? (
-                        <Link className={styles.button} to={item.requestPath}>
-                          Request
-                        </Link>
-                      ) : (
-                        <span className={styles.muted}>Admin assign</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
+      <SuggestionsCard suggestions={insight.suggestions} tableFullName={insight.tableFullName} />
 
       <Card title="Row filter">
         {!insight.rowFilter.attached ? (
@@ -314,6 +262,210 @@ function InsightView({ insight }: { insight: TableAccessInsight }) {
         </div>
       </Card>
     </>
+  );
+}
+
+
+function suggestionKey(item: SuggestedAttribute): string {
+  return `${item.attributeKey}:${item.attributeValue}`;
+}
+
+function routeLabel(item: SuggestedAttribute): string {
+  if (!item.requestable) return "Not requestable yet";
+  if (item.routedTo === "category_approvers" && item.approvers.length) {
+    return item.approvers.map((a) => `${a.principalName} (${a.principalType})`).join(", ");
+  }
+  return "App admins";
+}
+
+function SuggestionsCard({
+  suggestions,
+  tableFullName,
+}: {
+  suggestions: SuggestedAttribute[];
+  tableFullName: string;
+}) {
+  const create = useCreateAccessRequest();
+  const requestable = suggestions.filter((item) => item.requestable);
+  const [selected, setSelected] = useState<string[]>(
+    requestable
+      .filter((item) => !item.isHierarchyParent)
+      .map((item) => suggestionKey(item)),
+  );
+  const [justification, setJustification] = useState(`Need access for ${tableFullName}`);
+  const [expires, setExpires] = useState("");
+  const [results, setResults] = useState<string[]>([]);
+
+  const toggle = (key: string) => {
+    setSelected((current) =>
+      current.includes(key) ? current.filter((item) => item !== key) : [...current, key],
+    );
+  };
+
+  const onSubmit = async () => {
+    const notes: string[] = [];
+    const chosen = suggestions.filter((item) => selected.includes(suggestionKey(item)));
+    for (const item of chosen) {
+      const created = await create.mutateAsync({
+        attributeKey: item.attributeKey,
+        attributeValue: item.attributeValue,
+        justification: justification.trim(),
+        requestedExpiresAt: new Date(expires).toISOString(),
+      });
+      const who =
+        created.routedTo === "category_approvers" && created.approvers?.length
+          ? created.approvers.map((a) => a.principalName).join(", ")
+          : "app admins";
+      notes.push(`${created.attributeKey}=${created.attributeValue} → ${who}`);
+    }
+    setResults(notes);
+    setSelected([]);
+  };
+
+  if (suggestions.length === 0) {
+    return (
+      <Card title="Suggested attributes">
+        <Alert title="Nothing to request">
+          Based on your current attributes, no additional sensitivity or row-filter attributes are
+          required for the governed columns on this table.
+        </Alert>
+      </Card>
+    );
+  }
+
+  return (
+    <Card title="Suggested attributes">
+      <div className={styles.muted} style={{ marginBottom: "var(--space-3)" }}>
+        Sensitivity paths unmask columns; row-filter attributes unlock matching rows. Broader
+        hierarchy parents cover multiple sensitivity tags with one request. Category approvers
+        review sensitivity when configured; otherwise (and for all row filters) app admins review.
+      </div>
+      <div className={styles.tableWrap}>
+        <table className={styles.table} aria-label="Suggested attributes">
+          <thead>
+            <tr>
+              <th />
+              <th>Attribute</th>
+              <th>Value</th>
+              <th>Covers</th>
+              <th>Columns</th>
+              <th>Reviewed by</th>
+            </tr>
+          </thead>
+          <tbody>
+            {suggestions.map((item) => {
+              const key = suggestionKey(item);
+              const selectable = item.requestable;
+              return (
+                <tr key={`${key}:${item.isHierarchyParent}`}>
+                  <td>
+                    {selectable ? (
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${item.attributeKey}=${item.attributeValue}`}
+                        checked={selected.includes(key)}
+                        onChange={() => toggle(key)}
+                      />
+                    ) : null}
+                  </td>
+                  <td>
+                    <code>{item.attributeKey}</code>
+                    <div className={styles.muted} style={{ fontSize: "0.85em" }}>
+                      {item.kind === "row_filter" ? "row filter" : "sensitivity"}
+                    </div>
+                  </td>
+                  <td>
+                    <Badge
+                      tone={
+                        item.isHierarchyParent
+                          ? "info"
+                          : item.kind === "row_filter"
+                            ? "warning"
+                            : "warning"
+                      }
+                    >
+                      {item.attributeValue}
+                    </Badge>
+                    {item.isHierarchyParent && (
+                      <div className={styles.muted} style={{ fontSize: "0.85em" }}>
+                        broader path
+                      </div>
+                    )}
+                  </td>
+                  <td className={styles.muted}>
+                    {(item.coversPaths.length ? item.coversPaths : [item.attributeValue]).map((path) => (
+                      <code key={path} style={{ display: "block" }}>
+                        {path}
+                      </code>
+                    ))}
+                  </td>
+                  <td>
+                    {item.columnNames.map((name) => (
+                      <code key={name} style={{ marginRight: 6 }}>
+                        {name}
+                      </code>
+                    ))}
+                  </td>
+                  <td className={styles.muted}>{routeLabel(item)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {requestable.length > 0 && (
+        <div className={styles.stack} style={{ marginTop: "var(--space-3)" }}>
+          <div className={styles.formGrid}>
+            <label className={styles.fieldGrow}>
+              <span className={styles.label}>Justification</span>
+              <input
+                className={styles.input}
+                value={justification}
+                onChange={(event) => setJustification(event.target.value)}
+              />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.label}>Requested expiry</span>
+              <input
+                className={styles.input}
+                type="datetime-local"
+                value={expires}
+                onChange={(event) => setExpires(event.target.value)}
+              />
+            </label>
+          </div>
+          <div className={styles.buttonRow}>
+            <button
+              type="button"
+              className={`${styles.button} ${styles.buttonPrimary}`}
+              disabled={
+                selected.length === 0 ||
+                !justification.trim() ||
+                !expires ||
+                create.isPending
+              }
+              onClick={() => void onSubmit()}
+            >
+              {create.isPending
+                ? "Submitting…"
+                : `Request ${selected.length || ""} selected`.trim()}
+            </button>
+            <Link className={styles.button} to="/identity?tab=my-requests">
+              My requests
+            </Link>
+          </div>
+          {create.error && <ErrorAlert error={create.error} title="Request failed" />}
+          {results.length > 0 && (
+            <Alert tone="success" title="Requests submitted">
+              {results.map((line) => (
+                <div key={line}>{line}</div>
+              ))}
+            </Alert>
+          )}
+        </div>
+      )}
+    </Card>
   );
 }
 
