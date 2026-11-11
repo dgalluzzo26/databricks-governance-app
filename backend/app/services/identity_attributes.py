@@ -14,7 +14,9 @@ from datetime import UTC, datetime
 
 from backend.app.clients.sql import SqlExecutor
 from backend.app.core.errors import InvalidRequestError, NotFoundError
+from backend.app.models.access_request import SENSITIVITY_ATTRIBUTE_KEY
 from backend.app.models.audit import AuditEvent
+from backend.app.models.data_access import DataAccessSettings
 from backend.app.models.identity_attribute import (
     ALL_VALUES,
     AssignAttributeRequest,
@@ -34,6 +36,9 @@ from backend.app.repositories.base import StorageProvider
 from backend.app.services.governed_tags import GovernedTagService
 from backend.app.services.identity_uc_sync import IdentityUcSync
 from backend.app.services.value_seed import run_seed_sql
+
+_DATA_ACCESS_SETTINGS_KEY = "data_access"
+_DEFAULT_ACCESS_TAG_KEY = "data_access_control"
 
 
 class IdentityAttributeService:
@@ -103,6 +108,44 @@ class IdentityAttributeService:
             raise NotFoundError(f"Attribute definition '{key}' was not found")
         return self._enrich(definition)
 
+    def access_tag_key(self) -> str:
+        """Return the configured data-access UC tag key (default ``data_access_control``)."""
+        raw = self._storage.settings.get_all().get(_DATA_ACCESS_SETTINGS_KEY)
+        if not raw:
+            return _DEFAULT_ACCESS_TAG_KEY
+        try:
+            return DataAccessSettings.model_validate(raw).access_tag_key.lower()
+        except Exception:  # noqa: BLE001
+            return _DEFAULT_ACCESS_TAG_KEY
+
+    def find_sensitivity_definition(self) -> AttributeDefinition | None:
+        """Return the sensitivity definition when configured, else None."""
+        definition = self._storage.identity_attributes.get_definition(SENSITIVITY_ATTRIBUTE_KEY)
+        return self._enrich(definition) if definition is not None else None
+
+    def find_data_access_definition(
+        self, access_tag_key: str | None = None
+    ) -> AttributeDefinition | None:
+        """Return the definition linked to the data-access UC tag, if any.
+
+        Matches by attribute key or ``governed_tag_keys`` equal to the access tag.
+
+        Args:
+            access_tag_key: Tag to match; defaults to Data Access settings.
+
+        Returns:
+            The enriched definition, or None when unset.
+        """
+        needle = (access_tag_key or self.access_tag_key()).strip().lower()
+        if not needle:
+            return None
+        for item in self._storage.identity_attributes.list_definitions():
+            if item.key.lower() == needle:
+                return self._enrich(item)
+            if any(tag.lower() == needle for tag in item.governed_tag_keys):
+                return self._enrich(item)
+        return None
+
     def preview_seed(self, value_sql: str) -> list[str]:
         """Run a seed query without saving anything, for previewing a SQL vocabulary.
 
@@ -168,8 +211,8 @@ class IdentityAttributeService:
             The saved, enriched definition.
 
         Raises:
-            InvalidRequestError: If a referenced governed tag does not exist or the seed
-                query is invalid.
+            InvalidRequestError: If a referenced governed tag does not exist, the seed
+                query is invalid, or a second sensitivity / data-access definition is created.
             NotConfiguredError: If a SQL seed is requested without a SQL warehouse.
             UpstreamError: If governed tags cannot be read.
         """
@@ -188,6 +231,7 @@ class IdentityAttributeService:
             stored_values = run_seed_sql(self._sql, request.value_sql or "")
         else:
             stored_values = request.allowed_values
+        self._enforce_purpose_uniqueness(request.key, tag_keys, existing=existing)
         definition = AttributeDefinition(
             key=request.key,
             description=description,
@@ -525,6 +569,57 @@ class IdentityAttributeService:
         if self._uc_sync is None:
             return
         self._uc_sync.repo.upsert_assignment(assignment)
+
+    def _enforce_purpose_uniqueness(
+        self,
+        key: str | None,
+        tag_keys: list[str],
+        *,
+        existing: AttributeDefinition | None,
+    ) -> None:
+        """Allow only one sensitivity and one data-access definition.
+
+        Sensitivity is the definition whose key is ``sensitivity``. Data access is any
+        definition that includes the configured access UC tag among ``governed_tag_keys``.
+
+        Args:
+            key: Attribute key being saved.
+            tag_keys: Governed tags on the definition (empty for free-form / SQL).
+            existing: Prior row when updating; None on create.
+
+        Raises:
+            InvalidRequestError: When a second purpose-bound definition would be created, or
+                when editing a data-access definition would drop the access tag.
+        """
+        attr_key = (key or "").strip().lower()
+        access_tag = self.access_tag_key()
+        tags_lower = {tag.lower() for tag in tag_keys}
+        links_access_tag = access_tag in tags_lower
+
+        if attr_key == SENSITIVITY_ATTRIBUTE_KEY:
+            # Key uniqueness already prevents a second sensitivity row; nothing else to do.
+            return
+
+        if links_access_tag or attr_key == access_tag:
+            if not links_access_tag:
+                raise InvalidRequestError(
+                    f"Data-access definitions must include governed tag '{access_tag}'"
+                )
+            current = self.find_data_access_definition(access_tag)
+            if current is not None and current.key.lower() != attr_key:
+                raise InvalidRequestError(
+                    f"A data-access definition already exists as '{current.key}'. "
+                    "Edit that definition instead of creating another."
+                )
+            return
+
+        # Editing the existing data-access def must not drop the access tag.
+        if existing is not None and any(
+            tag.lower() == access_tag for tag in existing.governed_tag_keys
+        ):
+            raise InvalidRequestError(
+                f"Data-access definition '{existing.key}' must keep governed tag '{access_tag}'"
+            )
 
     def _enrich(self, definition: AttributeDefinition) -> AttributeDefinition:
         """Return a copy of the definition with its effective allowed values.

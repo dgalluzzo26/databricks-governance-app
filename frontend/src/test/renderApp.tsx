@@ -75,6 +75,23 @@ export const testDataAccessReadiness: DataAccessReadiness = {
     { id: "credentials", label: "Account Admin SP credentials", ok: true, requiredFor: "dry_run", detail: "Present" },
     { id: "warehouse", label: "SQL warehouse", ok: true, requiredFor: "dry_run", detail: "Configured" },
   ],
+  setupReady: true,
+  setupChecks: [
+    {
+      id: "sensitivity_definition",
+      label: "Sensitivity definition",
+      ok: true,
+      requiredFor: "setup",
+      detail: "Configured as 'sensitivity'",
+    },
+    {
+      id: "data_access_definition",
+      label: "Data-access definition",
+      ok: true,
+      requiredFor: "setup",
+      detail: "Configured as 'data_access' → tag 'data_access_control'",
+    },
+  ],
 };
 
 export const testDataAccessRun: DataAccessRun = {
@@ -231,8 +248,14 @@ export const testGovernedTags: GovernedTagList = {
       values: ["PII", "PII.Name"],
       valueCount: 2,
     },
+    {
+      tagKey: "data_access_control",
+      description: "Tagged-level data access values",
+      values: ["finance", "finance.budget", "finance.contracts"],
+      valueCount: 3,
+    },
   ],
-  total: 4,
+  total: 5,
   truncated: false,
 };
 

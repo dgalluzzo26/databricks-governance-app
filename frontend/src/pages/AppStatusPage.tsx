@@ -68,6 +68,33 @@ export function AppStatusPage() {
               ]}
             />
           </Card>
+          <Card title="Governance setup">
+            {readiness.isPending && <Spinner label="Checking governance setup" />}
+            {readiness.error && <ErrorAlert error={readiness.error} title="Could not load governance setup" />}
+            {readiness.data && (
+              <DescriptionList
+                items={[
+                  {
+                    label: "Required definitions",
+                    value: (
+                      <Badge tone={readiness.data.setupReady ? "success" : "warning"}>
+                        {readiness.data.setupReady ? "Ready" : "Incomplete"}
+                      </Badge>
+                    ),
+                  },
+                  ...(readiness.data.setupChecks ?? []).map((check) => ({
+                    label: check.label,
+                    value: (
+                      <span>
+                        <Badge tone={check.ok ? "success" : "danger"}>{check.ok ? "ok" : "missing"}</Badge>
+                        {check.detail ? ` · ${check.detail}` : ""}
+                      </span>
+                    ),
+                  })),
+                ]}
+              />
+            )}
+          </Card>
           <Card title="Data access sync">
             {readiness.isPending && <Spinner label="Checking data-access readiness" />}
             {readiness.error && <ErrorAlert error={readiness.error} title="Could not load data-access readiness" />}

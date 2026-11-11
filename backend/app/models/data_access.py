@@ -151,12 +151,16 @@ class DataAccessReadiness(ApiModel):
     Attributes:
         dry_run_ready: All probes required to inventory tags and plan grants passed.
         apply_ready: All probes required to create groups and GRANT/REVOKE passed.
-        checks: Individual probe results.
+        checks: Individual Account Admin SP / warehouse probe results.
+        setup_checks: Identity definition setup (sensitivity + data-access).
+        setup_ready: True when both required Identity definitions are configured.
     """
 
     dry_run_ready: bool
     apply_ready: bool
     checks: list[ReadinessCheck]
+    setup_checks: list[ReadinessCheck] = Field(default_factory=list)
+    setup_ready: bool = False
 
 
 class PlannedGroup(ApiModel):

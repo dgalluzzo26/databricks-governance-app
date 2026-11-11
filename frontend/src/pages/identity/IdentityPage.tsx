@@ -23,6 +23,7 @@ import {
   useCategoryApprovers,
   useCreateAccessRequest,
   useCurrentUser,
+  useDataAccessSettings,
   useDeleteAttributeDefinition,
   useDeleteCategoryApprover,
   useDenyAccessRequest,
@@ -35,7 +36,7 @@ import {
   useUpsertAttributeDefinition,
   useUpsertCategoryApprover,
 } from "@/api/queries";
-import type { ApprovalInboxItem, PrincipalKind, ValueSource } from "@/api/types";
+import type { ApprovalInboxItem, AttributeDefinition, PrincipalKind, ValueSource } from "@/api/types";
 import { PrincipalPicker } from "@/components/PrincipalPicker";
 import { Alert, Badge, Card, ErrorAlert, PageHeader, Spinner } from "@/components/ui";
 import styles from "./IdentityPage.module.css";
@@ -1160,38 +1161,76 @@ function AssignmentsPanel() {
 /** Sub-view of the definitions tab: the list of existing definitions, or the create/edit form. */
 type DefinitionsView = "existing" | "create";
 
+type DefinitionPurpose = "sensitivity" | "data_access";
+
+const SENSITIVITY_KEY = "sensitivity";
+const SENSITIVITY_TAGS = ["sensitivity_category", "sensitivity"];
+const DEFAULT_DATA_ACCESS_KEY = "data_access";
+
 /**
- * "Definitions" tab: list, create, edit, and delete attribute definitions.
+ * Classify a definition for list badges: sensitivity, data access, row filter, or other.
+ */
+function definitionPurpose(
+  item: AttributeDefinition,
+  accessTagKey: string,
+): "sensitivity" | "data_access" | "row_filter" | "other" {
+  if (item.key.toLowerCase() === SENSITIVITY_KEY) return "sensitivity";
+  const access = accessTagKey.toLowerCase();
+  if (
+    item.key.toLowerCase() === access ||
+    item.governedTagKeys.some((tag) => tag.toLowerCase() === access)
+  ) {
+    return "data_access";
+  }
+  if (item.valueSource !== "governed_tags") return "row_filter";
+  return "other";
+}
+
+/**
+ * Admin panel for the two required governed-tag definitions: sensitivity and data access.
  *
- * The "Existing definitions" view lists definitions from `useAttributeDefinitions` with their
- * value source, linked governed tags, and allowed values (truncated to {@link MAX_VALUE_CHIPS}).
- * Definitions backed by governed tags can be edited here; other value sources (free-form list,
- * SQL seed query) link to the Row filters page instead. Any definition can be deleted via
- * `useDeleteAttributeDefinition`.
- *
- * The create/edit view searches governed tags with `useGovernedTags`, lets the admin select one
- * or more tags, previews the union of their values as the resulting allowed values, and saves via
- * `useUpsertAttributeDefinition` with `valueSource: "governed_tags"`. A blank key or description
- * is sent as `null` so the backend can apply defaults (the first tag's key and description).
+ * Row-filter dimensions are created on the Row filters page (unlimited). This form only allows
+ * one sensitivity and one data-access definition.
  *
  * @remarks
  * Rendered only for app admins. The key is locked while editing an existing definition.
  */
 function DefinitionsPanel() {
   const { data, isPending, error } = useAttributeDefinitions();
+  const dataAccessSettings = useDataAccessSettings();
   const upsert = useUpsertAttributeDefinition();
   const remove = useDeleteAttributeDefinition();
 
+  const accessTagKey =
+    dataAccessSettings.data?.settings.accessTagKey?.trim() || "data_access_control";
+
   const [view, setView] = useState<DefinitionsView>("existing");
-  const [key, setKey] = useState("");
+  const [purpose, setPurpose] = useState<DefinitionPurpose>("sensitivity");
+  const [key, setKey] = useState(SENSITIVITY_KEY);
   const [description, setDescription] = useState("");
   const [tagSearch, setTagSearch] = useState("");
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [selectedTags, setSelectedTags] = useState<string[]>([...SENSITIVITY_TAGS]);
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const tags = useGovernedTags(tagSearch.trim() || undefined);
 
+  const sensitivityDef = data?.definitions.find((item) => item.key.toLowerCase() === SENSITIVITY_KEY);
+  const dataAccessDef = data?.definitions.find(
+    (item) =>
+      item.key.toLowerCase() === accessTagKey.toLowerCase() ||
+      item.governedTagKeys.some((tag) => tag.toLowerCase() === accessTagKey.toLowerCase()),
+  );
+  const purposeAlreadyExists =
+    !editingKey && (purpose === "sensitivity" ? Boolean(sensitivityDef) : Boolean(dataAccessDef));
+
   /** Adds or removes a governed tag key from the selection. */
   const toggleTag = (tagKey: string) => {
+    if (
+      purpose === "data_access" &&
+      tagKey.toLowerCase() === accessTagKey.toLowerCase() &&
+      selectedTags.some((tag) => tag.toLowerCase() === accessTagKey.toLowerCase())
+    ) {
+      return;
+    }
     setSelectedTags((current) =>
       current.includes(tagKey) ? current.filter((item) => item !== tagKey) : [...current, tagKey],
     );
@@ -1212,11 +1251,24 @@ function DefinitionsPanel() {
     return values;
   }, [selectedTags, tags.data]);
 
+  /** Apply purpose defaults for key and tags. */
+  const applyPurposeDefaults = (next: DefinitionPurpose) => {
+    setPurpose(next);
+    if (next === "sensitivity") {
+      setKey(SENSITIVITY_KEY);
+      setSelectedTags([...SENSITIVITY_TAGS]);
+    } else {
+      setKey(DEFAULT_DATA_ACCESS_KEY);
+      setSelectedTags([accessTagKey]);
+    }
+  };
+
   /** Clears the create/edit form and exits edit mode. */
   const resetForm = () => {
-    setKey("");
+    setPurpose("sensitivity");
+    setKey(SENSITIVITY_KEY);
     setDescription("");
-    setSelectedTags([]);
+    setSelectedTags([...SENSITIVITY_TAGS]);
     setTagSearch("");
     setEditingKey(null);
   };
@@ -1235,11 +1287,18 @@ function DefinitionsPanel() {
 
   /** Creates or updates the governed-tag-backed definition, then returns to the list on success. */
   const onSave = async () => {
+    const resolvedKey =
+      purpose === "sensitivity" ? SENSITIVITY_KEY : key.trim() || DEFAULT_DATA_ACCESS_KEY;
+    const tagsForSave =
+      purpose === "data_access" &&
+      !selectedTags.some((tag) => tag.toLowerCase() === accessTagKey.toLowerCase())
+        ? [accessTagKey, ...selectedTags]
+        : selectedTags;
     await upsert.mutateAsync({
-      key: key.trim() || null,
+      key: resolvedKey,
       description: description.trim() || null,
       valueSource: "governed_tags",
-      governedTagKeys: selectedTags,
+      governedTagKeys: tagsForSave,
     });
     resetForm();
     setView("existing");
@@ -1253,14 +1312,27 @@ function DefinitionsPanel() {
   const startEdit = (definitionKey: string) => {
     const definition = data?.definitions.find((item) => item.key === definitionKey);
     if (!definition) return;
+    const nextPurpose = definitionPurpose(definition, accessTagKey);
     setEditingKey(definition.key);
+    setPurpose(nextPurpose === "data_access" ? "data_access" : "sensitivity");
     setKey(definition.key);
     setDescription(definition.description ?? "");
-    setSelectedTags(definition.governedTagKeys);
+    setSelectedTags(
+      nextPurpose === "data_access" &&
+        !definition.governedTagKeys.some((tag) => tag.toLowerCase() === accessTagKey.toLowerCase())
+        ? [accessTagKey, ...definition.governedTagKeys]
+        : definition.governedTagKeys,
+    );
     setView("create");
   };
 
   const visibleTags = tags.data?.tags ?? [];
+  const canSave =
+    !purposeAlreadyExists &&
+    selectedTags.length > 0 &&
+    (purpose !== "data_access" ||
+      selectedTags.some((tag) => tag.toLowerCase() === accessTagKey.toLowerCase())) &&
+    (purpose === "sensitivity" || Boolean(key.trim()));
 
   return (
     <div className={styles.stack}>
@@ -1287,6 +1359,10 @@ function DefinitionsPanel() {
 
       {view === "existing" && (
         <Card title="Existing definitions" actions={data ? <Badge>{data.total}</Badge> : null}>
+          <p className={styles.muted}>
+            Configure one sensitivity definition and one data-access definition here. Create as many
+            row-filter dimensions as you need under <Link to="/row-filters">Row filters</Link>.
+          </p>
           {isPending && <Spinner label="Loading definitions" />}
           {error && <ErrorAlert error={error} title="Could not load definitions" />}
           {data && data.definitions.length === 0 && (
@@ -1303,69 +1379,88 @@ function DefinitionsPanel() {
                 <thead>
                   <tr>
                     <th>Key</th>
+                    <th>Purpose</th>
                     <th>Value source</th>
                     <th>Allowed values</th>
                     <th />
                   </tr>
                 </thead>
                 <tbody>
-                  {data.definitions.map((item) => (
-                    <tr key={item.key}>
-                      <td>
-                        <code>{item.key}</code>
-                        {item.description && <div className={styles.muted}>{item.description}</div>}
-                      </td>
-                      <td>
-                        <div className={styles.chipRow}>
-                          {item.valueSource !== "governed_tags" ? (
-                            <Badge>{VALUE_SOURCE_LABELS[item.valueSource]}</Badge>
-                          ) : item.governedTagKeys.length ? (
-                            item.governedTagKeys.map((tagKey) => <Badge key={tagKey}>{tagKey}</Badge>)
-                          ) : (
-                            <span className={styles.muted}>Not linked</span>
-                          )}
-                        </div>
-                      </td>
-                      <td>
-                        {item.allowedValues.length ? (
+                  {data.definitions.map((item) => {
+                    const purposeLabel = definitionPurpose(item, accessTagKey);
+                    return (
+                      <tr key={item.key}>
+                        <td>
+                          <code>{item.key}</code>
+                          {item.description && <div className={styles.muted}>{item.description}</div>}
+                        </td>
+                        <td>
+                          <Badge
+                            tone={
+                              purposeLabel === "sensitivity" || purposeLabel === "data_access"
+                                ? "info"
+                                : "neutral"
+                            }
+                          >
+                            {purposeLabel.replaceAll("_", " ")}
+                          </Badge>
+                        </td>
+                        <td>
                           <div className={styles.chipRow}>
-                            {item.allowedValues.slice(0, MAX_VALUE_CHIPS).map((value) => (
-                              <Badge key={value}>{value}</Badge>
-                            ))}
-                            {item.allowedValues.length > MAX_VALUE_CHIPS && (
-                              <span className={styles.muted}>
-                                +{item.allowedValues.length - MAX_VALUE_CHIPS} more
-                              </span>
+                            {item.valueSource !== "governed_tags" ? (
+                              <Badge>{VALUE_SOURCE_LABELS[item.valueSource]}</Badge>
+                            ) : item.governedTagKeys.length ? (
+                              item.governedTagKeys.map((tagKey) => <Badge key={tagKey}>{tagKey}</Badge>)
+                            ) : (
+                              <span className={styles.muted}>Not linked</span>
                             )}
                           </div>
-                        ) : (
-                          <span className={styles.muted}>Any value</span>
-                        )}
-                      </td>
-                      <td>
-                        <div className={styles.buttonRow}>
-                          {item.valueSource === "governed_tags" ? (
-                            <button type="button" className={styles.button} onClick={() => startEdit(item.key)}>
-                              Edit
-                            </button>
+                        </td>
+                        <td>
+                          {item.allowedValues.length ? (
+                            <div className={styles.chipRow}>
+                              {item.allowedValues.slice(0, MAX_VALUE_CHIPS).map((value) => (
+                                <Badge key={value}>{value}</Badge>
+                              ))}
+                              {item.allowedValues.length > MAX_VALUE_CHIPS && (
+                                <span className={styles.muted}>
+                                  +{item.allowedValues.length - MAX_VALUE_CHIPS} more
+                                </span>
+                              )}
+                            </div>
                           ) : (
-                            <Link className={styles.button} to="/row-filters">
-                              Edit in Row filters
-                            </Link>
+                            <span className={styles.muted}>Any value</span>
                           )}
-                          <button
-                            type="button"
-                            className={`${styles.button} ${styles.buttonDanger}`}
-                            disabled={remove.isPending}
-                            aria-busy={remove.isPending}
-                            onClick={() => void remove.mutateAsync(item.key)}
-                          >
-                            {remove.isPending ? "Deleting…" : "Delete"}
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                        </td>
+                        <td>
+                          <div className={styles.buttonRow}>
+                            {item.valueSource === "governed_tags" ? (
+                              <button
+                                type="button"
+                                className={styles.button}
+                                onClick={() => startEdit(item.key)}
+                              >
+                                Edit
+                              </button>
+                            ) : (
+                              <Link className={styles.button} to="/row-filters">
+                                Edit in Row filters
+                              </Link>
+                            )}
+                            <button
+                              type="button"
+                              className={`${styles.button} ${styles.buttonDanger}`}
+                              disabled={remove.isPending}
+                              aria-busy={remove.isPending}
+                              onClick={() => void remove.mutateAsync(item.key)}
+                            >
+                              {remove.isPending ? "Deleting…" : "Delete"}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -1376,15 +1471,33 @@ function DefinitionsPanel() {
 
       {view === "create" && (
         <Card title={editingKey ? `Edit ${editingKey}` : "Create definition from governed tags"}>
+          <p className={styles.muted}>
+            Choose a purpose. Sensitivity and data access allow one definition each. Row-filter
+            dimensions are managed under <Link to="/row-filters">Row filters</Link>.
+          </p>
           <div className={styles.formGrid}>
+            <label className={styles.field}>
+              <span className={styles.label}>Purpose</span>
+              <select
+                className={styles.select}
+                aria-label="Definition purpose"
+                value={purpose}
+                disabled={Boolean(editingKey)}
+                onChange={(event) => applyPurposeDefaults(event.target.value as DefinitionPurpose)}
+              >
+                <option value="sensitivity">Sensitivity</option>
+                <option value="data_access">Data access</option>
+              </select>
+            </label>
             <label className={styles.field}>
               <span className={styles.label}>Attribute key</span>
               <input
                 className={styles.input}
                 value={key}
-                disabled={Boolean(editingKey)}
+                disabled={Boolean(editingKey) || purpose === "sensitivity"}
                 onChange={(event) => setKey(event.target.value)}
-                placeholder={selectedTags[0] ? `Defaults to ${selectedTags[0]}` : "e.g. data_access"}
+                placeholder={purpose === "sensitivity" ? SENSITIVITY_KEY : "e.g. data_access"}
+                aria-label="Attribute key"
               />
             </label>
             <label className={styles.fieldGrow}>
@@ -1398,9 +1511,36 @@ function DefinitionsPanel() {
             </label>
           </div>
 
+          {purposeAlreadyExists && (
+            <Alert title="Already configured" tone="warning">
+              A {purpose === "sensitivity" ? "sensitivity" : "data-access"} definition already exists
+              as{" "}
+              <code>
+                {purpose === "sensitivity" ? sensitivityDef?.key : dataAccessDef?.key}
+              </code>
+              .{" "}
+              <button
+                type="button"
+                className={styles.button}
+                onClick={() =>
+                  startEdit(
+                    (purpose === "sensitivity" ? sensitivityDef?.key : dataAccessDef?.key) ?? "",
+                  )
+                }
+              >
+                Edit instead
+              </button>
+            </Alert>
+          )}
+
           <div className={styles.stack} style={{ marginTop: "var(--space-3)" }}>
             <label className={styles.fieldGrow}>
-              <span className={styles.label}>Governed tags (allowed values come from these)</span>
+              <span className={styles.label}>
+                Governed tags
+                {purpose === "data_access"
+                  ? ` (must include ${accessTagKey})`
+                  : " (sensitivity_category + sensitivity recommended)"}
+              </span>
               <input
                 className={styles.input}
                 value={tagSearch}
@@ -1418,6 +1558,10 @@ function DefinitionsPanel() {
                     className={styles.button}
                     onClick={() => toggleTag(tagKey)}
                     aria-label={`Remove tag ${tagKey}`}
+                    disabled={
+                      purpose === "data_access" &&
+                      tagKey.toLowerCase() === accessTagKey.toLowerCase()
+                    }
                   >
                     {tagKey} ×
                   </button>
@@ -1428,7 +1572,9 @@ function DefinitionsPanel() {
             {tags.isPending && <Spinner label="Loading governed tags" />}
             {tags.error && <ErrorAlert error={tags.error} title="Could not load governed tags" />}
             {tags.data && visibleTags.length === 0 && (
-              <div className={styles.muted}>No governed tags match. Create tag policies in Unity Catalog first.</div>
+              <div className={styles.muted}>
+                No governed tags match. Create tag policies in Unity Catalog first.
+              </div>
             )}
             {visibleTags.length > 0 && (
               <div className={styles.tableWrap}>
@@ -1450,6 +1596,7 @@ function DefinitionsPanel() {
                             aria-label={`Select ${tag.tagKey}`}
                             checked={selectedTags.includes(tag.tagKey)}
                             onChange={() => toggleTag(tag.tagKey)}
+                            disabled={purposeAlreadyExists}
                           />
                         </td>
                         <td>
@@ -1461,7 +1608,9 @@ function DefinitionsPanel() {
                             {tag.values.slice(0, 6).map((value) => (
                               <Badge key={value}>{value}</Badge>
                             ))}
-                            {tag.valueCount > 6 && <span className={styles.muted}>+{tag.valueCount - 6} more</span>}
+                            {tag.valueCount > 6 && (
+                              <span className={styles.muted}>+{tag.valueCount - 6} more</span>
+                            )}
                             {tag.valueCount === 0 && <span className={styles.muted}>Free-form</span>}
                           </div>
                         </td>
@@ -1499,7 +1648,7 @@ function DefinitionsPanel() {
             <button
               type="button"
               className={`${styles.button} ${styles.buttonPrimary}`}
-              disabled={selectedTags.length === 0 || upsert.isPending}
+              disabled={!canSave || upsert.isPending}
               onClick={() => void onSave()}
             >
               {upsert.isPending ? "Saving…" : editingKey ? "Save changes" : "Create definition"}
@@ -1516,3 +1665,4 @@ function DefinitionsPanel() {
     </div>
   );
 }
+

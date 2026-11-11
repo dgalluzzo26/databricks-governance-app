@@ -556,24 +556,8 @@ class AccessExplorerService:
         )
 
     def _definition_for_access_tag(self, access_tag_key: str):
-        """Find the Identity attribute whose key or governed tags match ``access_tag_key``.
-
-        Returns:
-            Matching enriched definition, or None when none is configured.
-        """
-        needle = access_tag_key.strip().lower()
-        if not needle:
-            return None
-        try:
-            definitions = self._identity.list_definitions().definitions
-        except Exception:  # noqa: BLE001
-            return None
-        for item in definitions:
-            if item.key.lower() == needle:
-                return item
-            if any(tag.lower() == needle for tag in item.governed_tag_keys):
-                return item
-        return None
+        """Find the Identity attribute whose key or governed tags match ``access_tag_key``."""
+        return self._identity.find_data_access_definition(access_tag_key)
 
     def _object_tags(self, level: str, full_name: str, keys: set[str]) -> dict[str, str]:
         """Read access/review tags for one catalog, schema, or table."""

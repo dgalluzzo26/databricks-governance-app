@@ -45,6 +45,12 @@ class FakeGovernedTags:
                 values=["PII", "PII.Name", "PII.SSN"],
                 value_count=3,
             ),
+            "data_access_control": GovernedTagSummary(
+                tag_key="data_access_control",
+                description="Tagged-level data access",
+                values=["finance", "finance.budget"],
+                value_count=2,
+            ),
         }
 
     def list_tags(self, *, q: str | None = None, limit: int = 50) -> GovernedTagList:
@@ -233,3 +239,73 @@ def test_api_identity_attribute_flow(client: TestClient, container) -> None:  # 
         json={"governedTagKeys": ["dga_domain"]},
     )
     assert forbidden.status_code == 403
+
+
+def test_rejects_second_data_access_definition(container) -> None:  # noqa: ANN001
+    service = _service(container)
+    actor = _admin()
+    first = service.upsert_definition(
+        UpsertAttributeDefinitionRequest(
+            key="data_access",
+            governed_tag_keys=["data_access_control"],
+        ),
+        actor,  # type: ignore[arg-type]
+    )
+    assert first.key == "data_access"
+    assert service.find_data_access_definition() is not None
+
+    with pytest.raises(InvalidRequestError, match="already exists"):
+        service.upsert_definition(
+            UpsertAttributeDefinitionRequest(
+                key="data_access_other",
+                governed_tag_keys=["data_access_control"],
+            ),
+            actor,  # type: ignore[arg-type]
+        )
+
+    # Editing the existing definition is allowed.
+    updated = service.upsert_definition(
+        UpsertAttributeDefinitionRequest(
+            key="data_access",
+            description="updated",
+            governed_tag_keys=["data_access_control"],
+        ),
+        actor,  # type: ignore[arg-type]
+    )
+    assert updated.description == "updated"
+
+
+def test_data_access_definition_must_keep_access_tag(container) -> None:  # noqa: ANN001
+    service = _service(container)
+    actor = _admin()
+    service.upsert_definition(
+        UpsertAttributeDefinitionRequest(
+            key="data_access",
+            governed_tag_keys=["data_access_control"],
+        ),
+        actor,  # type: ignore[arg-type]
+    )
+    with pytest.raises(InvalidRequestError, match="must keep governed tag"):
+        service.upsert_definition(
+            UpsertAttributeDefinitionRequest(
+                key="data_access",
+                governed_tag_keys=["dga_domain"],
+            ),
+            actor,  # type: ignore[arg-type]
+        )
+
+
+def test_find_sensitivity_definition(container) -> None:  # noqa: ANN001
+    service = _service(container)
+    actor = _admin()
+    assert service.find_sensitivity_definition() is None
+    service.upsert_definition(
+        UpsertAttributeDefinitionRequest(
+            key="sensitivity",
+            governed_tag_keys=["sensitivity_category", "sensitivity"],
+        ),
+        actor,  # type: ignore[arg-type]
+    )
+    found = service.find_sensitivity_definition()
+    assert found is not None
+    assert found.key == "sensitivity"

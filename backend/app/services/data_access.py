@@ -31,6 +31,7 @@ from backend.app.models.data_access import (
 from backend.app.models.user import CurrentUser
 from backend.app.repositories.base import StorageProvider
 from backend.app.services.data_access_planner import ActualGrant, TagRow, plan_data_access
+from backend.app.services.identity_attributes import IdentityAttributeService
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,7 @@ class DataAccessService:
         storage: App state (settings JSON for config and run history).
         sql: Warehouse executor running as the Account Admin SP.
         factory: Workspace clients for readiness probes and group listing.
+        identity_attributes: Optional Identity service for governance setup checks.
     """
 
     def __init__(
@@ -55,10 +57,12 @@ class DataAccessService:
         storage: StorageProvider,
         sql: SqlExecutor,
         factory: WorkspaceClientFactory,
+        identity_attributes: IdentityAttributeService | None = None,
     ) -> None:
         self._storage = storage
         self._sql = sql
         self._factory = factory
+        self._identity = identity_attributes
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -113,10 +117,50 @@ class DataAccessService:
             self._check_create_groups(),
             self._check_grants(),
         ]
+        setup_checks = self._setup_checks()
         dry_ids = {"credentials", "authenticate", "warehouse", "read_tags", "list_groups"}
         dry_run_ready = all(c.ok for c in checks if c.id in dry_ids)
         apply_ready = all(c.ok for c in checks)
-        return DataAccessReadiness(dry_run_ready=dry_run_ready, apply_ready=apply_ready, checks=checks)
+        setup_ready = all(c.ok for c in setup_checks) if setup_checks else False
+        return DataAccessReadiness(
+            dry_run_ready=dry_run_ready,
+            apply_ready=apply_ready,
+            checks=checks,
+            setup_checks=setup_checks,
+            setup_ready=setup_ready,
+        )
+
+    def _setup_checks(self) -> list[ReadinessCheck]:
+        """Identity definition checks required for sensitivity and data-access control."""
+        if self._identity is None:
+            return []
+        access_tag = self._identity.access_tag_key()
+        sensitivity = self._identity.find_sensitivity_definition()
+        data_access = self._identity.find_data_access_definition(access_tag)
+        return [
+            ReadinessCheck(
+                id="sensitivity_definition",
+                label="Sensitivity definition",
+                ok=sensitivity is not None,
+                required_for="setup",
+                detail=(
+                    f"Configured as '{sensitivity.key}'"
+                    if sensitivity is not None
+                    else "Create Identity definition with key 'sensitivity'"
+                ),
+            ),
+            ReadinessCheck(
+                id="data_access_definition",
+                label="Data-access definition",
+                ok=data_access is not None,
+                required_for="setup",
+                detail=(
+                    f"Configured as '{data_access.key}' → tag '{access_tag}'"
+                    if data_access is not None
+                    else f"Create Identity definition linked to governed tag '{access_tag}'"
+                ),
+            ),
+        ]
 
     def list_runs(self) -> list[DataAccessRun]:
         """Return recent sync runs, newest first, without full plans.

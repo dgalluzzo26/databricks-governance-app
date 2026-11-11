@@ -874,6 +874,10 @@ export interface DataAccessReadiness {
   dryRunReady: boolean;
   applyReady: boolean;
   checks: DataAccessReadinessCheck[];
+  /** Identity definition setup (sensitivity + data-access). */
+  setupChecks: DataAccessReadinessCheck[];
+  /** True when both required Identity definitions are configured. */
+  setupReady: boolean;
 }
 
 /** A managed group the dry-run would create or reuse. */

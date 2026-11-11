@@ -128,7 +128,7 @@ class ServiceContainer:
         policy_exceptions._mask_rules = mask_rules  # noqa: SLF001
         policy_exceptions._row_filters = row_filters  # noqa: SLF001
         access_requests = AccessRequestService(storage, identity_attributes)
-        data_access = DataAccessService(storage, sql, workspace)
+        data_access = DataAccessService(storage, sql, workspace, identity_attributes)
         return cls(
             config=config,
             workspace=workspace,

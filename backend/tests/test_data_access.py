@@ -167,3 +167,6 @@ def test_readiness_reports_checks(client: TestClient) -> None:
     ids = {c["id"] for c in body["checks"]}
     assert {"credentials", "authenticate", "warehouse", "read_tags", "list_groups"} <= ids
     assert body["applyReady"] is False
+    setup_ids = {c["id"] for c in body["setupChecks"]}
+    assert setup_ids == {"sensitivity_definition", "data_access_definition"}
+    assert body["setupReady"] is False

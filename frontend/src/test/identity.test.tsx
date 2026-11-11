@@ -21,34 +21,24 @@ describe("Identity attributes", () => {
     expect(within(table).getByText("Business domain")).toBeInTheDocument();
   });
 
-  it("creates a definition by selecting governed tags", async () => {
+  it("blocks a second sensitivity definition and allows data-access create", async () => {
     const user = userEvent.setup();
     renderApp("/identity?tab=definitions");
 
-    expect(await screen.findByRole("tab", { name: "Existing definitions" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByRole("tab", { name: "Existing definitions" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
     await user.click(screen.getByRole("tab", { name: "Create new definition" }));
     expect(await screen.findByText("Create definition from governed tags")).toBeInTheDocument();
-    const createButton = screen.getByRole("button", { name: "Create definition" });
-    expect(createButton).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Definition purpose" })).toHaveValue("sensitivity");
+    expect(await screen.findByText("Already configured")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create definition" })).toBeDisabled();
 
-    await user.click(await screen.findByRole("checkbox", { name: "Select dga_domain" }));
-    expect(screen.getByRole("button", { name: "Create definition" })).toBeEnabled();
-    expect(screen.getByText("Allowed values resolved from selected tags (3)")).toBeInTheDocument();
-    expect(screen.queryByPlaceholderText(/Leave empty for free-form/)).not.toBeInTheDocument();
-  });
-
-  it("keeps a custom attribute name independent of the selected tag", async () => {
-    const user = userEvent.setup();
-    renderApp("/identity?tab=definitions");
-
-    await user.click(await screen.findByRole("tab", { name: "Create new definition" }));
-    const keyInput = await screen.findByPlaceholderText("e.g. data_access");
-    await user.type(keyInput, "data_access");
-    await user.click(screen.getByRole("checkbox", { name: "Select sub_domain" }));
-    await user.click(screen.getByRole("checkbox", { name: "Select sub_domain" }));
-    await user.click(screen.getByRole("checkbox", { name: "Select sub_domain" }));
-
-    expect(screen.getByDisplayValue("data_access")).toBeInTheDocument();
+    await user.selectOptions(screen.getByRole("combobox", { name: "Definition purpose" }), "data_access");
+    expect(screen.getByRole("textbox", { name: "Attribute key" })).toHaveValue("data_access");
+    expect(screen.queryByText("Already configured")).not.toBeInTheDocument();
+    expect(await screen.findByRole("checkbox", { name: "Select data_access_control" })).toBeChecked();
     expect(screen.getByRole("button", { name: "Create definition" })).toBeEnabled();
   });
 
