@@ -618,7 +618,7 @@ function CategoryApproversPanel() {
               ))}
             </select>
           </label>
-          <label className={styles.fieldGrow}>
+          <label className={styles.field}>
             <span className={styles.label}>Principal</span>
             <PrincipalPicker
               value={principalName}

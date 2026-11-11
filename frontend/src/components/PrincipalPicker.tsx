@@ -61,7 +61,7 @@ export function PrincipalPicker({
   };
 
   return (
-    <div ref={rootRef} style={{ position: "relative" }}>
+    <div ref={rootRef} className={styles.picker}>
       <input
         className={styles.input}
         role="combobox"
