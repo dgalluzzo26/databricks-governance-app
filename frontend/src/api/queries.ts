@@ -469,15 +469,17 @@ export function useCancelAccessRequest() {
 /**
  * Fetches the caller's approval inbox: pending requests and due renewals (`GET /identity/approvals`).
  *
+ * @param enabled - When false, skips the fetch (e.g. nav badge for non-approvers).
  * @remarks Key: `queryKeys.approvals`. Stale after 15 seconds.
  * @returns The query result for {@link ApprovalInbox}.
  */
-export function useApprovalsInbox() {
+export function useApprovalsInbox(enabled = true) {
   const api = useApi();
   return useQuery({
     queryKey: queryKeys.approvals,
     queryFn: ({ signal }) => api.identityAttributes.approvalsInbox(signal),
     staleTime: 15_000,
+    enabled,
   });
 }
 

@@ -85,6 +85,14 @@ export const DataAccessIcon = (p: IconProps) => (
   </Icon>
 );
 
+/** Approvals inbox nav icon. */
+export const ApprovalsIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M3.5 3.5h9v9h-9z" />
+    <path d="m5.5 8 1.6 1.6 3.4-3.4" />
+  </Icon>
+);
+
 /** Policy exceptions / warning nav icon. */
 export const ExceptionIcon = (p: IconProps) => (
   <Icon {...p}>

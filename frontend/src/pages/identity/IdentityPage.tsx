@@ -1,21 +1,16 @@
 /**
- * @file Identity attributes page: self-service attribute viewing and access requests, the
- * approvals inbox, and admin management of category approvers, attribute assignments, and
- * attribute definitions.
+ * @file Identity attributes page: self-service attribute viewing and access requests, and admin
+ * management of category approvers, attribute assignments, and attribute definitions.
  *
- * The active tab is stored in the `?tab=` search parameter. Every signed-in user sees
- * "My attributes", "Request access", and "My requests". "Approvals" is shown only to app admins
- * or users who are configured as category approvers (`isApprover`). "Category approvers",
- * "Assignments", and "Definitions" are shown only to app admins. Requesting a tab the current
- * user may not see falls back to "My attributes". This gating is a UI convenience only; the
- * backend enforces authorization on every endpoint.
+ * Approvals live on `/approvals`. The active tab is stored in the `?tab=` search parameter.
+ * Every signed-in user sees "My attributes", "Request access", and "My requests". "Approvers",
+ * "Assignments", and "Definitions" are shown only to app admins. Legacy `?tab=approvals`
+ * redirects to `/approvals`. This gating is a UI convenience only; the backend enforces
+ * authorization on every endpoint.
  */
 import { useEffect, useMemo, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, Navigate, useSearchParams } from "react-router-dom";
 import {
-  useApproveAccessRequest,
-  useApproveRenewal,
-  useApprovalsInbox,
   useAssignAttribute,
   useAttributeAssignments,
   useAttributeDefinitions,
@@ -26,8 +21,6 @@ import {
   useDataAccessSettings,
   useDeleteAttributeDefinition,
   useDeleteCategoryApprover,
-  useDenyAccessRequest,
-  useDismissRenewal,
   useGovernedTags,
   useMyAccessRequests,
   useMyAttributes,
@@ -36,7 +29,7 @@ import {
   useUpsertAttributeDefinition,
   useUpsertCategoryApprover,
 } from "@/api/queries";
-import type { ApprovalInboxItem, AttributeDefinition, PrincipalKind, ValueSource } from "@/api/types";
+import type { AttributeDefinition, PrincipalKind, ValueSource } from "@/api/types";
 import { PrincipalPicker } from "@/components/PrincipalPicker";
 import { Alert, Badge, Card, ErrorAlert, PageHeader, Spinner } from "@/components/ui";
 import styles from "./IdentityPage.module.css";
@@ -45,15 +38,13 @@ import styles from "./IdentityPage.module.css";
  * Identifier of a top-level tab on the identity page, as stored in the `?tab=` search parameter.
  *
  * @remarks
- * `"approvals"` requires admin or category-approver status; `"approvers"`, `"assignments"`, and
- * `"definitions"` require admin status. See {@link USER_TABS}, {@link APPROVER_TABS}, and
- * {@link ADMIN_TABS}.
+ * `"approvers"`, `"assignments"`, and `"definitions"` require admin status.
+ * See {@link USER_TABS} and {@link ADMIN_TABS}.
  */
 type IdentityTab =
   | "mine"
   | "request"
   | "my-requests"
-  | "approvals"
   | "approvers"
   | "assignments"
   | "definitions";
@@ -73,8 +64,6 @@ const PRINCIPAL_TYPES: PrincipalKind[] = ["USER", "GROUP", "SERVICE_PRINCIPAL"];
 const APPROVER_TYPES: PrincipalKind[] = ["USER", "GROUP"];
 /** Tabs available to every signed-in user. */
 const USER_TABS: IdentityTab[] = ["mine", "request", "my-requests"];
-/** Tabs available to app admins and category approvers. */
-const APPROVER_TABS: IdentityTab[] = ["approvals"];
 /** Tabs available only to app admins. */
 const ADMIN_TABS: IdentityTab[] = ["assignments", "definitions", "approvers"];
 
@@ -110,22 +99,22 @@ function toLocalInput(value: string | null | undefined): string {
  * Identity attributes page with a role-gated tab bar and one panel per tab.
  *
  * Reads the current user via `useCurrentUser` and the active tab from the `?tab=` search
- * parameter (default `"mine"`).
+ * parameter (default `"mine"`). Legacy `?tab=approvals` redirects to `/approvals`.
  *
  * @remarks
- * Tabs are filtered by role: everyone gets {@link USER_TABS}; admins and category approvers also
- * get {@link APPROVER_TABS}; admins also get {@link ADMIN_TABS}. A disallowed or unknown `tab`
- * value silently falls back to `"mine"`. While the current user is still loading, only the
- * user tabs are available.
+ * Tabs are filtered by role: everyone gets {@link USER_TABS}; admins also get {@link ADMIN_TABS}.
+ * A disallowed or unknown `tab` value silently falls back to `"mine"`.
  */
 export function IdentityPage() {
   const { data: user } = useCurrentUser();
   const [searchParams, setSearchParams] = useSearchParams();
-  const requested = (searchParams.get("tab") as IdentityTab | null) ?? "mine";
-  const canApprove = Boolean(user?.isAdmin || user?.isApprover);
+  const rawTab = searchParams.get("tab");
+  if (rawTab === "approvals") {
+    return <Navigate to="/approvals" replace />;
+  }
+  const requested = (rawTab as IdentityTab | null) ?? "mine";
   const allowed = new Set<IdentityTab>([
     ...USER_TABS,
-    ...(canApprove ? APPROVER_TABS : []),
     ...(user?.isAdmin ? ADMIN_TABS : []),
   ]);
   const tab: IdentityTab = allowed.has(requested) ? requested : "mine";
@@ -144,7 +133,7 @@ export function IdentityPage() {
         description={
           user?.isAdmin
             ? "Manage attribute definitions, assignments, category approvers, and access requests."
-            : "View your attributes, request access, and approve requests when you are a category approver."
+            : "View your attributes and request access. Approvals are under Approvals in the nav."
         }
       />
 
@@ -176,17 +165,6 @@ export function IdentityPage() {
         >
           My requests
         </button>
-        {canApprove && (
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === "approvals"}
-            className={`${styles.tab}${tab === "approvals" ? ` ${styles.tabActive}` : ""}`}
-            onClick={() => setTab("approvals")}
-          >
-            Approvals
-          </button>
-        )}
         {user?.isAdmin && (
           <>
             <button
@@ -223,7 +201,6 @@ export function IdentityPage() {
       {tab === "mine" && <MyAttributesPanel />}
       {tab === "request" && <RequestAccessPanel />}
       {tab === "my-requests" && <MyRequestsPanel />}
-      {tab === "approvals" && canApprove && <ApprovalsPanel />}
       {tab === "approvers" && user?.isAdmin && <CategoryApproversPanel />}
       {tab === "assignments" && user?.isAdmin && <AssignmentsPanel />}
       {tab === "definitions" && user?.isAdmin && <DefinitionsPanel />}
@@ -521,201 +498,56 @@ function MyRequestsPanel() {
 }
 
 /**
- * "Approvals" tab: inbox of pending access requests and upcoming renewals the current user can
- * decide.
+ * "Approvers" tab: configure who reviews sensitivity, data-access, and row-filter requests.
  *
- * Uses `useApprovalsInbox`. Items are either `REQUEST` (a pending sensitivity or row-filter
- * access request) or `RENEWAL` (a sensitivity assignment expiring within 30 days). Each card has
- * an "Approve until" expiry (prefilled from the item's current expiry) and an optional note,
- * held as per-item drafts in local state.
- *
- * Mutations: requests are approved with `useApproveAccessRequest` (expiry required) or denied
- * with `useDenyAccessRequest`; renewals are extended with `useApproveRenewal` (expiry required)
- * or dismissed with `useDismissRenewal`. Notes are sent as `null` when blank.
+ * Uses governed sensitivity tags, the data-access definition vocabulary, and
+ * `useRowFilterDimensions` for pickers, plus `useCategoryApprovers` for the list.
  *
  * @remarks
- * Rendered only for app admins and category approvers. The backend scopes the inbox: category
- * approvers see items for their matching sensitivity paths, while row-filter requests and
- * sensitivity requests with no matching category go to app admins.
- */
-function ApprovalsPanel() {
-  const { data, isPending, error } = useApprovalsInbox();
-  const approveRequest = useApproveAccessRequest();
-  const denyRequest = useDenyAccessRequest();
-  const approveRenewal = useApproveRenewal();
-  const dismissRenewal = useDismissRenewal();
-  const [draftExpiry, setDraftExpiry] = useState<Record<string, string>>({});
-  const [draftNote, setDraftNote] = useState<Record<string, string>>({});
-
-  /** Returns a stable key for an inbox item, used for React keys and for the per-item expiry/note drafts. */
-  const keyFor = (item: ApprovalInboxItem) =>
-    item.kind === "REQUEST" ? `req:${item.request?.requestId}` : `ren:${item.assignment?.assignmentId}`;
-
-  return (
-    <Card title="Approvals inbox" actions={data ? <Badge>{data.total}</Badge> : null}>
-      <p className={styles.muted}>
-        Pending sensitivity and row-filter requests plus sensitivity assignments expiring within 30
-        days. Category and dimension approvers decide matching requests; when none are configured,
-        app admins review.
-      </p>
-      {isPending && <Spinner label="Loading approvals" />}
-      {error && <ErrorAlert error={error} title="Could not load approvals" />}
-      {data && data.items.length === 0 && <div className={styles.empty}>Nothing waiting for your approval.</div>}
-      {data && data.items.length > 0 && (
-        <div className={styles.stack}>
-          {data.items.map((item) => {
-            const key = keyFor(item);
-            const expiry = draftExpiry[key] ?? toLocalInput(item.expiresAt);
-            const note = draftNote[key] ?? "";
-            return (
-              <div key={key} className={styles.approvalCard}>
-                <div className={styles.toolbar}>
-                  <Badge tone={item.kind === "RENEWAL" ? "warning" : "info"}>{item.kind}</Badge>
-                  <code>
-                    {item.request?.attributeKey ?? item.assignment?.attributeKey ?? "sensitivity"}=
-                    {item.attributeValue}
-                  </code>
-                  <span className={styles.muted}>{item.principalName}</span>
-                  {item.resolvedCategory ? (
-                    <Badge>via {item.resolvedCategory}</Badge>
-                  ) : (
-                    <Badge tone="warning">app admins</Badge>
-                  )}
-                </div>
-                {item.kind === "REQUEST" && item.request && (
-                  <div className={styles.muted}>Justification: {item.request.justification}</div>
-                )}
-                <div className={styles.formGrid}>
-                  <label className={styles.field}>
-                    <span className={styles.label}>Approve until</span>
-                    <input
-                      className={styles.input}
-                      type="datetime-local"
-                      value={expiry}
-                      onChange={(event) =>
-                        setDraftExpiry((current) => ({ ...current, [key]: event.target.value }))
-                      }
-                    />
-                  </label>
-                  <label className={styles.fieldGrow}>
-                    <span className={styles.label}>Note</span>
-                    <input
-                      className={styles.input}
-                      value={note}
-                      onChange={(event) =>
-                        setDraftNote((current) => ({ ...current, [key]: event.target.value }))
-                      }
-                      placeholder="Optional"
-                    />
-                  </label>
-                </div>
-                <div className={styles.buttonRow}>
-                  {item.kind === "REQUEST" && item.request && (
-                    <>
-                      <button
-                        type="button"
-                        className={`${styles.button} ${styles.buttonPrimary}`}
-                        disabled={!expiry || approveRequest.isPending}
-                        onClick={() =>
-                          void approveRequest.mutateAsync({
-                            requestId: item.request!.requestId,
-                            body: {
-                              expiresAt: new Date(expiry).toISOString(),
-                              note: note.trim() || null,
-                            },
-                          })
-                        }
-                      >
-                        Approve
-                      </button>
-                      <button
-                        type="button"
-                        className={styles.button}
-                        disabled={denyRequest.isPending}
-                        onClick={() =>
-                          void denyRequest.mutateAsync({
-                            requestId: item.request!.requestId,
-                            body: { note: note.trim() || null },
-                          })
-                        }
-                      >
-                        Deny
-                      </button>
-                    </>
-                  )}
-                  {item.kind === "RENEWAL" && item.assignment && (
-                    <>
-                      <button
-                        type="button"
-                        className={`${styles.button} ${styles.buttonPrimary}`}
-                        disabled={!expiry || approveRenewal.isPending}
-                        onClick={() =>
-                          void approveRenewal.mutateAsync({
-                            assignmentId: item.assignment!.assignmentId,
-                            body: {
-                              expiresAt: new Date(expiry).toISOString(),
-                              note: note.trim() || null,
-                            },
-                          })
-                        }
-                      >
-                        Renew
-                      </button>
-                      <button
-                        type="button"
-                        className={styles.button}
-                        disabled={dismissRenewal.isPending}
-                        onClick={() => void dismissRenewal.mutateAsync(item.assignment!.assignmentId)}
-                      >
-                        Dismiss
-                      </button>
-                    </>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </Card>
-  );
-}
-
-/**
- * "Approvers" tab: configure who reviews sensitivity category requests and row-filter
- * dimension requests.
- *
- * Uses `useGovernedTags("sensitivity_category")` and `useRowFilterDimensions` for pickers,
- * and `useCategoryApprovers` to list existing approvers. Adding calls
- * `useUpsertCategoryApprover`; removing calls `useDeleteCategoryApprover`.
- *
- * @remarks
- * Rendered only for app admins. Sensitivity uses most-specific category path routing.
+ * Rendered only for app admins. Sensitivity and data-access use most-specific path routing.
  * Row-filter dimensions use exact designated approvers and fall back to app admins when none
  * are configured.
  */
 function CategoryApproversPanel() {
   const { data, isPending, error } = useCategoryApprovers();
   const tags = useGovernedTags("sensitivity_category");
+  const definitions = useAttributeDefinitions();
+  const dataAccessSettings = useDataAccessSettings();
   const dimensions = useRowFilterDimensions();
   const upsert = useUpsertCategoryApprover();
   const remove = useDeleteCategoryApprover();
   const categoryTag = tags.data?.tags.find((tag) => tag.tagKey === "sensitivity_category");
-  const [scope, setScope] = useState<"sensitivity" | "row_filter">("sensitivity");
+  const accessTagKey =
+    dataAccessSettings.data?.settings.accessTagKey?.trim().toLowerCase() || "data_access_control";
+  const dataAccessDef = (definitions.data?.definitions ?? []).find((item) => {
+    const key = item.key.toLowerCase();
+    return (
+      key === accessTagKey ||
+      item.governedTagKeys.some((tag) => tag.toLowerCase() === accessTagKey)
+    );
+  });
+  const dataAccessPaths = (dataAccessDef?.allowedValues ?? []).filter((value) => value && value !== "*");
+  const [scope, setScope] = useState<"sensitivity" | "data_access" | "row_filter">("sensitivity");
   const [categoryPath, setCategoryPath] = useState("");
+  const [dataAccessPath, setDataAccessPath] = useState("");
   const [dimensionKey, setDimensionKey] = useState("");
   const [principalName, setPrincipalName] = useState("");
   const [principalType, setPrincipalType] = useState<PrincipalKind>("GROUP");
 
-  const pathReady = scope === "sensitivity" ? Boolean(categoryPath) : Boolean(dimensionKey);
+  const pathReady =
+    scope === "sensitivity"
+      ? Boolean(categoryPath)
+      : scope === "data_access"
+        ? Boolean(dataAccessPath)
+        : Boolean(dimensionKey);
 
   return (
     <div className={styles.stack}>
       <Card title="Add approver">
         <p className={styles.muted}>
-          Sensitivity approvers are set on sensitivity_category paths (most specific path wins).
-          Row-filter approvers are set per dimension; when none are configured, app admins review
-          those requests.
+          Sensitivity and data-access approvers are set on vocabulary paths (most specific path
+          wins). Row-filter approvers are set per dimension; when none are configured, app admins
+          review those requests.
         </p>
         <div className={styles.formGrid}>
           <label className={styles.field}>
@@ -724,12 +556,14 @@ function CategoryApproversPanel() {
               className={styles.select}
               value={scope}
               onChange={(event) => {
-                setScope(event.target.value as "sensitivity" | "row_filter");
+                setScope(event.target.value as "sensitivity" | "data_access" | "row_filter");
                 setCategoryPath("");
+                setDataAccessPath("");
                 setDimensionKey("");
               }}
             >
               <option value="sensitivity">Sensitivity category</option>
+              <option value="data_access">Data-access path</option>
               <option value="row_filter">Row-filter dimension</option>
             </select>
           </label>
@@ -743,6 +577,25 @@ function CategoryApproversPanel() {
               >
                 <option value="">Select category</option>
                 {(categoryTag?.values ?? []).map((value) => (
+                  <option key={value} value={value}>
+                    {value}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : scope === "data_access" ? (
+            <label className={styles.field}>
+              <span className={styles.label}>Data-access path</span>
+              <select
+                className={styles.select}
+                value={dataAccessPath}
+                onChange={(event) => setDataAccessPath(event.target.value)}
+                disabled={!dataAccessDef}
+              >
+                <option value="">
+                  {dataAccessDef ? "Select path" : "Create a data-access definition first"}
+                </option>
+                {dataAccessPaths.map((value) => (
                   <option key={value} value={value}>
                     {value}
                   </option>
@@ -798,18 +651,30 @@ function CategoryApproversPanel() {
             type="button"
             className={`${styles.button} ${styles.buttonPrimary}`}
             disabled={!pathReady || !principalName.trim() || upsert.isPending}
-            onClick={() =>
+            onClick={() => {
+              const attributeKey =
+                scope === "sensitivity"
+                  ? "sensitivity"
+                  : scope === "data_access"
+                    ? (dataAccessDef?.key ?? "data_access")
+                    : dimensionKey;
+              const path =
+                scope === "sensitivity"
+                  ? categoryPath
+                  : scope === "data_access"
+                    ? dataAccessPath
+                    : dimensionKey;
               void upsert
                 .mutateAsync({
-                  attributeKey: scope === "sensitivity" ? "sensitivity" : dimensionKey,
-                  categoryPath: scope === "sensitivity" ? categoryPath : dimensionKey,
+                  attributeKey,
+                  categoryPath: path,
                   principalName: principalName.trim(),
                   principalType,
                 })
                 .then(() => {
                   setPrincipalName("");
-                })
-            }
+                });
+            }}
           >
             {upsert.isPending ? "Saving…" : "Add approver"}
           </button>

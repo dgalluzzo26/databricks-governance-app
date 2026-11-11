@@ -1,12 +1,14 @@
 /**
  * @file Side-nav model for the app shell.
  *
- * Items with `adminOnly: true` are hidden from non-admins in {@link SideNav}; route-level
- * enforcement for those destinations lives in {@link routes} via {@link RequireAdmin}.
+ * Items with `adminOnly: true` are hidden from non-admins in {@link SideNav}; items with
+ * `approverVisible: true` are shown to admins and category approvers. Route-level enforcement
+ * lives in {@link routes} via {@link RequireAdmin} / {@link RequireApprover}.
  * Keep this list in sync with `routes.tsx` when adding features.
  */
 import type { ComponentType, SVGProps } from "react";
 import {
+  ApprovalsIcon,
   DataAccessIcon,
   ExceptionIcon,
   ExplorerIcon,
@@ -29,6 +31,10 @@ export interface NavItem {
   icon: ComponentType<SVGProps<SVGSVGElement>>;
   /** When true, the item is shown only to app admins. */
   adminOnly?: boolean;
+  /** When true, the item is shown to app admins and category approvers. */
+  approverVisible?: boolean;
+  /** Optional live badge source (Approvals inbox count). */
+  badge?: "approvals";
 }
 
 /** Grouped nav items, optionally under a section title. */
@@ -47,6 +53,13 @@ export const navigation: NavSection[] = [
     items: [
       { label: "Access explorer", to: "/access-explorer", icon: ExplorerIcon },
       { label: "Identity", to: "/identity", icon: IdentityIcon },
+      {
+        label: "Approvals",
+        to: "/approvals",
+        icon: ApprovalsIcon,
+        approverVisible: true,
+        badge: "approvals",
+      },
       { label: "Policies", to: "/policies", icon: PoliciesIcon, adminOnly: true },
       { label: "Exceptions", to: "/exceptions", icon: ExceptionIcon, adminOnly: true },
       { label: "Row filters", to: "/row-filters", icon: RowFilterIcon, adminOnly: true },

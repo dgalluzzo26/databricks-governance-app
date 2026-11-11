@@ -150,12 +150,13 @@ class AccessRequestService:
     def upsert_approver(
         self, request: UpsertCategoryApproverRequest, actor: CurrentUser
     ) -> CategoryApprover:
-        """Add or update an approver for a sensitivity category or row-filter dimension.
+        """Add or update an approver for sensitivity, data-access, or a row-filter dimension.
 
-        Sensitivity categories must be current ``sensitivity_category`` values. Row-filter
-        dimensions must already exist as non-governed-tag attribute definitions; the stored
-        path is the dimension key. Records a ``sensitivity_category_approver.upserted`` audit
-        event (legacy name; payload includes ``attribute_key``).
+        Sensitivity categories must be current ``sensitivity_category`` values. Data-access
+        paths must be allowed values on the data-access definition (hierarchical routing).
+        Row-filter dimensions must already exist as non-governed-tag attribute definitions;
+        the stored path is the dimension key. Records a ``sensitivity_category_approver.upserted``
+        audit event (legacy name; payload includes ``attribute_key``).
 
         Args:
             request: Attribute key, path, and the USER or GROUP principal to register.
@@ -171,6 +172,8 @@ class AccessRequestService:
         if request.principal_type not in {PrincipalKind.USER, PrincipalKind.GROUP}:
             raise InvalidRequestError("Approvers must be USER or GROUP principals")
         attribute_key = (request.attribute_key or SENSITIVITY_ATTRIBUTE_KEY).strip().lower()
+        data_access = self._identity.find_data_access_definition()
+        data_access_key = data_access.key.lower() if data_access is not None else None
         if attribute_key == SENSITIVITY_ATTRIBUTE_KEY:
             categories = self._sensitivity_category_values()
             allowed = {value.lower(): value for value in categories}
@@ -180,11 +183,24 @@ class AccessRequestService:
                     f"Allowed: {', '.join(categories)}"
                 )
             category = allowed[request.category_path.lower()]
+        elif data_access_key is not None and attribute_key == data_access_key:
+            # Hierarchical paths from the data-access vocabulary (most-specific wins at decide time).
+            allowed_values = [
+                value for value in data_access.allowed_values if value and value != "*"
+            ]
+            allowed = {value.lower(): value for value in allowed_values}
+            if request.category_path.lower() not in allowed:
+                raise InvalidRequestError(
+                    f"Path '{request.category_path}' is not an allowed data-access value. "
+                    f"Allowed: {', '.join(allowed_values) or '(none — configure the definition)'}"
+                )
+            category = allowed[request.category_path.lower()]
+            attribute_key = data_access.key
         else:
             definition = self._storage.identity_attributes.get_definition(attribute_key)
             if definition is None or definition.value_source == ValueSource.GOVERNED_TAGS:
                 raise InvalidRequestError(
-                    f"'{attribute_key}' is not a configured row-filter dimension"
+                    f"'{attribute_key}' is not a configured row-filter dimension or data-access attribute"
                 )
             # Dimension approvers are exact-match on the dimension key.
             if request.category_path.strip().lower() not in {attribute_key, definition.key.lower()}:
@@ -333,13 +349,13 @@ class AccessRequestService:
     def resolve_attribute_routing(self, attribute_key: str, attribute_value: str) -> dict:
         """Who reviews a request for ``attribute_key`` / ``attribute_value``.
 
-        Sensitivity uses most-specific category routing. Row-filter dimensions use exact
-        designated approvers for that dimension key; when none are configured, app admins
+        Sensitivity and data-access use most-specific path routing. Row-filter dimensions use
+        exact designated approvers for that dimension key; when none are configured, app admins
         decide.
 
         Args:
-            attribute_key: ``sensitivity`` or a row-filter dimension key.
-            attribute_value: Requested value (sensitivity path or dimension value).
+            attribute_key: ``sensitivity``, the data-access key, or a row-filter dimension key.
+            attribute_value: Requested value (path or dimension value).
 
         Returns:
             A dict with ``resolved_category`` (str or None), ``routed_to``
@@ -347,9 +363,14 @@ class AccessRequestService:
             ``AccessRequestApprover``, empty when routed to app admins).
         """
         key = (attribute_key or SENSITIVITY_ATTRIBUTE_KEY).strip().lower()
-        if key == SENSITIVITY_ATTRIBUTE_KEY:
+        data_access = self._identity.find_data_access_definition()
+        data_access_key = data_access.key.lower() if data_access is not None else None
+        if key == SENSITIVITY_ATTRIBUTE_KEY or (
+            data_access_key is not None and key == data_access_key
+        ):
+            route_key = SENSITIVITY_ATTRIBUTE_KEY if key == SENSITIVITY_ATTRIBUTE_KEY else data_access.key
             configured = self._storage.category_approvers.list_configured_categories(
-                attribute_key=SENSITIVITY_ATTRIBUTE_KEY
+                attribute_key=route_key
             )
             category = resolve_category(attribute_value, configured)
             approvers: list[AccessRequestApprover] = []
@@ -360,7 +381,7 @@ class AccessRequestService:
                         principal_type=item.principal_type,
                     )
                     for item in self._storage.category_approvers.list_approvers(
-                        category, attribute_key=SENSITIVITY_ATTRIBUTE_KEY
+                        category, attribute_key=route_key
                     )
                 ]
             if not approvers:
@@ -802,6 +823,9 @@ class AccessRequestService:
         if not self._can_decide_for(actor, path, attribute_key=attribute_key):
             if attribute_key == SENSITIVITY_ATTRIBUTE_KEY:
                 raise ForbiddenError("You are not an approver for this sensitivity category")
+            data_access = self._identity.find_data_access_definition()
+            if data_access is not None and attribute_key.lower() == data_access.key.lower():
+                raise ForbiddenError("You are not an approver for this data-access path")
             raise ForbiddenError("You are not an approver for this row-filter dimension")
 
     def _can_decide_for(
@@ -809,16 +833,19 @@ class AccessRequestService:
     ) -> bool:
         """Whether the actor may decide a request for this attribute and path/value."""
         key = (attribute_key or SENSITIVITY_ATTRIBUTE_KEY).strip().lower()
-        if key == SENSITIVITY_ATTRIBUTE_KEY:
+        data_access = self._identity.find_data_access_definition()
+        data_access_key = data_access.key.lower() if data_access is not None else None
+        if key == SENSITIVITY_ATTRIBUTE_KEY or (
+            data_access_key is not None and key == data_access_key
+        ):
+            route_key = (
+                SENSITIVITY_ATTRIBUTE_KEY if key == SENSITIVITY_ATTRIBUTE_KEY else data_access.key
+            )
             category = resolve_category(
                 path,
-                self._storage.category_approvers.list_configured_categories(
-                    attribute_key=SENSITIVITY_ATTRIBUTE_KEY
-                ),
+                self._storage.category_approvers.list_configured_categories(attribute_key=route_key),
             )
-            return self._can_decide(
-                actor, path, category, attribute_key=SENSITIVITY_ATTRIBUTE_KEY
-            )
+            return self._can_decide(actor, path, category, attribute_key=route_key)
         routing = self.resolve_attribute_routing(key, path)
         # No designated dimension approvers → app admins only.
         if routing["routed_to"] == AccessRequestRouteKind.APP_ADMINS:

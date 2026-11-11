@@ -55,6 +55,7 @@
 }
 
 .collapsed .link {
+  position: relative;
   justify-content: center;
   width: 36px;
   height: 36px;
@@ -66,6 +67,30 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex: 1;
+}
+
+.badge {
+  margin-left: auto;
+  min-width: 1.25rem;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--color-primary);
+  color: var(--color-on-primary, #fff);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.25rem;
+  text-align: center;
+}
+
+.collapsed .badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 0.9rem;
+  padding: 0 4px;
+  font-size: 9px;
+  line-height: 0.9rem;
 }
 
 .link:hover {

@@ -357,6 +357,95 @@ def test_row_filter_request_routes_to_admins(container) -> None:  # noqa: ANN001
     assert inbox_other.total == 0
 
 
+def test_data_access_approver_hierarchical_routing(container) -> None:  # noqa: ANN001
+    from backend.app.models.user import CurrentUser
+
+    identity = _service(container)
+    access = AccessRequestService(container.storage, identity)
+    actor = _admin()
+    identity.upsert_definition(
+        UpsertAttributeDefinitionRequest(
+            key="data_access",
+            description="DAC",
+            governed_tag_keys=["data_access_control"],
+        ),
+        actor,
+    )
+    access.upsert_approver(
+        UpsertCategoryApproverRequest(
+            attribute_key="data_access",
+            category_path="finance",
+            principal_name="dac-finance",
+            principal_type=PrincipalKind.GROUP,
+        ),
+        actor,
+    )
+    access.upsert_approver(
+        UpsertCategoryApproverRequest(
+            attribute_key="data_access",
+            category_path="finance.budget",
+            principal_name="budget-dac@example.com",
+            principal_type=PrincipalKind.USER,
+        ),
+        actor,
+    )
+
+    requester = CurrentUser(
+        user_name="analyst@example.com",
+        email="analyst@example.com",
+        display_name="Analyst",
+        groups=["users"],
+        is_admin=False,
+    )
+    created = access.create_request(
+        CreateAccessRequestBody(
+            attribute_key="data_access",
+            attribute_value="finance.budget",
+            requested_expires_at=datetime.now(UTC) + timedelta(days=30),
+            justification="Need budget tables",
+        ),
+        requester,
+    )
+    assert created.resolved_category == "finance.budget"
+    assert created.routed_to.value == "category_approvers"
+    assert [a.principal_name for a in created.approvers] == ["budget-dac@example.com"]
+
+    specific = CurrentUser(
+        user_name="budget-dac@example.com",
+        email="budget-dac@example.com",
+        display_name="Budget",
+        groups=[],
+        is_admin=False,
+    )
+    broad = CurrentUser(
+        user_name="lead@example.com",
+        email="lead@example.com",
+        display_name="Lead",
+        groups=["dac-finance"],
+        is_admin=False,
+    )
+    outsider = CurrentUser(
+        user_name="other@example.com",
+        email="other@example.com",
+        display_name="Other",
+        groups=["users"],
+        is_admin=False,
+    )
+    assert any(
+        i.request and i.request.request_id == created.request_id
+        for i in access.approvals_inbox(specific).items
+    )
+    # Broader-path group does not decide the more-specific request.
+    assert access.approvals_inbox(broad).total == 0
+    assert access.approvals_inbox(outsider).total == 0
+    decided = access.approve_request(
+        created.request_id,
+        DecideAccessRequestBody(expires_at=datetime.now(UTC) + timedelta(days=14)),
+        specific,
+    )
+    assert decided.status.value == "APPROVED"
+
+
 def test_row_filter_request_routes_to_dimension_approvers(container) -> None:  # noqa: ANN001
     from backend.app.models.identity_attribute import ValueSource
     from backend.app.models.user import CurrentUser

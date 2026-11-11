@@ -115,11 +115,11 @@ export function HomePage() {
                   label: "Request attributes",
                   value: <Link to="/identity?tab=request">Request access</Link>,
                 },
-                ...(user.isApprover
+                ...(user.isApprover || user.isAdmin
                   ? [
                       {
                         label: "Approvals",
-                        value: <Link to="/identity?tab=approvals">Open approvals inbox</Link>,
+                        value: <Link to="/approvals">Open approvals inbox</Link>,
                       },
                     ]
                   : []),

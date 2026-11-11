@@ -42,7 +42,7 @@ describe("Identity attributes", () => {
     expect(screen.getByRole("button", { name: "Create definition" })).toBeEnabled();
   });
 
-  it("hides admin tabs for non-admins and approvals unless they are approvers", async () => {
+  it("hides admin tabs for non-admins", async () => {
     renderApp(
       "/identity",
       fakeServices({
@@ -59,17 +59,6 @@ describe("Identity attributes", () => {
     expect(screen.getByRole("tab", { name: "My requests" })).toBeInTheDocument();
   });
 
-  it("shows Approvals for category approvers who are not admins", async () => {
-    renderApp(
-      "/identity",
-      fakeServices({
-        user: { ...testUser, isAdmin: false, isApprover: true, groups: ["finance-owners"] },
-      }),
-    );
-    expect(await screen.findByRole("tab", { name: "Approvals" })).toBeInTheDocument();
-    expect(screen.queryByRole("tab", { name: "Definitions" })).not.toBeInTheDocument();
-  });
-
   it("lets a user submit a sensitivity access request", async () => {
     const user = userEvent.setup();
     renderApp("/identity?tab=request");
@@ -84,19 +73,21 @@ describe("Identity attributes", () => {
     expect(await screen.findByLabelText("Sensitivity path")).toHaveValue("");
   });
 
-  it("shows approvals inbox items for approvers", async () => {
+  it("redirects legacy approvals tab to /approvals", async () => {
     renderApp("/identity?tab=approvals");
-    expect(await screen.findByText("Approvals inbox")).toBeInTheDocument();
-    expect((await screen.findAllByText(/finance\.budget\.PII\.Name/)).length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Deny" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Approvals" })).toBeInTheDocument();
+    expect(await screen.findByText("Inbox")).toBeInTheDocument();
   });
 
-  it("lists category approvers for admins", async () => {
+  it("lists category approvers for admins including data-access scope", async () => {
+    const user = userEvent.setup();
     renderApp("/identity?tab=approvers");
     expect(await screen.findByText("Configured approvers")).toBeInTheDocument();
     const table = await screen.findByRole("table", { name: "Approvers" });
     expect(within(table).getByText("finance")).toBeInTheDocument();
     expect(within(table).getByText("finance-owners")).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText("Scope"), "data_access");
+    expect(screen.getByLabelText("Data-access path")).toBeDisabled();
   });
 });

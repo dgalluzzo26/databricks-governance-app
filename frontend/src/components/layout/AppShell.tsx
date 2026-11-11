@@ -23,7 +23,10 @@ export function AppShell() {
       <BusyBar />
       <TopBar user={user} />
       <div className={styles.body}>
-        <SideNav isAdmin={user?.isAdmin ?? false} />
+        <SideNav
+          isAdmin={user?.isAdmin ?? false}
+          canApprove={Boolean(user?.isAdmin || user?.isApprover)}
+        />
         <main className={styles.main}>
           {isPending && <Spinner label="Signing you in" />}
           {error && <ErrorAlert error={error} title="Could not load your identity" />}

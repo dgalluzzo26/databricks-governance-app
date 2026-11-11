@@ -2,15 +2,17 @@
  * @file React Router route table for the app shell.
  *
  * Public routes (Home, Access explorer, Identity, Help) are available to all signed-in users.
- * Admin-only routes (Policies, Exceptions, Row filters, Mask rules, Data access, App status) are wrapped in
- * {@link RequireAdmin}, which redirects non-admins. Category-approver Identity Approvals access
- * is gated inside the Identity page, not here.
+ * Approvals is gated by {@link RequireApprover} (admins and category approvers).
+ * Admin-only routes (Policies, Exceptions, Row filters, Mask rules, Data access, App status) are
+ * wrapped in {@link RequireAdmin}.
  */
 import type { RouteObject } from "react-router-dom";
 import { RequireAdmin } from "@/components/auth/RequireAdmin";
+import { RequireApprover } from "@/components/auth/RequireApprover";
 import { AppShell } from "@/components/layout/AppShell";
 import { AppStatusPage } from "@/pages/AppStatusPage";
 import { HomePage } from "@/pages/HomePage";
+import { ApprovalsPage } from "@/pages/approvals/ApprovalsPage";
 import { IdentityPage } from "@/pages/identity/IdentityPage";
 import { NotFoundPage } from "@/pages/NotFoundPage";
 import { PoliciesPage } from "@/pages/policies/PoliciesPage";
@@ -30,6 +32,14 @@ export const routes: RouteObject[] = [
       { index: true, element: <HomePage /> },
       { path: "access-explorer", element: <AccessExplorerPage /> },
       { path: "identity", element: <IdentityPage /> },
+      {
+        path: "approvals",
+        element: (
+          <RequireApprover>
+            <ApprovalsPage />
+          </RequireApprover>
+        ),
+      },
       { path: "help", element: <HelpPage /> },
       {
         path: "policies",

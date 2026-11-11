@@ -1,10 +1,11 @@
 /**
- * @file Admin UI for the tag-driven data-access group dry-run.
+ * @file Admin UI for the tag-driven data-access group planner.
  *
- * Configures the access and review tags, runs a planner that never creates groups or
- * Unity Catalog grants, and shows adds/revokes/conflicts versus the last run.
+ * Dry-run tab: configure tags, run the planner (never mutates UC), inspect plan and history.
+ * Live tab: apply readiness, prerequisites, and where sync logs live (apply still locked).
  */
 import { useEffect, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   useDataAccessLatestRun,
   useDataAccessReadiness,
@@ -13,14 +14,26 @@ import {
   useRunDataAccessSync,
   useSaveDataAccessSettings,
 } from "@/api/queries";
-import type { DataAccessConflictPolicy, DataAccessSettings } from "@/api/types";
+import type { DataAccessConflictPolicy, DataAccessRun, DataAccessSettings } from "@/api/types";
 import { Alert, Badge, Card, ErrorAlert, PageHeader, Spinner } from "@/components/ui";
 import styles from "../identity/IdentityPage.module.css";
 
+type DataAccessTab = "dry-run" | "live";
+
 /**
- * Data-access dry-run administration: settings, readiness, Run now, and the latest plan.
+ * Data-access administration with Dry-run and Live tabs.
  */
 export function DataAccessPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requested = (searchParams.get("tab") as DataAccessTab | null) ?? "dry-run";
+  const tab: DataAccessTab = requested === "live" ? "live" : "dry-run";
+
+  const setTab = (next: DataAccessTab) => {
+    const params = new URLSearchParams(searchParams);
+    params.set("tab", next);
+    setSearchParams(params, { replace: true });
+  };
+
   const settingsQuery = useDataAccessSettings();
   const readiness = useDataAccessReadiness();
   const latest = useDataAccessLatestRun();
@@ -32,88 +45,223 @@ export function DataAccessPage() {
     <div className={styles.stack}>
       <PageHeader
         title="Data access"
-        description="Plans one nested group per data_access_control value and SELECT only on reviewed tagged tables (plus USE CATALOG/SCHEMA). Schema/catalog tags still seed parent groups for nesting. Dry-run only until apply mode is enabled."
+        description="Plans one nested group per data_access_control value and SELECT only on reviewed tagged tables (plus USE CATALOG/SCHEMA). Schema/catalog tags still seed parent groups for nesting."
       />
-      {readiness.isPending && <Spinner label="Checking Account Admin SP" />}
+
+      <div className={styles.tabs} role="tablist" aria-label="Data access views">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "dry-run"}
+          className={`${styles.tab}${tab === "dry-run" ? ` ${styles.tabActive}` : ""}`}
+          onClick={() => setTab("dry-run")}
+        >
+          Dry-run
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "live"}
+          className={`${styles.tab}${tab === "live" ? ` ${styles.tabActive}` : ""}`}
+          onClick={() => setTab("live")}
+        >
+          Live
+        </button>
+      </div>
+
+      {tab === "dry-run" && (
+        <>
+          {readiness.isPending && <Spinner label="Checking Account Admin SP" />}
+          {readiness.error && <ErrorAlert error={readiness.error} title="Could not load readiness" />}
+          {readiness.data && (
+            <Alert
+              tone={readiness.data.dryRunReady ? "success" : "warning"}
+              title={
+                readiness.data.dryRunReady
+                  ? "Dry-run ready"
+                  : "Dry-run is not ready — fix the failing checks on App status"
+              }
+            >
+              Dry-run never creates groups or grants. Use{" "}
+              <button type="button" className={styles.linkButton} onClick={() => setTab("live")}>
+                Live
+              </button>{" "}
+              for apply prerequisites.{" "}
+              {!readiness.data.dryRunReady && (
+                <Link to="/status">Open App status</Link>
+              )}
+            </Alert>
+          )}
+          {settingsQuery.isPending && <Spinner label="Loading settings" />}
+          {settingsQuery.error && (
+            <ErrorAlert error={settingsQuery.error} title="Could not load settings" />
+          )}
+          {settingsQuery.data && (
+            <SettingsCard
+              initial={settingsQuery.data.settings}
+              minInterval={settingsQuery.data.minIntervalMinutes}
+              saving={save.isPending}
+              error={save.error}
+              onSave={(body) => void save.mutateAsync(body)}
+            />
+          )}
+          <Card
+            title="Manual sync (dry-run)"
+            actions={
+              <button
+                type="button"
+                className={`${styles.button} ${styles.buttonPrimary}`}
+                disabled={run.isPending || readiness.data?.dryRunReady === false}
+                onClick={() => void run.mutateAsync()}
+              >
+                {run.isPending ? "Running…" : "Run now"}
+              </button>
+            }
+          >
+            <p className={styles.muted}>
+              Runs the planner against live tags and current UC grants, stores the plan, and never
+              mutates Unity Catalog. Scheduled interval sync uses the same dry-run path until apply
+              is unlocked.
+            </p>
+            {run.error && <ErrorAlert error={run.error} title="Dry-run failed" />}
+            {latest.isPending && <Spinner label="Loading latest run" />}
+            {latest.error && <ErrorAlert error={latest.error} title="Could not load latest run" />}
+            {latest.data == null && !latest.isPending && (
+              <p className={styles.muted}>No dry-run has been stored yet.</p>
+            )}
+            {latest.data && <RunReport run={latest.data} />}
+          </Card>
+          <RunHistoryCard history={history.data} title="Run history / logs" />
+        </>
+      )}
+
+      {tab === "live" && (
+        <LiveTab
+          readiness={readiness}
+          applyAvailable={settingsQuery.data?.applyAvailable === true}
+          history={history.data}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Live / apply framing: readiness checklist, locked apply, pointers to dry-run history.
+ */
+function LiveTab(props: {
+  readiness: ReturnType<typeof useDataAccessReadiness>;
+  applyAvailable: boolean;
+  history: DataAccessRun[] | undefined;
+}) {
+  const { readiness, applyAvailable, history } = props;
+  return (
+    <div className={styles.stack}>
+      {readiness.isPending && <Spinner label="Checking apply readiness" />}
       {readiness.error && <ErrorAlert error={readiness.error} title="Could not load readiness" />}
       {readiness.data && (
         <Alert
-          tone={readiness.data.dryRunReady ? "success" : "warning"}
+          tone={applyAvailable && readiness.data.applyReady ? "success" : "warning"}
           title={
-            readiness.data.dryRunReady
-              ? "Dry-run ready"
-              : "Dry-run is not ready — fix the failing checks on App status"
+            applyAvailable && readiness.data.applyReady
+              ? "Apply mode available"
+              : "Apply mode is locked"
           }
         >
-          Apply mode stays locked until every check passes and we turn it on.{" "}
-          {readiness.data.applyReady ? "Apply probes currently pass." : "Apply probes are not all passing yet."}
+          {applyAvailable
+            ? readiness.data.applyReady
+              ? "All apply probes pass. Live sync can create groups and change grants."
+              : "Apply is enabled in settings but one or more probes still fail — see App status."
+            : "The planner stays dry-run-only until apply is turned on in a future release. Use Dry-run → Run now for manual sync today."}
         </Alert>
       )}
-      {settingsQuery.isPending && <Spinner label="Loading settings" />}
-      {settingsQuery.error && <ErrorAlert error={settingsQuery.error} title="Could not load settings" />}
-      {settingsQuery.data && (
-        <SettingsCard
-          initial={settingsQuery.data.settings}
-          minInterval={settingsQuery.data.minIntervalMinutes}
-          saving={save.isPending}
-          error={save.error}
-          onSave={(body) => void save.mutateAsync(body)}
-        />
-      )}
-      <Card
-        title="Dry-run"
-        actions={
-          <button
-            type="button"
-            className={`${styles.button} ${styles.buttonPrimary}`}
-            disabled={run.isPending || readiness.data?.dryRunReady === false}
-            onClick={() => void run.mutateAsync()}
-          >
-            {run.isPending ? "Running…" : "Run now"}
-          </button>
-        }
-      >
-        {run.error && <ErrorAlert error={run.error} title="Dry-run failed" />}
-        {latest.isPending && <Spinner label="Loading latest run" />}
-        {latest.error && <ErrorAlert error={latest.error} title="Could not load latest run" />}
-        {latest.data == null && !latest.isPending && <p className={styles.muted}>No dry-run has been stored yet.</p>}
-        {latest.data && <RunReport run={latest.data} />}
+
+      <Card title="Before live sync">
+        <ul className={styles.list}>
+          <li>
+            Pass every dry-run and apply check on <Link to="/status">App status</Link> (Account Admin
+            SP, warehouse, sensitivity + data-access definitions).
+          </li>
+          <li>
+            Confirm Dry-run plans look right (groups, nested parents, table SELECT grants) with no
+            unexpected revokes.
+          </li>
+          <li>
+            Configure data-access path approvers under{" "}
+            <Link to="/identity?tab=approvers">Identity → Approvers</Link> so grant requests route
+            correctly.
+          </li>
+          <li>
+            When apply unlocks, live runs will appear in the same run history below; until then only
+            dry-run rows are stored.
+          </li>
+        </ul>
       </Card>
-      {history.data && history.data.length > 0 && (
-        <Card title="Recent runs">
-          <div className={styles.tableWrap}>
-            <table className={styles.table}>
-              <thead>
-                <tr>
-                  <th>When</th>
-                  <th>Status</th>
-                  <th>Trigger</th>
-                  <th>Add / revoke / conflicts</th>
-                </tr>
-              </thead>
-              <tbody>
-                {history.data.map((item) => (
-                  <tr key={item.runId}>
-                    <td>{new Date(item.startedAt).toLocaleString()}</td>
-                    <td>
-                      <Badge tone={item.status === "success" ? "success" : item.status === "failed" ? "danger" : "neutral"}>
-                        {item.status}
-                      </Badge>
-                    </td>
-                    <td>{item.trigger}</td>
-                    <td>
-                      {item.summary
-                        ? `${item.summary.grantsToAdd} / ${item.summary.grantsToRevoke} / ${item.summary.conflicts}`
-                        : item.error ?? "—"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-      )}
+
+      <Card title="What live will do (when unlocked)">
+        <p className={styles.muted}>
+          Create missing <code>dac_*</code> groups, nest parents into children, grant table SELECT
+          (and USE CATALOG/SCHEMA), and revoke stale planner-managed grants. Manual sync will use
+          the same Run now control with mode=apply.
+        </p>
+      </Card>
+
+      <RunHistoryCard history={history} title="Sync logs (all modes)" />
     </div>
+  );
+}
+
+function RunHistoryCard(props: { history: DataAccessRun[] | undefined; title: string }) {
+  if (!props.history || props.history.length === 0) {
+    return (
+      <Card title={props.title}>
+        <p className={styles.muted}>No runs stored yet. Dry-run → Run now writes the first log entry.</p>
+      </Card>
+    );
+  }
+  return (
+    <Card title={props.title}>
+      <div className={styles.tableWrap}>
+        <table className={styles.table}>
+          <thead>
+            <tr>
+              <th>When</th>
+              <th>Status</th>
+              <th>Mode</th>
+              <th>Trigger</th>
+              <th>Add / revoke / conflicts</th>
+            </tr>
+          </thead>
+          <tbody>
+            {props.history.map((item) => (
+              <tr key={item.runId}>
+                <td>{new Date(item.startedAt).toLocaleString()}</td>
+                <td>
+                  <Badge
+                    tone={
+                      item.status === "success"
+                        ? "success"
+                        : item.status === "failed"
+                          ? "danger"
+                          : "neutral"
+                    }
+                  >
+                    {item.status}
+                  </Badge>
+                </td>
+                <td>{item.mode}</td>
+                <td>{item.trigger}</td>
+                <td>
+                  {item.summary
+                    ? `${item.summary.grantsToAdd} / ${item.summary.grantsToRevoke} / ${item.summary.conflicts}`
+                    : (item.error ?? "—")}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
   );
 }
 
@@ -242,13 +390,13 @@ function SettingsCard(props: {
 /**
  * KPI summary plus truncated grant/group/conflict tables for one run.
  */
-function RunReport({ run }: { run: import("@/api/types").DataAccessRun }) {
+function RunReport({ run }: { run: DataAccessRun }) {
   const plan = run.plan;
   const summary = run.summary ?? plan?.summary;
   return (
     <div className={styles.stack}>
       <div className={styles.muted}>
-        {run.status} · {run.trigger} · {new Date(run.startedAt).toLocaleString()}
+        {run.status} · {run.mode} · {run.trigger} · {new Date(run.startedAt).toLocaleString()}
         {run.triggeredBy ? ` · ${run.triggeredBy}` : ""}
       </div>
       {run.error && <Alert tone="danger" title="Run failed">{run.error}</Alert>}
