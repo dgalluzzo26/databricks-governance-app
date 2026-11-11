@@ -40,11 +40,12 @@ class AnalyzeAttributeRequest(ApiModel):
 
     Attributes:
         attribute_key: Identity attribute key (e.g. ``data_access``).
-        attribute_value: Path or value to inspect (e.g. ``finance``).
+        attribute_value: Path or value to inspect (e.g. ``finance``). Empty for
+            row-filter overview (all principals + their values).
     """
 
     attribute_key: str = Field(min_length=1)
-    attribute_value: str = Field(min_length=1)
+    attribute_value: str = ""
 
 
 class AttributeHolder(ApiModel):
@@ -53,7 +54,7 @@ class AttributeHolder(ApiModel):
     Attributes:
         principal_name: User, group, or SP id.
         principal_type: Principal kind.
-        attribute_value: Assigned value.
+        attribute_value: Assigned value (single-value lookup).
         match: Relation to the queried path.
         expires_at: ISO expiry when present.
         assignment_id: Underlying assignment id.
@@ -65,6 +66,22 @@ class AttributeHolder(ApiModel):
     match: AttributeHolderMatch
     expires_at: str | None = None
     assignment_id: str
+
+
+class AttributePrincipalSummary(ApiModel):
+    """One principal with every value they hold for a row-filter dimension.
+
+    Attributes:
+        principal_name: User, group, or SP id.
+        principal_type: Principal kind.
+        values: Distinct assigned values (sorted).
+        expires_at: Soonest assignment expiry when any is set; else None.
+    """
+
+    principal_name: str
+    principal_type: PrincipalKind
+    values: list[str] = Field(default_factory=list)
+    expires_at: str | None = None
 
 
 class UnlockedTable(ApiModel):
@@ -88,11 +105,12 @@ class AttributeExplorerResult(ApiModel):
 
     Attributes:
         attribute_key: Queried key.
-        attribute_value: Queried value.
+        attribute_value: Queried value, or ``*`` for row-filter overview.
         kind: Access mechanism for this attribute.
         group_name: ``dac_*`` group for data_access paths.
         parent_group: Nested parent group, if any.
-        holders: Principals with related assignments.
+        holders: Principals with related assignments (path lookup).
+        principals: Row-filter overview — one row per principal with value list.
         tables: Reviewed tables unlocked (data_access only).
         note: Extra context for non–data-access kinds.
     """
@@ -103,5 +121,6 @@ class AttributeExplorerResult(ApiModel):
     group_name: str | None = None
     parent_group: str | None = None
     holders: list[AttributeHolder] = Field(default_factory=list)
+    principals: list[AttributePrincipalSummary] = Field(default_factory=list)
     tables: list[UnlockedTable] = Field(default_factory=list)
     note: str | None = None

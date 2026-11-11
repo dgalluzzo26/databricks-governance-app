@@ -953,7 +953,8 @@ export type AttributeHolderMatch = "exact" | "descendant" | "ancestor" | "relate
 
 export interface AnalyzeAttributeRequest {
   attributeKey: string;
-  attributeValue: string;
+  /** Omit or empty for row-filter overview (all principals + values). */
+  attributeValue?: string;
 }
 
 export interface AttributeHolder {
@@ -963,6 +964,14 @@ export interface AttributeHolder {
   match: AttributeHolderMatch;
   expiresAt: string | null;
   assignmentId: string;
+}
+
+/** Row-filter overview: one principal with every value they hold. */
+export interface AttributePrincipalSummary {
+  principalName: string;
+  principalType: PrincipalKind;
+  values: string[];
+  expiresAt: string | null;
 }
 
 export interface UnlockedTable {
@@ -979,6 +988,7 @@ export interface AttributeExplorerResult {
   groupName: string | null;
   parentGroup: string | null;
   holders: AttributeHolder[];
+  principals: AttributePrincipalSummary[];
   tables: UnlockedTable[];
   note: string | null;
 }

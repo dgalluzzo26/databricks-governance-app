@@ -17,6 +17,21 @@ describe("Attribute explorer", () => {
     expect(screen.getByText("ana.lopez@example.com")).toBeInTheDocument();
   });
 
+  it("lists principals and values for a row-filter dimension without a value picker", async () => {
+    const user = userEvent.setup();
+    renderApp("/attribute-explorer");
+    expect(await screen.findByRole("heading", { name: "Attribute explorer" })).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: /state \(row filter\)/i })).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText("Attribute"), "state");
+    expect(screen.queryByLabelText("Value")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Analyze" }));
+    expect(await screen.findByRole("table", { name: "Principals" })).toBeInTheDocument();
+    expect(screen.getByText("ana.lopez@example.com")).toBeInTheDocument();
+    expect(screen.getByText("CA")).toBeInTheDocument();
+    expect(screen.getByText("NY")).toBeInTheDocument();
+    expect(screen.getByText("finance-analysts")).toBeInTheDocument();
+  });
+
   it("is available to category approvers", async () => {
     renderApp(
       "/attribute-explorer",

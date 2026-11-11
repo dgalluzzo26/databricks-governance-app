@@ -678,32 +678,62 @@ export function fakeServices(
           : Promise.resolve(overrides.dataAccessRun ?? testDataAccessRun),
     },
     attributeExplorer: {
-      analyze: async (body: import("@/api/types").AnalyzeAttributeRequest) => ({
-        attributeKey: body.attributeKey,
-        attributeValue: body.attributeValue,
-        kind: "data_access" as const,
-        groupName: "dac_finance",
-        parentGroup: null,
-        holders: [
-          {
-            principalName: "ana.lopez@example.com",
-            principalType: "USER" as const,
-            attributeValue: body.attributeValue,
-            match: "exact" as const,
-            expiresAt: null,
-            assignmentId: "as-1",
-          },
-        ],
-        tables: [
-          {
-            fullName: "sandbox.finance.budget",
-            tagValue: body.attributeValue,
-            match: "exact" as const,
-            groupName: "dac_finance",
-          },
-        ],
-        note: null,
-      }),
+      analyze: async (body: import("@/api/types").AnalyzeAttributeRequest) => {
+        const value = body.attributeValue ?? "";
+        if (!value) {
+          return {
+            attributeKey: body.attributeKey,
+            attributeValue: "*",
+            kind: "row_filter" as const,
+            groupName: null,
+            parentGroup: null,
+            holders: [],
+            principals: [
+              {
+                principalName: "ana.lopez@example.com",
+                principalType: "USER" as const,
+                values: ["CA", "NY"],
+                expiresAt: null,
+              },
+              {
+                principalName: "finance-analysts",
+                principalType: "GROUP" as const,
+                values: ["TX"],
+                expiresAt: null,
+              },
+            ],
+            tables: [],
+            note: "Row-filter dimension overview.",
+          };
+        }
+        return {
+          attributeKey: body.attributeKey,
+          attributeValue: value,
+          kind: "data_access" as const,
+          groupName: "dac_finance",
+          parentGroup: null,
+          holders: [
+            {
+              principalName: "ana.lopez@example.com",
+              principalType: "USER" as const,
+              attributeValue: value,
+              match: "exact" as const,
+              expiresAt: null,
+              assignmentId: "as-1",
+            },
+          ],
+          principals: [],
+          tables: [
+            {
+              fullName: "sandbox.finance.budget",
+              tagValue: value,
+              match: "exact" as const,
+              groupName: "dac_finance",
+            },
+          ],
+          note: null,
+        };
+      },
     },
     policies: {
       list: () => (policies instanceof Error ? Promise.reject(policies) : Promise.resolve(policies)),

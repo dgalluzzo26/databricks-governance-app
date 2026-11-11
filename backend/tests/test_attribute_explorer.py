@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from backend.app.models.identity_attribute import (
     AssignAttributeRequest,
     UpsertAttributeDefinitionRequest,
+    ValueSource,
 )
 from backend.app.models.principal import PrincipalKind
 from backend.app.services.data_access_planner import TagRow
@@ -82,3 +83,67 @@ def test_attribute_explorer_forbidden_for_non_approver(client: TestClient, conta
         json={"attributeKey": "data_access", "attributeValue": "finance"},
     )
     assert denied.status_code == 403
+
+
+def _seed_row_filter(container) -> None:  # noqa: ANN001
+    identity = _service(container)
+    actor = _admin()
+    identity.upsert_definition(
+        UpsertAttributeDefinitionRequest(
+            key="state",
+            description="US state",
+            value_source=ValueSource.FREE_FORM,
+            allowed_values=["CA", "NY", "TX"],
+        ),
+        actor,
+    )
+    identity.assign(
+        AssignAttributeRequest(
+            principal_name="ana@example.com",
+            principal_type=PrincipalKind.USER,
+            attribute_key="state",
+            attribute_value="CA",
+            expires_at=datetime.now(UTC) + timedelta(days=30),
+        ),
+        actor,
+    )
+    identity.assign(
+        AssignAttributeRequest(
+            principal_name="ana@example.com",
+            principal_type=PrincipalKind.USER,
+            attribute_key="state",
+            attribute_value="NY",
+            expires_at=datetime.now(UTC) + timedelta(days=10),
+        ),
+        actor,
+    )
+    identity.assign(
+        AssignAttributeRequest(
+            principal_name="finance-analysts",
+            principal_type=PrincipalKind.GROUP,
+            attribute_key="state",
+            attribute_value="TX",
+            expires_at=datetime.now(UTC) + timedelta(days=30),
+        ),
+        actor,
+    )
+
+
+def test_attribute_explorer_row_filter_principals_overview(client: TestClient, container) -> None:
+    _seed_row_filter(container)
+    admin = headers_for("admin@example.com")
+    body = client.post(
+        "/api/attribute-explorer/analyze",
+        headers=admin,
+        json={"attributeKey": "state", "attributeValue": ""},
+    )
+    assert body.status_code == 200
+    payload = body.json()
+    assert payload["kind"] == "row_filter"
+    assert payload["attributeValue"] == "*"
+    assert payload["holders"] == []
+    by_name = {row["principalName"]: row for row in payload["principals"]}
+    assert by_name["ana@example.com"]["values"] == ["CA", "NY"]
+    assert by_name["finance-analysts"]["values"] == ["TX"]
+    assert by_name["ana@example.com"]["principalType"] == "USER"
+    assert by_name["finance-analysts"]["principalType"] == "GROUP"

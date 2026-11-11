@@ -12,7 +12,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 from databricks.sdk.errors import DatabricksError
-from databricks.sdk.service.iam import GroupSchema, Patch, PatchOp, PatchSchema
+from databricks.sdk.service.iam import GroupSchema, PatchSchema
 from pydantic import ValidationError
 
 from backend.app.clients.sql import SqlExecutor, quote_identifier, string_literal
@@ -529,21 +529,68 @@ class DataAccessService:
             )
         return grants
 
+    # Account SCIM — Unity Catalog only recognizes account groups as GRANT principals.
+    # Workspace ``groups.create`` yields WorkspaceGroup (PRINCIPAL_DOES_NOT_EXIST on GRANT).
+    _ACCOUNT_SCIM_GROUPS = "/api/2.0/account/scim/v2/Groups"
+
+    def _account_scim_list_groups(
+        self, *, filter_expr: str | None = None, attributes: str = "id,displayName"
+    ) -> list[dict]:
+        """List account groups via workspace-proxied Account SCIM."""
+        admin = self._factory.admin()
+        query: dict[str, str | int] = {
+            "attributes": attributes,
+            "startIndex": 1,
+            "count": 10000,
+        }
+        if filter_expr:
+            query["filter"] = filter_expr
+        payload = admin.api_client.do("GET", self._ACCOUNT_SCIM_GROUPS, query=query)
+        resources = payload.get("Resources") if isinstance(payload, dict) else None
+        return list(resources or [])
+
+    def _account_scim_create_group(self, display_name: str) -> str:
+        """Create an account group; return its SCIM id."""
+        admin = self._factory.admin()
+        created = admin.api_client.do(
+            "POST",
+            self._ACCOUNT_SCIM_GROUPS,
+            body={
+                "displayName": display_name,
+                "schemas": [GroupSchema.URN_IETF_PARAMS_SCIM_SCHEMAS_CORE_2_0_GROUP.value],
+            },
+        )
+        gid = created.get("id") if isinstance(created, dict) else None
+        if not gid:
+            raise RuntimeError(f"create account group {display_name}: missing id")
+        return str(gid)
+
+    def _account_scim_patch_group(self, group_id: str, operations: list[dict]) -> None:
+        """Patch an account group (add/remove members)."""
+        admin = self._factory.admin()
+        admin.api_client.do(
+            "PATCH",
+            f"{self._ACCOUNT_SCIM_GROUPS}/{group_id}",
+            body={
+                "schemas": [PatchSchema.URN_IETF_PARAMS_SCIM_API_MESSAGES_2_0_PATCH_OP.value],
+                "Operations": operations,
+            },
+        )
+
     def _load_groups(self, settings: DataAccessSettings) -> set[str]:
-        """List workspace/account groups whose names start with the managed prefix."""
+        """List account groups whose names start with the managed prefix."""
         prefix = settings.group_prefix
         names: set[str] = set()
         try:
             escaped = prefix.replace('"', '\\"')
-            listed = self._factory.admin().groups.list(
-                filter=f'displayName sw "{escaped}"', attributes="id,displayName"
-            )
-            for group in listed:
-                name = getattr(group, "display_name", None) or getattr(group, "displayName", None)
+            for group in self._account_scim_list_groups(
+                filter_expr=f'displayName sw "{escaped}"'
+            ):
+                name = group.get("displayName")
                 if name:
                     names.add(str(name))
         except DatabricksError as exc:
-            logger.warning("Listing managed groups failed: %s", exc)
+            logger.warning("Listing managed account groups failed: %s", exc)
         return names
 
     def _load_assignments(self, settings: DataAccessSettings) -> list[AssignmentRow]:
@@ -568,31 +615,31 @@ class DataAccessService:
     def _load_members(
         self, settings: DataAccessSettings, existing_groups: set[str]
     ) -> list[ActualMember]:
-        """Load current members of managed groups via SCIM (display names)."""
+        """Load current members of managed account groups via Account SCIM."""
         if not existing_groups or not self._factory.admin_configured:
             return []
-        admin = self._factory.admin()
         members: list[ActualMember] = []
         by_name = {name.lower(): name for name in existing_groups}
         try:
             escaped = settings.group_prefix.replace('"', '\\"')
-            listed = admin.groups.list(
-                filter=f'displayName sw "{escaped}"',
+            listed = self._account_scim_list_groups(
+                filter_expr=f'displayName sw "{escaped}"',
                 attributes="id,displayName,members",
             )
             for group in listed:
-                name = getattr(group, "display_name", None) or ""
+                name = str(group.get("displayName") or "")
                 if name.lower() not in by_name:
                     continue
-                for entry in group.members or []:
-                    display = getattr(entry, "display", None) or getattr(entry, "value", None)
+                for entry in group.get("members") or []:
+                    if not isinstance(entry, dict):
+                        continue
+                    display = entry.get("display") or entry.get("value")
                     if not display:
                         continue
-                    raw_type = (getattr(entry, "type", None) or "UNKNOWN").upper()
+                    raw_type = str(entry.get("type") or "UNKNOWN").upper()
                     if raw_type in {"USER", "GROUP", "SERVICE_PRINCIPAL"}:
                         principal_type = raw_type
                     else:
-                        # Heuristic when SCIM omits type.
                         principal_type = (
                             "GROUP"
                             if str(display).lower().startswith(
@@ -614,7 +661,7 @@ class DataAccessService:
         return members
 
     def _apply_plan_impl(self, settings: DataAccessSettings, plan: DataAccessPlan) -> DataAccessPlan:
-        """Create/nest groups, sync membership, GRANT/REVOKE. Collects per-step errors."""
+        """Create/nest account groups, sync membership, GRANT/REVOKE. Collects per-step errors."""
         errors: list[str] = []
         group_ids = self._ensure_groups(plan.groups, errors)
         self._nest_groups(plan.groups, group_ids, errors)
@@ -625,48 +672,36 @@ class DataAccessService:
     def _ensure_groups(
         self, groups: list[PlannedGroup], errors: list[str]
     ) -> dict[str, str]:
-        """Create missing groups; return display-name(lower) → SCIM id map."""
-        admin = self._factory.admin()
+        """Create missing account groups; return display-name(lower) → SCIM id map."""
         ids: dict[str, str] = {}
-        # Seed from existing list.
         try:
-            for group in admin.groups.list(attributes="id,displayName"):
-                name = getattr(group, "display_name", None)
-                gid = getattr(group, "id", None)
+            for group in self._account_scim_list_groups():
+                name = group.get("displayName")
+                gid = group.get("id")
                 if name and gid:
                     ids[str(name).lower()] = str(gid)
         except DatabricksError as exc:
-            errors.append(f"list groups: {exc}")
+            errors.append(f"list account groups: {exc}")
         for planned in groups:
             key = planned.name.lower()
             if key in ids:
                 continue
             try:
-                created = admin.groups.create(
-                    display_name=planned.name,
-                    schemas=[GroupSchema.URN_IETF_PARAMS_SCIM_SCHEMAS_CORE_2_0_GROUP],
-                )
-                gid = getattr(created, "id", None)
-                if gid:
-                    ids[key] = str(gid)
-                else:
-                    errors.append(f"create group {planned.name}: missing id")
+                ids[key] = self._account_scim_create_group(planned.name)
             except Exception as exc:  # noqa: BLE001
-                # Retry lookup in case of race / already exists.
                 try:
                     found = next(
                         (
                             g
-                            for g in admin.groups.list(
-                                filter=f'displayName eq "{planned.name.replace(chr(34), "")}"',
-                                attributes="id,displayName",
+                            for g in self._account_scim_list_groups(
+                                filter_expr=f'displayName eq "{planned.name.replace(chr(34), "")}"'
                             )
-                            if (getattr(g, "display_name", None) or "").lower() == key
+                            if str(g.get("displayName") or "").lower() == key
                         ),
                         None,
                     )
-                    if found and getattr(found, "id", None):
-                        ids[key] = str(found.id)
+                    if found and found.get("id"):
+                        ids[key] = str(found["id"])
                         continue
                 except Exception:  # noqa: BLE001
                     pass
@@ -680,7 +715,6 @@ class DataAccessService:
         errors: list[str],
     ) -> None:
         """Nest each parent ``dac_*`` group into its child (idempotent ADD)."""
-        admin = self._factory.admin()
         for planned in groups:
             if not planned.parent_group:
                 continue
@@ -692,19 +726,11 @@ class DataAccessService:
                 )
                 continue
             try:
-                admin.groups.patch(
-                    id=child_id,
-                    schemas=[PatchSchema.URN_IETF_PARAMS_SCIM_API_MESSAGES_2_0_PATCH_OP],
-                    operations=[
-                        Patch(
-                            op=PatchOp.ADD,
-                            path="members",
-                            value=[{"value": parent_id}],
-                        )
-                    ],
+                self._account_scim_patch_group(
+                    child_id,
+                    [{"op": "add", "path": "members", "value": [{"value": parent_id}]}],
                 )
             except Exception as exc:  # noqa: BLE001
-                # Already a member is fine.
                 message = str(exc).lower()
                 if "already" in message or "exists" in message or "409" in message:
                     continue
@@ -716,8 +742,7 @@ class DataAccessService:
         group_ids: dict[str, str],
         errors: list[str],
     ) -> None:
-        """Add/remove principals on managed groups via SCIM patch."""
-        admin = self._factory.admin()
+        """Add/remove principals on managed account groups via Account SCIM patch."""
         for change in changes:
             group_id = group_ids.get(change.group.lower())
             if not group_id:
@@ -730,27 +755,14 @@ class DataAccessService:
                 continue
             try:
                 if change.action == MembershipAction.ADD:
-                    admin.groups.patch(
-                        id=group_id,
-                        schemas=[PatchSchema.URN_IETF_PARAMS_SCIM_API_MESSAGES_2_0_PATCH_OP],
-                        operations=[
-                            Patch(
-                                op=PatchOp.ADD,
-                                path="members",
-                                value=[{"value": member_id}],
-                            )
-                        ],
+                    self._account_scim_patch_group(
+                        group_id,
+                        [{"op": "add", "path": "members", "value": [{"value": member_id}]}],
                     )
                 else:
-                    admin.groups.patch(
-                        id=group_id,
-                        schemas=[PatchSchema.URN_IETF_PARAMS_SCIM_API_MESSAGES_2_0_PATCH_OP],
-                        operations=[
-                            Patch(
-                                op=PatchOp.REMOVE,
-                                path=f'members[value eq "{member_id}"]',
-                            )
-                        ],
+                    self._account_scim_patch_group(
+                        group_id,
+                        [{"op": "remove", "path": f'members[value eq "{member_id}"]'}],
                     )
             except Exception as exc:  # noqa: BLE001
                 message = str(exc).lower()
@@ -773,14 +785,18 @@ class DataAccessService:
         try:
             if kind == "GROUP":
                 found = next(
-                    iter(
-                        admin.groups.list(
-                            filter=f'displayName eq "{escaped}"', attributes="id,displayName"
+                    (
+                        g
+                        for g in self._account_scim_list_groups(
+                            filter_expr=f'displayName eq "{escaped}"'
                         )
                     ),
                     None,
                 )
-                return str(found.id) if found and found.id else None
+                if found and found.get("id"):
+                    return str(found["id"])
+                errors.append(f"resolve principal {name}: account group not found")
+                return None
             if kind == "SERVICE_PRINCIPAL":
                 sps = admin.service_principals.list(
                     filter=f'applicationId eq "{escaped}" or displayName eq "{escaped}"',

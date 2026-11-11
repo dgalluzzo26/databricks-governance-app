@@ -2,6 +2,7 @@
  * @file Attribute Explorer — who holds a path and which tables data-access unlocks.
  *
  * Admins see every attribute; path approvers only paths they can decide.
+ * Row-filter dimensions show every principal with the values they hold (no value picker).
  */
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
@@ -53,6 +54,8 @@ export function AttributeExplorerPage() {
 
   const defs = definitions.data?.definitions ?? [];
   const selected = defs.find((d) => d.key === attributeKey);
+  const selectedKind = selected ? definitionKind(selected, accessTagKey) : null;
+  const isRowFilterOverview = selectedKind === "row_filter";
   const values = useMemo(
     () => (selected?.allowedValues ?? []).filter((v) => v && v !== "*"),
     [selected],
@@ -65,14 +68,26 @@ export function AttributeExplorerPage() {
     if (value) setAttributeValue(value);
   }, [searchParams]);
 
+  const canAnalyze = isRowFilterOverview
+    ? Boolean(attributeKey.trim())
+    : Boolean(attributeKey.trim() && attributeValue.trim());
+
   const runAnalyze = () => {
-    if (!attributeKey.trim() || !attributeValue.trim()) return;
+    if (!canAnalyze) return;
+    const key = attributeKey.trim();
     const params = new URLSearchParams(searchParams);
-    params.set("key", attributeKey.trim());
-    params.set("value", attributeValue.trim());
+    params.set("key", key);
+    if (isRowFilterOverview) {
+      params.delete("value");
+    } else {
+      params.set("value", attributeValue.trim());
+    }
     setSearchParams(params, { replace: true });
     void analyze
-      .mutateAsync({ attributeKey: attributeKey.trim(), attributeValue: attributeValue.trim() })
+      .mutateAsync({
+        attributeKey: key,
+        attributeValue: isRowFilterOverview ? "" : attributeValue.trim(),
+      })
       .then((body) => setResult(body));
   };
 
@@ -82,8 +97,8 @@ export function AttributeExplorerPage() {
         title="Attribute explorer"
         description={
           user?.isAdmin
-            ? "See who holds an attribute path and which reviewed tables a data-access value unlocks."
-            : "Inspect attribute paths you approve — holders and, for data access, unlocked tables."
+            ? "See who holds an attribute path and which reviewed tables a data-access value unlocks. Row filters list every principal and the values they hold."
+            : "Inspect attribute paths you approve — holders and, for data access, unlocked tables. Row filters list principals and their values."
         }
       />
 
@@ -113,38 +128,46 @@ export function AttributeExplorerPage() {
               ))}
             </select>
           </label>
-          <label className={styles.field}>
-            <span className={styles.label}>Value / path</span>
-            {values.length > 0 ? (
-              <select
-                className={styles.select}
-                value={attributeValue}
-                onChange={(event) => setAttributeValue(event.target.value)}
-                aria-label="Value"
-              >
-                <option value="">Select value</option>
-                {values.map((value) => (
-                  <option key={value} value={value}>
-                    {value}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <input
-                className={styles.input}
-                value={attributeValue}
-                onChange={(event) => setAttributeValue(event.target.value)}
-                placeholder="e.g. finance"
-                aria-label="Value"
-              />
-            )}
-          </label>
+          {!isRowFilterOverview && (
+            <label className={styles.field}>
+              <span className={styles.label}>Value / path</span>
+              {values.length > 0 ? (
+                <select
+                  className={styles.select}
+                  value={attributeValue}
+                  onChange={(event) => setAttributeValue(event.target.value)}
+                  aria-label="Value"
+                >
+                  <option value="">Select value</option>
+                  {values.map((value) => (
+                    <option key={value} value={value}>
+                      {value}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  className={styles.input}
+                  value={attributeValue}
+                  onChange={(event) => setAttributeValue(event.target.value)}
+                  placeholder="e.g. finance"
+                  aria-label="Value"
+                />
+              )}
+            </label>
+          )}
         </div>
+        {isRowFilterOverview && attributeKey && (
+          <p className={styles.muted} style={{ marginTop: "var(--space-2)" }}>
+            Row filter: Analyze lists every principal and the values they hold for{" "}
+            <code>{attributeKey}</code>.
+          </p>
+        )}
         <div className={styles.buttonRow} style={{ marginTop: "var(--space-3)" }}>
           <button
             type="button"
             className={`${styles.button} ${styles.buttonPrimary}`}
-            disabled={!attributeKey.trim() || !attributeValue.trim() || analyze.isPending}
+            disabled={!canAnalyze || analyze.isPending}
             onClick={runAnalyze}
           >
             {analyze.isPending ? "Analyzing…" : "Analyze"}
@@ -162,12 +185,14 @@ export function AttributeExplorerPage() {
 }
 
 function ResultPanel({ result }: { result: AttributeExplorerResult }) {
+  const isRowOverview = result.kind === "row_filter" && result.attributeValue === "*";
+  const title = isRowOverview
+    ? `${result.attributeKey} — all principals`
+    : `${result.attributeKey} = ${result.attributeValue}`;
+
   return (
     <div className={styles.stack}>
-      <Card
-        title={`${result.attributeKey} = ${result.attributeValue}`}
-        actions={<Badge>{result.kind.replaceAll("_", " ")}</Badge>}
-      >
+      <Card title={title} actions={<Badge>{result.kind.replaceAll("_", " ")}</Badge>}>
         {result.groupName && (
           <p className={styles.muted}>
             Group <code>{result.groupName}</code>
@@ -182,44 +207,87 @@ function ResultPanel({ result }: { result: AttributeExplorerResult }) {
         {result.note && <Alert title="Note">{result.note}</Alert>}
       </Card>
 
-      <Card title="Holders" actions={<Badge>{result.holders.length}</Badge>}>
-        {result.holders.length === 0 ? (
-          <div className={styles.empty}>No active assignments for this path.</div>
-        ) : (
-          <div className={styles.tableWrap}>
-            <table className={styles.table} aria-label="Holders">
-              <thead>
-                <tr>
-                  <th>Principal</th>
-                  <th>Type</th>
-                  <th>Assigned value</th>
-                  <th>Match</th>
-                  <th>Expires</th>
-                </tr>
-              </thead>
-              <tbody>
-                {result.holders.map((item) => (
-                  <tr key={item.assignmentId}>
-                    <td>
-                      <code>{item.principalName}</code>
-                    </td>
-                    <td>
-                      <Badge>{item.principalType}</Badge>
-                    </td>
-                    <td>
-                      <code>{item.attributeValue}</code>
-                    </td>
-                    <td>{item.match}</td>
-                    <td className={styles.muted}>
-                      {item.expiresAt ? new Date(item.expiresAt).toLocaleString() : "—"}
-                    </td>
+      {isRowOverview ? (
+        <Card title="Principals" actions={<Badge>{result.principals.length}</Badge>}>
+          {result.principals.length === 0 ? (
+            <div className={styles.empty}>No active assignments for this dimension.</div>
+          ) : (
+            <div className={styles.tableWrap}>
+              <table className={styles.table} aria-label="Principals">
+                <thead>
+                  <tr>
+                    <th>Principal</th>
+                    <th>Type</th>
+                    <th>Values</th>
+                    <th>Expires (soonest)</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
+                </thead>
+                <tbody>
+                  {result.principals.map((item) => (
+                    <tr key={`${item.principalType}:${item.principalName}`}>
+                      <td>
+                        <code>{item.principalName}</code>
+                      </td>
+                      <td>
+                        <Badge>{item.principalType}</Badge>
+                      </td>
+                      <td>
+                        <div className={styles.buttonRow} style={{ flexWrap: "wrap", gap: "var(--space-1)" }}>
+                          {item.values.map((value) => (
+                            <Badge key={value}>{value}</Badge>
+                          ))}
+                        </div>
+                      </td>
+                      <td className={styles.muted}>
+                        {item.expiresAt ? new Date(item.expiresAt).toLocaleString() : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+      ) : (
+        <Card title="Holders" actions={<Badge>{result.holders.length}</Badge>}>
+          {result.holders.length === 0 ? (
+            <div className={styles.empty}>No active assignments for this path.</div>
+          ) : (
+            <div className={styles.tableWrap}>
+              <table className={styles.table} aria-label="Holders">
+                <thead>
+                  <tr>
+                    <th>Principal</th>
+                    <th>Type</th>
+                    <th>Assigned value</th>
+                    <th>Match</th>
+                    <th>Expires</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {result.holders.map((item) => (
+                    <tr key={item.assignmentId}>
+                      <td>
+                        <code>{item.principalName}</code>
+                      </td>
+                      <td>
+                        <Badge>{item.principalType}</Badge>
+                      </td>
+                      <td>
+                        <code>{item.attributeValue}</code>
+                      </td>
+                      <td>{item.match}</td>
+                      <td className={styles.muted}>
+                        {item.expiresAt ? new Date(item.expiresAt).toLocaleString() : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+      )}
 
       {result.kind === "data_access" && (
         <Card title="Tables unlocked" actions={<Badge>{result.tables.length}</Badge>}>

@@ -10,10 +10,12 @@ from backend.app.models.attribute_explorer import (
     AttributeExplorerResult,
     AttributeHolder,
     AttributeHolderMatch,
+    AttributePrincipalSummary,
     UnlockedTable,
 )
 from backend.app.models.data_access import DataAccessSettings
 from backend.app.models.identity_attribute import AttributeAssignmentFilter, ValueSource
+from backend.app.models.principal import PrincipalKind
 from backend.app.models.user import CurrentUser
 from backend.app.repositories.base import StorageProvider
 from backend.app.services.access_requests import AccessRequestService
@@ -49,27 +51,54 @@ class AttributeExplorerService:
     ) -> AttributeExplorerResult:
         """Return holders (and tables for data_access) for one attribute path.
 
+        Row-filter dimensions accept an empty ``attribute_value`` and return every
+        principal with the values they hold (one row per principal).
+
         Raises:
             ForbiddenError: Caller is neither admin nor approver for this path.
             NotFoundError: Attribute definition is missing.
-            InvalidRequestError: Blank key/value.
+            InvalidRequestError: Blank key, or blank value for non–row-filter kinds.
         """
         key = body.attribute_key.strip()
-        value = body.attribute_value.strip()
-        if not key or not value:
-            raise InvalidRequestError("attribute_key and attribute_value are required")
+        value = (body.attribute_value or "").strip()
+        if not key:
+            raise InvalidRequestError("attribute_key is required")
 
         definition = self._storage.identity_attributes.get_definition(key)
         if definition is None:
             raise NotFoundError(f"Attribute definition '{key}' was not found")
+
+        settings = self._data_access._settings()  # noqa: SLF001
+        kind = self._classify(key, settings, definition.value_source)
+
+        # Row-filter overview: no value picker — authorize on the dimension itself.
+        if kind == AttributeExplorerKind.ROW_FILTER and not value:
+            if not actor.is_admin and not self._access._can_decide_for(  # noqa: SLF001
+                actor, key, attribute_key=key
+            ):
+                raise ForbiddenError("You are not an approver for this attribute")
+            principals = self._principals_overview(key)
+            return AttributeExplorerResult(
+                attribute_key=key,
+                attribute_value="*",
+                kind=kind,
+                holders=[],
+                principals=principals,
+                tables=[],
+                note=(
+                    "Row-filter dimension: one row per principal with every value they hold. "
+                    "No dac_* table grant list."
+                ),
+            )
+
+        if not value:
+            raise InvalidRequestError("attribute_value is required for this attribute kind")
 
         if not actor.is_admin and not self._access._can_decide_for(  # noqa: SLF001
             actor, value, attribute_key=key
         ):
             raise ForbiddenError("You are not an approver for this attribute path")
 
-        settings = self._data_access._settings()  # noqa: SLF001
-        kind = self._classify(key, settings, definition.value_source)
         separator = (
             settings.hierarchy_separator if kind == AttributeExplorerKind.DATA_ACCESS else "."
         )
@@ -105,6 +134,7 @@ class AttributeExplorerService:
             group_name=group,
             parent_group=parent,
             holders=holders,
+            principals=[],
             tables=tables,
             note=note,
         )
@@ -121,6 +151,50 @@ class AttributeExplorerService:
         if value_source != ValueSource.GOVERNED_TAGS:
             return AttributeExplorerKind.ROW_FILTER
         return AttributeExplorerKind.OTHER
+
+    def _principals_overview(self, key: str) -> list[AttributePrincipalSummary]:
+        """Aggregate active assignments for ``key`` into one row per principal."""
+        items = self._storage.identity_attributes.list_assignments(
+            AttributeAssignmentFilter(attribute_key=key, include_inactive=False)
+        )
+        by_principal: dict[tuple[str, PrincipalKind], dict[str, object]] = {}
+        for item in items:
+            assigned = item.attribute_value.strip()
+            if not assigned:
+                continue
+            bucket_key = (item.principal_name, item.principal_type)
+            bucket = by_principal.get(bucket_key)
+            if bucket is None:
+                bucket = {
+                    "values": set(),
+                    "expires": [],
+                }
+                by_principal[bucket_key] = bucket
+            values_set = bucket["values"]
+            assert isinstance(values_set, set)
+            values_set.add(assigned)
+            if item.expires_at is not None:
+                expires_list = bucket["expires"]
+                assert isinstance(expires_list, list)
+                expires_list.append(item.expires_at)
+
+        out: list[AttributePrincipalSummary] = []
+        for (name, ptype), bucket in by_principal.items():
+            values_set = bucket["values"]
+            assert isinstance(values_set, set)
+            expires_list = bucket["expires"]
+            assert isinstance(expires_list, list)
+            soonest = min(expires_list) if expires_list else None
+            out.append(
+                AttributePrincipalSummary(
+                    principal_name=name,
+                    principal_type=ptype,
+                    values=sorted(values_set, key=str.lower),
+                    expires_at=soonest.isoformat() if soonest is not None else None,
+                )
+            )
+        out.sort(key=lambda row: (row.principal_type.value, row.principal_name.lower()))
+        return out
 
     def _holders(self, key: str, value: str, separator: str) -> list[AttributeHolder]:
         """List active assignments related to ``value`` under ``key``."""
