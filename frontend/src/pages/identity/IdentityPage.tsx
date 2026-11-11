@@ -81,21 +81,6 @@ function formatWhen(value: string | null | undefined): string {
 }
 
 /**
- * Converts an ISO timestamp into the `YYYY-MM-DDTHH:mm` local-time format expected by
- * `<input type="datetime-local">`.
- *
- * @param value - ISO-8601 timestamp, or `null`/`undefined` when absent.
- * @returns The local-time input string, or an empty string when the value is missing or invalid.
- */
-function toLocalInput(value: string | null | undefined): string {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
-/**
  * Identity attributes page with a role-gated tab bar and one panel per tab.
  *
  * Reads the current user via `useCurrentUser` and the active tab from the `?tab=` search
