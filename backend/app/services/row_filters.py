@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 import uuid
 from datetime import UTC, datetime
 
@@ -21,7 +22,7 @@ from backend.app.clients.cache import TtlCache
 from backend.app.clients.sql import SqlExecutor, quote_identifier, string_literal
 from backend.app.clients.workspace import WorkspaceClientFactory
 from backend.app.core.config import AppConfig
-from backend.app.core.errors import InvalidRequestError, NotFoundError
+from backend.app.core.errors import InvalidRequestError, NotFoundError, UpstreamError
 from backend.app.models.audit import AuditEvent
 from backend.app.models.identity_attribute import (
     AttributeDefinition,
@@ -47,6 +48,12 @@ logger = logging.getLogger(__name__)
 
 _POLICY_NAME = re.compile(r"^[A-Za-z0-9_]+$")
 _MATCHED_DIMENSION = re.compile(r"has_tag_value\(\s*'[^']*'\s*,\s*'([^']*)'\s*\)")
+
+
+def _is_missing_tag_value_error(exc: Exception) -> bool:
+    """Return True when Unity Catalog rejected a policy because a tag value is missing."""
+    text = str(exc)
+    return "Invalid tag value" in text or "UC_INVALID_POLICY_CONDITION" in text
 
 
 def build_function_sql(function_name: str, mirror_table: str) -> str:
@@ -396,21 +403,52 @@ class RowFilterService:
         if dims:
             self._governed_tags.ensure_values(self.tag_key, dims)
             self._sql.execute(build_function_sql(self.function_name, self.mirror_table))
-            self._sql.execute(
-                build_policy_sql(
-                    policy_name,
-                    self.function_name,
-                    self.tag_key,
-                    dims,
-                    self._except_principals(),
-                )
-            )
+            self._create_row_filter_policy(policy_name, dims)
         else:
             self._sql.execute(f"DROP POLICY IF EXISTS {policy_name} ON METASTORE")
         if self._metadata_cache is not None:
             self._metadata_cache.invalidate(("abac-policy-definitions",))
         self._audit("row_filter.pack_ensured", actor.user_name, {"dimensions": dims})
         return self.pack_status()
+
+    def _create_row_filter_policy(self, policy_name: str, dims: list[str]) -> None:
+        """Create or replace the metastore row-filter policy after tag values exist.
+
+        Unity Catalog rejects ``has_tag_value`` for a value that is not yet on the governed
+        tag. If that happens, add the missing values and retry.
+
+        Args:
+            policy_name: Metastore policy name.
+            dims: Registered dimension keys used in the MATCH clause.
+
+        Raises:
+            UpstreamError: If policy DDL fails for a reason other than a missing tag value,
+                or still fails after retries.
+        """
+        statement = build_policy_sql(
+            policy_name,
+            self.function_name,
+            self.tag_key,
+            dims,
+            self._except_principals(),
+        )
+        last_error: UpstreamError | None = None
+        for attempt in range(5):
+            try:
+                self._sql.execute(statement)
+                return
+            except UpstreamError as exc:
+                last_error = exc
+                if not _is_missing_tag_value_error(exc):
+                    raise
+                logger.warning(
+                    "Row-filter policy rejected missing tag value (attempt %s); adding values and retrying",
+                    attempt + 1,
+                )
+                self._governed_tags.ensure_values(self.tag_key, dims)
+                time.sleep(0.6 * (attempt + 1))
+        assert last_error is not None
+        raise last_error
 
     # -- attachments --------------------------------------------------------------------
 

@@ -2,8 +2,8 @@
 
 Attribute definitions (typically row-filter dimensions) can source their allowed values from
 an admin-supplied read-only query. This module validates that the query is a single
-SELECT/WITH statement and runs it in a bounded wrapper on the SQL warehouse, returning the
-distinct first-column values.
+SELECT/WITH statement and runs it on the SQL warehouse, returning the distinct first-column
+values.
 """
 
 from __future__ import annotations
@@ -12,8 +12,6 @@ import re
 
 from backend.app.clients.sql import SqlExecutor
 from backend.app.core.errors import InvalidRequestError, NotConfiguredError
-
-MAX_SEED_VALUES = 500
 
 _LEADING = re.compile(r"^\s*(select|with)\b", re.IGNORECASE)
 _LINE_COMMENT = re.compile(r"--[^\n]*")
@@ -55,19 +53,21 @@ def run_seed_sql(sql: SqlExecutor | None, statement: str) -> list[str]:
         statement: Admin-supplied seed query.
 
     Returns:
-        Distinct trimmed values sorted case-insensitively.
+        Distinct trimmed first-column values sorted case-insensitively. There is no
+        application-imposed row cap; the SQL warehouse timeout is the practical bound.
 
     Raises:
         NotConfiguredError: If no SQL warehouse is configured.
-        InvalidRequestError: If the query is invalid, returns more than ``MAX_SEED_VALUES``
-            rows, or returns no values (an empty result never overwrites a vocabulary).
+        InvalidRequestError: If the query is invalid or returns no values (an empty result
+            never overwrites a vocabulary).
         UpstreamError: If the warehouse fails to execute the query.
     """
     if sql is None or not sql.configured:
         raise NotConfiguredError("A SQL warehouse is required to run seed queries")
     query = validate_seed_sql(statement)
-    # Wrapping as a subquery keeps the statement read-only and bounded.
-    rows = sql.query(f"SELECT * FROM ({query}) AS seed LIMIT {MAX_SEED_VALUES + 1}")
+    # Wrapping as a subquery keeps the statement read-only. Distinct values are collected
+    # in process so a seed SELECT of one column can return more than a few hundred rows.
+    rows = sql.query(f"SELECT * FROM ({query}) AS seed")
     values: set[str] = set()
     for row in rows:
         if not row:
@@ -78,10 +78,6 @@ def run_seed_sql(sql: SqlExecutor | None, statement: str) -> list[str]:
         text = str(first).strip()
         if text:
             values.add(text)
-    if len(rows) > MAX_SEED_VALUES:
-        raise InvalidRequestError(
-            f"Seed query returned more than {MAX_SEED_VALUES} rows; narrow it with DISTINCT or a filter"
-        )
     if not values:
         # An empty result usually means the source table is row-filtered for the app; never
         # overwrite a vocabulary with nothing.

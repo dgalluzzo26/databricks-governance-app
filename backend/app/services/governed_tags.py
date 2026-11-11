@@ -9,6 +9,7 @@ or row-filter dimensions so tag assignments and ABAC policies stay consistent.
 from __future__ import annotations
 
 import logging
+import time
 
 from databricks.sdk.errors import NotFound
 from databricks.sdk.service.tags import TagPolicy, Value
@@ -19,6 +20,10 @@ from backend.app.core.errors import InvalidRequestError, UpstreamError
 from backend.app.models.identity_attribute import GovernedTagList, GovernedTagSummary
 
 logger = logging.getLogger(__name__)
+
+# Unity Catalog can take a moment to accept a newly added tag value in ABAC MATCH clauses.
+_TAG_VALUE_WAIT_SECONDS = 8.0
+_TAG_VALUE_POLL_SECONDS = 0.4
 
 
 class GovernedTagService:
@@ -77,13 +82,7 @@ class GovernedTagService:
         cached = next((tag for tag in self._all_tags() if tag.tag_key == key), None)
         if cached is not None:
             return cached
-        try:
-            policy = self._factory.admin().tag_policies.get_tag_policy(tag_key=key)
-        except NotFound as exc:
-            raise InvalidRequestError(f"Governed tag '{key}' was not found") from exc
-        except Exception as exc:  # noqa: BLE001
-            raise UpstreamError(f"Could not read governed tag '{key}': {exc}") from exc
-        return self._to_summary(policy)
+        return self._fetch_tag(key)
 
     def values_for_keys(self, tag_keys: list[str]) -> list[str]:
         """Return the union of allowed values across tags, de-duplicated in first-seen order.
@@ -140,24 +139,68 @@ class GovernedTagService:
             InvalidRequestError: If the tag does not exist.
             UpstreamError: If the tag policy cannot be read or updated.
         """
-        current = self.get_tag(tag_key)
-        missing = [value for value in values if value not in current.values]
-        if not missing:
-            return current
-        merged = [*current.values, *missing]
-        try:
-            policy = self._factory.admin().tag_policies.update_tag_policy(
-                tag_key=current.tag_key,
-                tag_policy=TagPolicy(
-                    tag_key=current.tag_key, values=[Value(name=value) for value in merged]
-                ),
-                update_mask="values",
-            )
-        except Exception as exc:  # noqa: BLE001
-            raise UpstreamError(f"Could not update governed tag '{tag_key}': {exc}") from exc
+        wanted = [value for value in values if value]
+        current = self._fetch_tag(tag_key)
+        present = {value.casefold() for value in current.values}
+        missing = [value for value in wanted if value.casefold() not in present]
+        if missing:
+            merged = [*current.values, *missing]
+            try:
+                self._factory.admin().tag_policies.update_tag_policy(
+                    tag_key=current.tag_key,
+                    tag_policy=TagPolicy(
+                        tag_key=current.tag_key, values=[Value(name=value) for value in merged]
+                    ),
+                    update_mask="values",
+                )
+            except Exception as exc:  # noqa: BLE001
+                raise UpstreamError(f"Could not update governed tag '{tag_key}': {exc}") from exc
+            logger.info("Added values %s to governed tag %s", missing, tag_key)
+        live = self._wait_until_values(tag_key, wanted)
         self._cache.invalidate(("governed-tag-policies",))
-        logger.info("Added values %s to governed tag %s", missing, tag_key)
+        return live
+
+    def _fetch_tag(self, tag_key: str) -> GovernedTagSummary:
+        """Read one tag policy from Unity Catalog, bypassing the list cache.
+
+        Raises:
+            InvalidRequestError: If no governed tag policy exists for the key.
+            UpstreamError: If the tag policy cannot be read.
+        """
+        key = tag_key.strip()
+        try:
+            policy = self._factory.admin().tag_policies.get_tag_policy(tag_key=key)
+        except NotFound as exc:
+            raise InvalidRequestError(f"Governed tag '{key}' was not found") from exc
+        except Exception as exc:  # noqa: BLE001
+            raise UpstreamError(f"Could not read governed tag '{key}': {exc}") from exc
         return self._to_summary(policy)
+
+    def _wait_until_values(self, tag_key: str, values: list[str]) -> GovernedTagSummary:
+        """Poll the live tag policy until every requested value is present, or time out.
+
+        Args:
+            tag_key: Governed tag key.
+            values: Values that must appear on the live policy.
+
+        Returns:
+            The latest live tag summary. Callers should still handle a lagging compiler.
+        """
+        needed = {value.casefold() for value in values if value}
+        deadline = time.monotonic() + _TAG_VALUE_WAIT_SECONDS
+        latest = self._fetch_tag(tag_key)
+        while needed - {value.casefold() for value in latest.values}:
+            if time.monotonic() >= deadline:
+                missing = sorted(needed - {value.casefold() for value in latest.values})
+                logger.warning(
+                    "Governed tag %s is still missing values %s after waiting; continuing",
+                    tag_key,
+                    missing,
+                )
+                break
+            time.sleep(_TAG_VALUE_POLL_SECONDS)
+            latest = self._fetch_tag(tag_key)
+        return latest
 
     def _all_tags(self) -> list[GovernedTagSummary]:
         """Return all governed tags from the cache, loading them on a miss."""

@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from backend.app.core.errors import InvalidRequestError
+from backend.app.core.errors import InvalidRequestError, UpstreamError
 from backend.app.models.identity_attribute import (
     AssignAttributeRequest,
     GovernedTagSummary,
@@ -15,7 +15,7 @@ from backend.app.models.principal import PrincipalKind
 from backend.app.models.row_filter import AttachRowFilterRequest, UpsertRowFilterDimensionRequest
 from backend.app.services.identity_attributes import IdentityAttributeService
 from backend.app.services.row_filters import RowFilterService, build_policy_sql
-from backend.app.services.value_seed import validate_seed_sql
+from backend.app.services.value_seed import run_seed_sql, validate_seed_sql
 from backend.tests.test_identity_attributes import FakeGovernedTags, _admin
 
 
@@ -77,6 +77,20 @@ def _services(container) -> tuple[IdentityAttributeService, RowFilterService, Fa
         identity,  # type: ignore[arg-type]
     )
     return identity, service, sql
+
+
+def test_seed_sql_accepts_more_than_five_hundred_values() -> None:
+    class Sql:
+        configured = True
+
+        def query(self, statement: str, parameters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+            assert "AS seed" in statement
+            return [{"v": str(i)} for i in range(600)]
+
+    values = run_seed_sql(Sql(), "SELECT DISTINCT disaster_number FROM t")  # type: ignore[arg-type]
+    assert len(values) == 600
+    assert values[0] == "0"
+    assert values[-1] == "99"
 
 
 def test_seed_sql_must_be_single_select() -> None:
@@ -167,6 +181,36 @@ def test_upsert_dimension_regenerates_policy(container) -> None:  # noqa: ANN001
     assert "EXCEPT `app-sp-id`, `admin-sp-id`" in policy
     assert "geo_region" not in policy
     assert any("CREATE OR REPLACE FUNCTION" in s for s in sql.executed)
+
+
+def test_upsert_dimension_retries_policy_when_tag_value_is_missing(
+    container, monkeypatch: pytest.MonkeyPatch
+) -> None:  # noqa: ANN001
+    monkeypatch.setattr("backend.app.services.row_filters.time.sleep", lambda _s: None)
+    _, service, sql = _services(container)
+    attempts = {"n": 0}
+    original = sql.execute
+
+    def execute(statement: str, parameters: dict[str, Any] | None = None) -> None:
+        if "CREATE OR REPLACE POLICY" in statement:
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                raise UpstreamError(
+                    "SQL statement failed: [RequestId=x ErrorClass=INVALID_PARAMETER_VALUE."
+                    "UC_INVALID_POLICY_CONDITION] Invalid tag value 'state' for key 'row_filter'."
+                )
+        original(statement, parameters)
+
+    sql.execute = execute  # type: ignore[method-assign]
+    dim = service.upsert_dimension(
+        UpsertRowFilterDimensionRequest(
+            key="state", value_source=ValueSource.SQL, value_sql="SELECT abbreviation FROM t"
+        ),
+        _admin(),  # type: ignore[arg-type]
+    )
+    assert dim.key == "state"
+    assert attempts["n"] == 2
+    assert "state" in sql.executed[-1]
 
 
 def test_policy_sql_matches_every_dimension() -> None:
