@@ -245,6 +245,25 @@ included as built-in system exceptions and cannot be removed.
 
 ---
 
+## App roles (admin vs user)
+
+Membership in the configured **admin group** (`ADMIN_GROUP`, default `admins`) makes someone an
+**App admin**. Everyone else is a **User**. Category approvers are Users who are also listed under
+Identity → Category approvers (or belong to a listed group); `/api/me` exposes `isApprover`.
+
+| Area | User | Category approver | App admin |
+| --- | --- | --- | --- |
+| Access explorer | yes | yes | yes |
+| Identity → My attributes / Request access / My requests | yes | yes | yes |
+| Identity → Approvals | no | yes | yes |
+| Identity → Category approvers / Assignments / Definitions | no | no | yes |
+| Policies, Exceptions, Row filters, Mask rules, App status | no | no | yes |
+| Help | yes | yes | yes |
+
+The top bar shows **Admin**, **Approver**, or **User** next to the signed-in display name.
+
+---
+
 ## Access Explorer (read + request path)
 
 UI: `/access-explorer` · API: `POST /api/access-explorer/analyze`, `GET /api/access-explorer/search`

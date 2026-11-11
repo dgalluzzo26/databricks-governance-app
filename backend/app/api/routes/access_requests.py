@@ -20,7 +20,7 @@ router = APIRouter(prefix="/identity", tags=["access-requests"])
 
 @router.get("/category-approvers", response_model=CategoryApproverList)
 def list_category_approvers(
-    _: User,
+    _: Admin,
     container: Container,
     category_path: str | None = None,
 ) -> CategoryApproverList:

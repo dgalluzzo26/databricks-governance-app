@@ -55,13 +55,13 @@ describe("Row filters", () => {
     });
   });
 
-  it("is read-only for non-admins", async () => {
-    renderApp("/row-filters", fakeServices({ user: { ...testUser, isAdmin: false, groups: ["users"] } }));
-
-    expect(await screen.findByRole("table", { name: "Row filter dimensions" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "New dimension" })).not.toBeInTheDocument();
-    expect(screen.queryByText("Policy pack")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Detach" })).not.toBeInTheDocument();
+  it("redirects non-admins away from row filters", async () => {
+    renderApp(
+      "/row-filters",
+      fakeServices({ user: { ...testUser, isAdmin: false, isApprover: false, groups: ["users"] } }),
+    );
+    expect(await screen.findByRole("heading", { name: "Access explorer" })).toBeInTheDocument();
+    expect(screen.queryByRole("table", { name: "Row filter dimensions" })).not.toBeInTheDocument();
   });
 
   it("links SQL definitions to row filters on the identity page", async () => {

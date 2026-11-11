@@ -10,4 +10,5 @@ class CurrentUser(ApiModel):
     user_id: str | None = None
     groups: list[str] = []
     is_admin: bool = False
+    is_approver: bool = False
     workspace_host: str | None = None

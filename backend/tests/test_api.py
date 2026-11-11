@@ -17,6 +17,7 @@ def test_me_resolves_forwarded_user_and_admin_group(client: TestClient) -> None:
     assert body["displayName"] == "Test User"
     assert body["groups"] == ["admins", "users"]
     assert body["isAdmin"] is True
+    assert body["isApprover"] is True
     assert body["workspaceHost"] == HOST
 
 
@@ -31,6 +32,7 @@ def test_me_prefers_user_token_for_groups(client: TestClient) -> None:
 def test_me_non_admin(client: TestClient) -> None:
     body = client.get("/api/me", headers=headers_for("analyst@example.com")).json()
     assert body["isAdmin"] is False
+    assert body["isApprover"] is False
 
 
 def test_me_unknown_user_falls_back_to_header_identity(client: TestClient) -> None:
@@ -46,7 +48,7 @@ def test_me_without_headers_uses_local_identity(client: TestClient) -> None:
 
 
 def test_app_info_reports_storage_and_admin_sp(client: TestClient) -> None:
-    body = client.get("/api/app-info", headers=headers_for("analyst@example.com")).json()
+    body = client.get("/api/app-info", headers=headers_for("admin@example.com")).json()
     assert body["storage"] == {
         "backend": "memory",
         "healthy": True,
@@ -55,6 +57,11 @@ def test_app_info_reports_storage_and_admin_sp(client: TestClient) -> None:
     assert body["authMode"] == "service_principal"
     assert body["adminSecretScope"] == "databricks-governance-app"
     assert body["adminSpConfigured"] is True
+
+
+def test_app_info_forbidden_for_non_admin(client: TestClient) -> None:
+    response = client.get("/api/app-info", headers=headers_for("analyst@example.com"))
+    assert response.status_code == 403
 
 
 def test_unknown_api_route_is_json_404(client: TestClient) -> None:

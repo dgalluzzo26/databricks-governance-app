@@ -68,6 +68,24 @@ class AccessRequestService:
         items = self._storage.category_approvers.list_approvers(category_path)
         return CategoryApproverList(approvers=items, total=len(items))
 
+    def is_category_approver(self, actor: CurrentUser) -> bool:
+        """True when the actor is listed (or in a listed group) for any sensitivity category."""
+        if actor.is_admin:
+            return True
+        actor_groups = {group.lower() for group in actor.groups}
+        for approver in self._storage.category_approvers.list_approvers():
+            if (
+                approver.principal_type == PrincipalKind.USER
+                and approver.principal_name.lower() == actor.user_name.lower()
+            ):
+                return True
+            if (
+                approver.principal_type == PrincipalKind.GROUP
+                and approver.principal_name.lower() in actor_groups
+            ):
+                return True
+        return False
+
     def upsert_approver(
         self, request: UpsertCategoryApproverRequest, actor: CurrentUser
     ) -> CategoryApprover:

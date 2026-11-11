@@ -50,7 +50,7 @@ def delete_definition(key: str, admin: Admin, container: Container) -> None:
 
 @router.get("/assignments", response_model=AttributeAssignmentList)
 def list_assignments(
-    _: User,
+    _: Admin,
     container: Container,
     principal_name: str | None = None,
     principal_type: PrincipalTypeQuery = None,

@@ -42,6 +42,7 @@ export const testUser: CurrentUser = {
   userId: "1",
   groups: ["admins", "users"],
   isAdmin: true,
+  isApprover: true,
   workspaceHost: "https://example.cloud.databricks.com",
 };
 

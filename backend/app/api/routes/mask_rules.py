@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from backend.app.api.deps import Admin, Container, User
+from backend.app.api.deps import Admin, Container
 from backend.app.models.mask_rule import (
     MaskHandlerDraft,
     MaskHandlerDraftRequest,
@@ -19,7 +19,7 @@ router = APIRouter(prefix="/mask-rules", tags=["mask-rules"])
 
 
 @router.get("", response_model=MaskRuleList)
-def list_rules(_: User, container: Container) -> MaskRuleList:
+def list_rules(_: Admin, container: Container) -> MaskRuleList:
     return container.mask_rules.list_rules()
 
 

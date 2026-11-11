@@ -34,6 +34,9 @@ export function UserMenu({ user }: { user: CurrentUser }) {
       >
         <Avatar name={user.displayName} />
         <span className={styles.name}>{user.displayName}</span>
+        <Badge tone={user.isAdmin ? "info" : "neutral"}>
+          {user.isAdmin ? "Admin" : user.isApprover ? "Approver" : "User"}
+        </Badge>
         <ChevronDownIcon />
       </button>
       {open && (
@@ -46,7 +49,9 @@ export function UserMenu({ user }: { user: CurrentUser }) {
             </div>
           </div>
           <div className={styles.section}>
-            <Badge tone={user.isAdmin ? "info" : "neutral"}>{user.isAdmin ? "App admin" : "User"}</Badge>
+            <Badge tone={user.isAdmin ? "info" : "neutral"}>
+              {user.isAdmin ? "App admin" : user.isApprover ? "Category approver" : "User"}
+            </Badge>
           </div>
           {user.workspaceHost && (
             <a className={styles.item} href={user.workspaceHost} target="_blank" rel="noreferrer" role="menuitem">

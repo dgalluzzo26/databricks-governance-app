@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Query
 
-from backend.app.api.deps import Container, User
+from backend.app.api.deps import Admin, Container
 from backend.app.models.policy import PolicyDetail, PolicyListResponse
 
 router = APIRouter(prefix="/policies", tags=["policies"])
@@ -10,7 +10,7 @@ router = APIRouter(prefix="/policies", tags=["policies"])
 
 @router.get("", response_model=PolicyListResponse)
 def list_policies(
-    _: User,
+    _: Admin,
     container: Container,
     scope: str | None = Query(
         None,
@@ -25,5 +25,5 @@ def list_policies(
 
 
 @router.get("/{policy_id}", response_model=PolicyDetail)
-def get_policy(_: User, container: Container, policy_id: str) -> PolicyDetail:
+def get_policy(_: Admin, container: Container, policy_id: str) -> PolicyDetail:
     return container.policies.get_policy(policy_id)

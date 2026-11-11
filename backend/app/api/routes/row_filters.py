@@ -58,7 +58,7 @@ def ensure_pack(admin: Admin, container: Container) -> RowFilterPackStatus:
 
 
 @router.get("/attachments", response_model=RowFilterAttachmentList)
-def list_attachments(_: User, container: Container) -> RowFilterAttachmentList:
+def list_attachments(_: Admin, container: Container) -> RowFilterAttachmentList:
     return container.row_filters.list_attachments()
 
 

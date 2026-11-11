@@ -45,7 +45,8 @@ const VALUE_SOURCE_LABELS: Record<ValueSource, string> = {
 
 const PRINCIPAL_TYPES: PrincipalKind[] = ["USER", "GROUP", "SERVICE_PRINCIPAL"];
 const APPROVER_TYPES: PrincipalKind[] = ["USER", "GROUP"];
-const USER_TABS: IdentityTab[] = ["mine", "request", "my-requests", "approvals"];
+const USER_TABS: IdentityTab[] = ["mine", "request", "my-requests"];
+const APPROVER_TABS: IdentityTab[] = ["approvals"];
 const ADMIN_TABS: IdentityTab[] = ["assignments", "definitions", "approvers"];
 
 function formatWhen(value: string | null | undefined): string {
@@ -66,8 +67,10 @@ export function IdentityPage() {
   const { data: user } = useCurrentUser();
   const [searchParams, setSearchParams] = useSearchParams();
   const requested = (searchParams.get("tab") as IdentityTab | null) ?? "mine";
+  const canApprove = Boolean(user?.isAdmin || user?.isApprover);
   const allowed = new Set<IdentityTab>([
     ...USER_TABS,
+    ...(canApprove ? APPROVER_TABS : []),
     ...(user?.isAdmin ? ADMIN_TABS : []),
   ]);
   const tab: IdentityTab = allowed.has(requested) ? requested : "mine";
@@ -82,7 +85,11 @@ export function IdentityPage() {
     <>
       <PageHeader
         title="Identity attributes"
-        description="App-managed attributes on users, groups, and service principals until Unity Catalog supports native identity attributes."
+        description={
+          user?.isAdmin
+            ? "Manage attribute definitions, assignments, category approvers, and access requests."
+            : "View your attributes, request access, and approve requests when you are a category approver."
+        }
       />
 
       <div className={styles.tabs} role="tablist" aria-label="Identity views">
@@ -113,15 +120,17 @@ export function IdentityPage() {
         >
           My requests
         </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "approvals"}
-          className={`${styles.tab}${tab === "approvals" ? ` ${styles.tabActive}` : ""}`}
-          onClick={() => setTab("approvals")}
-        >
-          Approvals
-        </button>
+        {canApprove && (
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "approvals"}
+            className={`${styles.tab}${tab === "approvals" ? ` ${styles.tabActive}` : ""}`}
+            onClick={() => setTab("approvals")}
+          >
+            Approvals
+          </button>
+        )}
         {user?.isAdmin && (
           <>
             <button
@@ -158,7 +167,7 @@ export function IdentityPage() {
       {tab === "mine" && <MyAttributesPanel />}
       {tab === "request" && <RequestAccessPanel />}
       {tab === "my-requests" && <MyRequestsPanel />}
-      {tab === "approvals" && <ApprovalsPanel />}
+      {tab === "approvals" && canApprove && <ApprovalsPanel />}
       {tab === "approvers" && user?.isAdmin && <CategoryApproversPanel />}
       {tab === "assignments" && user?.isAdmin && <AssignmentsPanel />}
       {tab === "definitions" && user?.isAdmin && <DefinitionsPanel />}

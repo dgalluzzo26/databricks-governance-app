@@ -5,17 +5,22 @@ import styles from "./HomePage.module.css";
 
 export function HomePage() {
   const { data: user } = useCurrentUser();
-  const appInfo = useAppInfo();
+  const appInfo = useAppInfo(Boolean(user?.isAdmin));
   const myAttributes = useMyAttributes();
   if (!user) return null;
 
   const firstName = user.displayName.split(" ")[0] ?? user.displayName;
+  const roleLabel = user.isAdmin ? "Admin" : user.isApprover ? "Approver" : "User";
 
   return (
     <>
       <PageHeader
         title={`Welcome, ${firstName}`}
-        description="Federated data access governance for Unity Catalog: policies, identity attributes, and access requests in one place."
+        description={
+          user.isAdmin
+            ? "Federated data access governance for Unity Catalog: policies, identity attributes, and access requests in one place."
+            : "Explore governed tables, request the attributes you need, and approve requests when you are a category approver."
+        }
       />
       <div className={styles.grid}>
         <Card title="Your identity">
@@ -25,11 +30,12 @@ export function HomePage() {
               <div className={styles.name}>{user.displayName}</div>
               <div className={styles.muted}>{user.email}</div>
             </div>
-            <Badge tone={user.isAdmin ? "info" : "neutral"}>{user.isAdmin ? "App admin" : "User"}</Badge>
+            <Badge tone={user.isAdmin ? "info" : "neutral"}>{roleLabel}</Badge>
           </div>
           <DescriptionList
             items={[
               { label: "User name", value: <code>{user.userName}</code> },
+              { label: "Role", value: <Badge tone={user.isAdmin ? "info" : "neutral"}>{roleLabel}</Badge> },
               {
                 label: "Workspace groups",
                 value: user.groups.length ? (
@@ -64,25 +70,50 @@ export function HomePage() {
           />
         </Card>
 
-        <Card title="App status">
-          {appInfo.isPending && <Spinner />}
-          {appInfo.error && <Alert tone="warning" title="Status unavailable">{appInfo.error.message}</Alert>}
-          {appInfo.data && (
+        {user.isAdmin ? (
+          <Card title="App status">
+            {appInfo.isPending && <Spinner />}
+            {appInfo.error && <Alert tone="warning" title="Status unavailable">{appInfo.error.message}</Alert>}
+            {appInfo.data && (
+              <DescriptionList
+                items={[
+                  {
+                    label: "Storage",
+                    value: (
+                      <Badge tone={appInfo.data.storage.healthy ? "success" : "danger"}>
+                        {appInfo.data.storage.backend} · {appInfo.data.storage.healthy ? "healthy" : "unavailable"}
+                      </Badge>
+                    ),
+                  },
+                  { label: "Version", value: appInfo.data.version },
+                ]}
+              />
+            )}
+          </Card>
+        ) : (
+          <Card title="Get started">
             <DescriptionList
               items={[
                 {
-                  label: "Storage",
-                  value: (
-                    <Badge tone={appInfo.data.storage.healthy ? "success" : "danger"}>
-                      {appInfo.data.storage.backend} · {appInfo.data.storage.healthy ? "healthy" : "unavailable"}
-                    </Badge>
-                  ),
+                  label: "Explore access",
+                  value: <Link to="/access-explorer">Open Access explorer</Link>,
                 },
-                { label: "Version", value: appInfo.data.version },
+                {
+                  label: "Request attributes",
+                  value: <Link to="/identity?tab=request">Request access</Link>,
+                },
+                ...(user.isApprover
+                  ? [
+                      {
+                        label: "Approvals",
+                        value: <Link to="/identity?tab=approvals">Open approvals inbox</Link>,
+                      },
+                    ]
+                  : []),
               ]}
             />
-          )}
-        </Card>
+          </Card>
+        )}
       </div>
     </>
   );

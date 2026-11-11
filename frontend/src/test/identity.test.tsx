@@ -52,19 +52,32 @@ describe("Identity attributes", () => {
     expect(screen.getByRole("button", { name: "Create definition" })).toBeEnabled();
   });
 
-  it("hides admin tabs for non-admins", async () => {
+  it("hides admin tabs for non-admins and approvals unless they are approvers", async () => {
     renderApp(
       "/identity",
       fakeServices({
-        user: { ...testUser, isAdmin: false, groups: ["users"] },
+        user: { ...testUser, isAdmin: false, isApprover: false, groups: ["users"] },
       }),
     );
     expect(await screen.findByRole("heading", { name: "Identity attributes" })).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Definitions" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Assignments" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Category approvers" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Approvals" })).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Request access" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Approvals" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "My attributes" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "My requests" })).toBeInTheDocument();
+  });
+
+  it("shows Approvals for category approvers who are not admins", async () => {
+    renderApp(
+      "/identity",
+      fakeServices({
+        user: { ...testUser, isAdmin: false, isApprover: true, groups: ["finance-owners"] },
+      }),
+    );
+    expect(await screen.findByRole("tab", { name: "Approvals" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Definitions" })).not.toBeInTheDocument();
   });
 
   it("lets a user submit a sensitivity access request", async () => {

@@ -355,3 +355,34 @@ def test_row_filter_request_routes_to_admins(container) -> None:  # noqa: ANN001
     )()
     inbox_other = access.approvals_inbox(non_admin)  # type: ignore[arg-type]
     assert inbox_other.total == 0
+
+
+def test_is_category_approver_for_user_and_group(container) -> None:  # noqa: ANN001
+    from backend.app.models.user import CurrentUser
+
+    access = _access_service(container)
+    actor = _admin()
+    access.upsert_approver(
+        UpsertCategoryApproverRequest(
+            category_path="finance",
+            principal_name="finance-owners",
+            principal_type=PrincipalKind.GROUP,
+        ),
+        actor,
+    )
+    member = CurrentUser(
+        user_name="lead@example.com",
+        email="lead@example.com",
+        display_name="Lead",
+        groups=["finance-owners"],
+        is_admin=False,
+    )
+    outsider = CurrentUser(
+        user_name="other@example.com",
+        email="other@example.com",
+        display_name="Other",
+        groups=["users"],
+        is_admin=False,
+    )
+    assert access.is_category_approver(member) is True
+    assert access.is_category_approver(outsider) is False

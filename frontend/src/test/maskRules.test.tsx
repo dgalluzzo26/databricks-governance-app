@@ -55,13 +55,12 @@ describe("Mask rules", () => {
     );
   });
 
-  it("is read-only for non-admins", async () => {
+  it("redirects non-admins away from mask rules", async () => {
     renderApp(
       "/mask-rules",
-      fakeServices({ user: { ...testUser, isAdmin: false, groups: ["users"] } }),
+      fakeServices({ user: { ...testUser, isAdmin: false, isApprover: false, groups: ["users"] } }),
     );
-    expect(await screen.findByRole("table", { name: "Mask rules" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "New rule" })).not.toBeInTheDocument();
-    expect(screen.queryByText("Policy pack")).not.toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Access explorer" })).toBeInTheDocument();
+    expect(screen.queryByRole("table", { name: "Mask rules" })).not.toBeInTheDocument();
   });
 });

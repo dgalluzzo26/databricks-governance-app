@@ -5,6 +5,7 @@ export interface CurrentUser {
   userId: string | null;
   groups: string[];
   isAdmin: boolean;
+  isApprover: boolean;
   workspaceHost: string | null;
 }
 

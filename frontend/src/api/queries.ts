@@ -46,12 +46,13 @@ export function useCurrentUser() {
   });
 }
 
-export function useAppInfo() {
+export function useAppInfo(enabled = true) {
   const api = useApi();
   return useQuery({
     queryKey: queryKeys.appInfo,
     queryFn: ({ signal }) => api.appInfo.get(signal),
     staleTime: 30_000,
+    enabled,
   });
 }
 

@@ -1,4 +1,5 @@
 import type { RouteObject } from "react-router-dom";
+import { RequireAdmin } from "@/components/auth/RequireAdmin";
 import { AppShell } from "@/components/layout/AppShell";
 import { AppStatusPage } from "@/pages/AppStatusPage";
 import { HomePage } from "@/pages/HomePage";
@@ -18,14 +19,56 @@ export const routes: RouteObject[] = [
     children: [
       { index: true, element: <HomePage /> },
       { path: "access-explorer", element: <AccessExplorerPage /> },
-      { path: "policies", element: <PoliciesPage /> },
-      { path: "policies/:policyId", element: <PolicyDetailPage /> },
-      { path: "exceptions", element: <PolicyExceptionsPage /> },
       { path: "identity", element: <IdentityPage /> },
-      { path: "row-filters", element: <RowFiltersPage /> },
-      { path: "mask-rules", element: <MaskRulesPage /> },
       { path: "help", element: <HelpPage /> },
-      { path: "status", element: <AppStatusPage /> },
+      {
+        path: "policies",
+        element: (
+          <RequireAdmin>
+            <PoliciesPage />
+          </RequireAdmin>
+        ),
+      },
+      {
+        path: "policies/:policyId",
+        element: (
+          <RequireAdmin>
+            <PolicyDetailPage />
+          </RequireAdmin>
+        ),
+      },
+      {
+        path: "exceptions",
+        element: (
+          <RequireAdmin>
+            <PolicyExceptionsPage />
+          </RequireAdmin>
+        ),
+      },
+      {
+        path: "row-filters",
+        element: (
+          <RequireAdmin>
+            <RowFiltersPage />
+          </RequireAdmin>
+        ),
+      },
+      {
+        path: "mask-rules",
+        element: (
+          <RequireAdmin>
+            <MaskRulesPage />
+          </RequireAdmin>
+        ),
+      },
+      {
+        path: "status",
+        element: (
+          <RequireAdmin>
+            <AppStatusPage />
+          </RequireAdmin>
+        ),
+      },
       { path: "*", element: <NotFoundPage /> },
     ],
   },
