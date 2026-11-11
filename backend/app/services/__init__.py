@@ -2,5 +2,6 @@
 
 Each module holds one service that the API routers call: identity resolution, identity
 attributes and their Unity Catalog mirror, access requests and approvals, mask rules, row
-filters, policy exceptions, and read-only ABAC policy and access exploration.
+filters, policy exceptions, data-access group dry-run, and read-only ABAC policy and
+access exploration.
 """

@@ -8,6 +8,7 @@ describe("role-based navigation", () => {
     const menu = await screen.findByRole("button", { name: /Ana Lopez/ });
     expect(menu).toHaveTextContent("Admin");
     expect(screen.getByRole("link", { name: "Policies" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Data access" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "App status" })).toBeInTheDocument();
   });
 
@@ -26,6 +27,7 @@ describe("role-based navigation", () => {
     expect(screen.queryByRole("link", { name: "Policies" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Row filters" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Mask rules" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Data access" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "App status" })).not.toBeInTheDocument();
   });
 });

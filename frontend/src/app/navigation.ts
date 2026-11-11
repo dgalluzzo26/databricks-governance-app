@@ -7,6 +7,7 @@
  */
 import type { ComponentType, SVGProps } from "react";
 import {
+  DataAccessIcon,
   ExceptionIcon,
   ExplorerIcon,
   HelpIcon,
@@ -50,6 +51,7 @@ export const navigation: NavSection[] = [
       { label: "Exceptions", to: "/exceptions", icon: ExceptionIcon, adminOnly: true },
       { label: "Row filters", to: "/row-filters", icon: RowFilterIcon, adminOnly: true },
       { label: "Mask rules", to: "/mask-rules", icon: MaskRuleIcon, adminOnly: true },
+      { label: "Data access", to: "/data-access", icon: DataAccessIcon, adminOnly: true },
     ],
   },
   {

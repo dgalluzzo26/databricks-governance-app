@@ -31,6 +31,10 @@ import type {
   UpsertRowFilterDimensionRequest,
   MaskHandlerValidateRequest,
   TableAccessInsight,
+  DataAccessReadiness,
+  DataAccessRun,
+  DataAccessSettings,
+  DataAccessSettingsView,
 } from "@/api/types";
 import { PreferencesProvider } from "@/app/preferences";
 import { routes } from "@/app/routes";
@@ -44,6 +48,86 @@ export const testUser: CurrentUser = {
   isAdmin: true,
   isApprover: true,
   workspaceHost: "https://example.cloud.databricks.com",
+};
+
+export const testDataAccessSettings: DataAccessSettingsView = {
+  settings: {
+    accessTagKey: "data_access_control",
+    reviewTagKey: "clr_review_status",
+    reviewTagValue: "reviewed",
+    groupPrefix: "dac_",
+    hierarchySeparator: ".",
+    allowedCatalogs: [],
+    dataPrivileges: ["SELECT"],
+    intervalMinutes: 15,
+    conflictPolicy: "hold",
+    dryRun: true,
+  },
+  minIntervalMinutes: 5,
+  applyAvailable: false,
+};
+
+export const testDataAccessReadiness: DataAccessReadiness = {
+  dryRunReady: true,
+  applyReady: false,
+  checks: [
+    { id: "credentials", label: "Account Admin SP credentials", ok: true, requiredFor: "dry_run", detail: "Present" },
+    { id: "warehouse", label: "SQL warehouse", ok: true, requiredFor: "dry_run", detail: "Configured" },
+  ],
+};
+
+export const testDataAccessRun: DataAccessRun = {
+  runId: "run-1",
+  status: "success",
+  trigger: "user",
+  mode: "dry_run",
+  startedAt: "2026-11-11T18:00:00Z",
+  finishedAt: "2026-11-11T18:00:02Z",
+  triggeredBy: "ana.lopez@example.com",
+  error: null,
+  fingerprint: "abc123",
+  summary: {
+    eligibleObjects: 1,
+    skippedUnreviewed: 0,
+    uniqueValues: 1,
+    groupsToCreate: 1,
+    groupsExisting: 0,
+    grantsToAdd: 3,
+    grantsToRevoke: 0,
+    grantsUnchanged: 0,
+    conflicts: 0,
+    invalidValues: 0,
+  },
+  plan: {
+    fingerprint: "abc123",
+    truncated: false,
+    driftSinceLastRun: ["No previous successful dry-run to compare"],
+    invalidValues: [],
+    summary: {
+      eligibleObjects: 1,
+      skippedUnreviewed: 0,
+      uniqueValues: 1,
+      groupsToCreate: 1,
+      groupsExisting: 0,
+      grantsToAdd: 3,
+      grantsToRevoke: 0,
+      grantsUnchanged: 0,
+      conflicts: 0,
+      invalidValues: 0,
+    },
+    groups: [{ name: "dac_finance_budget", value: "finance.budget", parentGroup: null, exists: false }],
+    grantsToAdd: [
+      {
+        securableType: "table",
+        fullName: "sandbox.finance.budget",
+        principal: "dac_finance_budget",
+        privilege: "SELECT",
+        reason: "tagged table",
+      },
+    ],
+    grantsToRevoke: [],
+    conflicts: [],
+  },
 };
 
 export const testAppInfo: AppInfo = {
@@ -477,6 +561,9 @@ export function fakeServices(
     rowFilterDimensions?: RowFilterDimensionList | Error;
     rowFilterAttachments?: RowFilterAttachmentList | Error;
     maskRules?: MaskRuleList | Error;
+    dataAccessSettings?: DataAccessSettingsView | Error;
+    dataAccessReadiness?: DataAccessReadiness | Error;
+    dataAccessRun?: DataAccessRun | null | Error;
   } = {},
 ): ApiServices {
   const governedTags = overrides.governedTags ?? testGovernedTags;
@@ -496,6 +583,34 @@ export function fakeServices(
   return {
     identity: { me: () => (user instanceof Error ? Promise.reject(user) : Promise.resolve(user)) },
     appInfo: { get: () => Promise.resolve(overrides.appInfo ?? testAppInfo) },
+    dataAccess: {
+      getSettings: () =>
+        overrides.dataAccessSettings instanceof Error
+          ? Promise.reject(overrides.dataAccessSettings)
+          : Promise.resolve(overrides.dataAccessSettings ?? testDataAccessSettings),
+      saveSettings: async (body: DataAccessSettings) => ({
+        ...(overrides.dataAccessSettings instanceof Error
+          ? testDataAccessSettings
+          : (overrides.dataAccessSettings ?? testDataAccessSettings)),
+        settings: body,
+      }),
+      readiness: () =>
+        overrides.dataAccessReadiness instanceof Error
+          ? Promise.reject(overrides.dataAccessReadiness)
+          : Promise.resolve(overrides.dataAccessReadiness ?? testDataAccessReadiness),
+      listRuns: () =>
+        overrides.dataAccessRun instanceof Error
+          ? Promise.reject(overrides.dataAccessRun)
+          : Promise.resolve(overrides.dataAccessRun ? [overrides.dataAccessRun] : [testDataAccessRun]),
+      latestRun: () =>
+        overrides.dataAccessRun instanceof Error
+          ? Promise.reject(overrides.dataAccessRun)
+          : Promise.resolve(overrides.dataAccessRun === null ? null : (overrides.dataAccessRun ?? testDataAccessRun)),
+      runNow: () =>
+        overrides.dataAccessRun instanceof Error
+          ? Promise.reject(overrides.dataAccessRun)
+          : Promise.resolve(overrides.dataAccessRun ?? testDataAccessRun),
+    },
     policies: {
       list: () => (policies instanceof Error ? Promise.reject(policies) : Promise.resolve(policies)),
       get: () => (policy instanceof Error ? Promise.reject(policy) : Promise.resolve(policy)),

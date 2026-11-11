@@ -77,6 +77,14 @@ export const HelpIcon = (p: IconProps) => (
   </Icon>
 );
 
+/** Data-access grants / group-sync nav icon. */
+export const DataAccessIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <rect x="2.5" y="3.5" width="11" height="9" rx="1" />
+    <path d="M5 7.5h6M5 10h3.5" />
+  </Icon>
+);
+
 /** Policy exceptions / warning nav icon. */
 export const ExceptionIcon = (p: IconProps) => (
   <Icon {...p}>

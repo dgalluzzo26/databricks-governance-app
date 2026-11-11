@@ -5,7 +5,7 @@
  * metadata (app name, version, workspace, auth mode, warehouse, schema, admin group) from
  * `useAppInfo`.
  */
-import { useAppInfo } from "@/api/queries";
+import { useAppInfo, useDataAccessReadiness } from "@/api/queries";
 import { Alert, Badge, Card, DescriptionList, ErrorAlert, PageHeader, Spinner } from "@/components/ui";
 import styles from "./AppStatusPage.module.css";
 
@@ -17,6 +17,7 @@ import styles from "./AppStatusPage.module.css";
  */
 export function AppStatusPage() {
   const { data: info, isPending, error } = useAppInfo();
+  const readiness = useDataAccessReadiness();
 
   return (
     <>
@@ -66,6 +67,41 @@ export function AppStatusPage() {
                 },
               ]}
             />
+          </Card>
+          <Card title="Data access sync">
+            {readiness.isPending && <Spinner label="Checking data-access readiness" />}
+            {readiness.error && <ErrorAlert error={readiness.error} title="Could not load data-access readiness" />}
+            {readiness.data && (
+              <DescriptionList
+                items={[
+                  {
+                    label: "Dry-run",
+                    value: (
+                      <Badge tone={readiness.data.dryRunReady ? "success" : "warning"}>
+                        {readiness.data.dryRunReady ? "Ready" : "Not ready"}
+                      </Badge>
+                    ),
+                  },
+                  {
+                    label: "Apply",
+                    value: (
+                      <Badge tone={readiness.data.applyReady ? "success" : "neutral"}>
+                        {readiness.data.applyReady ? "Probes pass (still locked)" : "Locked"}
+                      </Badge>
+                    ),
+                  },
+                  ...readiness.data.checks.map((check) => ({
+                    label: check.label,
+                    value: (
+                      <span>
+                        <Badge tone={check.ok ? "success" : "danger"}>{check.ok ? "ok" : "fail"}</Badge>
+                        {check.detail ? ` · ${check.detail}` : ""}
+                      </span>
+                    ),
+                  })),
+                ]}
+              />
+            )}
           </Card>
           <Card title="Deployment">
             <DescriptionList

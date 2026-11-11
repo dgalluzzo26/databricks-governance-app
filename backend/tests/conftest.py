@@ -41,6 +41,7 @@ class FakeWorkspaceFactory:
         self.admin_configured = admin_configured
         self._client = SimpleNamespace(
             users=FakeUsersApi(groups_by_user),
+            groups=SimpleNamespace(list=lambda **_kwargs: iter([])),
             current_user=SimpleNamespace(me=lambda: SimpleNamespace(user_name="local@example.com")),
             config=SimpleNamespace(host=HOST),
         )

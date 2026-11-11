@@ -17,6 +17,7 @@ from backend.app.repositories.factory import build_storage
 from backend.app.services.access_explorer import AccessExplorerService
 from backend.app.services.access_requests import AccessRequestService
 from backend.app.services.app_info import AppInfoService
+from backend.app.services.data_access import DataAccessService
 from backend.app.services.governed_tags import GovernedTagService
 from backend.app.services.identity import IdentityService
 from backend.app.services.identity_attributes import IdentityAttributeService
@@ -53,6 +54,7 @@ class ServiceContainer:
         mask_rules: Mask rules and their policy pack.
         access_explorer: Per-table access analysis.
         policy_exceptions: Principals exempted from the app-managed policies.
+        data_access: Tag-driven group grant dry-run (settings, readiness, sync).
         identity_uc_sync: Mirrors identity attributes to Unity Catalog Delta; only set for
             the Lakebase backend, otherwise None.
     """
@@ -72,6 +74,7 @@ class ServiceContainer:
     mask_rules: MaskRuleService
     access_explorer: AccessExplorerService
     policy_exceptions: PolicyExceptionService
+    data_access: DataAccessService
     identity_uc_sync: IdentityUcSync | None = None
 
     @classmethod
@@ -99,11 +102,7 @@ class ServiceContainer:
         metadata_cache = TtlCache(config.metadata_cache_ttl_seconds)
         governed_tags = GovernedTagService(workspace, metadata_cache)
         # Lakebase is OLTP; UC Delta is the enforcement mirror for mask/row-filter UDFs.
-        uc_sync = (
-            IdentityUcSync(app_sql, config)
-            if storage.kind == StorageBackend.LAKEBASE.value
-            else None
-        )
+        uc_sync = IdentityUcSync(app_sql, config) if storage.kind == StorageBackend.LAKEBASE.value else None
         identity_attributes = IdentityAttributeService(storage, governed_tags, uc_sync, sql)
         policy_exceptions = PolicyExceptionService(storage, workspace)
         row_filters = RowFilterService(
@@ -129,6 +128,7 @@ class ServiceContainer:
         policy_exceptions._mask_rules = mask_rules  # noqa: SLF001
         policy_exceptions._row_filters = row_filters  # noqa: SLF001
         access_requests = AccessRequestService(storage, identity_attributes)
+        data_access = DataAccessService(storage, sql, workspace)
         return cls(
             config=config,
             workspace=workspace,
@@ -152,6 +152,7 @@ class ServiceContainer:
                 access_requests,
             ),
             policy_exceptions=policy_exceptions,
+            data_access=data_access,
             identity_uc_sync=uc_sync,
         )
 
@@ -181,9 +182,14 @@ class ServiceContainer:
                 self.mask_rules.sync_to_uc()
         except Exception:
             logger.exception("Failed to sync mask rules to UC mirror")
+        try:
+            self.data_access.start_scheduler()
+        except Exception:
+            logger.exception("Failed to start data-access dry-run scheduler")
 
     def shutdown(self) -> None:
-        """Release storage resources such as connection pools."""
+        """Stop background work and release storage resources such as connection pools."""
+        self.data_access.stop_scheduler()
         self.storage.close()
 
     def _ensure_admin_credentials(self) -> None:

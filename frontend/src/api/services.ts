@@ -9,6 +9,10 @@ import type {
   AccessRequest,
   AccessRequestList,
   AppInfo,
+  DataAccessReadiness,
+  DataAccessRun,
+  DataAccessSettings,
+  DataAccessSettingsView,
   AttachRowFilterRequest,
   ApprovalInbox,
   AssignAttributeRequest,
@@ -102,6 +106,71 @@ export class AppInfoApi {
    */
   get(signal?: AbortSignal): Promise<AppInfo> {
     return this.http.get<AppInfo>("/app-info", signal);
+  }
+}
+
+/** Tag-driven data-access group dry-run (admin only). */
+export class DataAccessApi {
+  /** @param http - Shared HTTP client. */
+  constructor(private readonly http: HttpClient) {}
+
+  /**
+   * `GET /data-access/settings` — current dry-run settings (admin only).
+   *
+   * @param signal - Optional abort signal.
+   * @returns Settings plus the minimum allowed interval.
+   */
+  getSettings(signal?: AbortSignal): Promise<DataAccessSettingsView> {
+    return this.http.get<DataAccessSettingsView>("/data-access/settings", signal);
+  }
+
+  /**
+   * `PUT /data-access/settings` — persist dry-run settings (admin only).
+   *
+   * @param body - Settings to store. Apply mode is rejected until that phase ships.
+   * @returns The stored settings view.
+   */
+  saveSettings(body: DataAccessSettings): Promise<DataAccessSettingsView> {
+    return this.http.put<DataAccessSettingsView>("/data-access/settings", body);
+  }
+
+  /**
+   * `GET /data-access/readiness` — Account Admin SP probes (admin only).
+   *
+   * @param signal - Optional abort signal.
+   * @returns Per-check results and rolled-up ready flags.
+   */
+  readiness(signal?: AbortSignal): Promise<DataAccessReadiness> {
+    return this.http.get<DataAccessReadiness>("/data-access/readiness", signal);
+  }
+
+  /**
+   * `GET /data-access/runs` — recent dry-runs, newest first, without full plans.
+   *
+   * @param signal - Optional abort signal.
+   * @returns Stored runs.
+   */
+  listRuns(signal?: AbortSignal): Promise<DataAccessRun[]> {
+    return this.http.get<DataAccessRun[]>("/data-access/runs", signal);
+  }
+
+  /**
+   * `GET /data-access/runs/latest` — most recent dry-run including its truncated plan.
+   *
+   * @param signal - Optional abort signal.
+   * @returns The latest run, or `null` when none exist.
+   */
+  latestRun(signal?: AbortSignal): Promise<DataAccessRun | null> {
+    return this.http.get<DataAccessRun | null>("/data-access/runs/latest", signal);
+  }
+
+  /**
+   * `POST /data-access/runs` — run a dry-run now. Does not create groups or grants.
+   *
+   * @returns The finished run.
+   */
+  runNow(): Promise<DataAccessRun> {
+    return this.http.post<DataAccessRun>("/data-access/runs");
   }
 }
 
@@ -792,6 +861,7 @@ export class PolicyExceptionsApi {
 export interface ApiServices {
   identity: IdentityApi;
   appInfo: AppInfoApi;
+  dataAccess: DataAccessApi;
   policies: PoliciesApi;
   identityAttributes: IdentityAttributesApi;
   rowFilters: RowFiltersApi;
@@ -811,6 +881,7 @@ export function createApiServices(http: HttpClient = new HttpClient()): ApiServi
   return {
     identity: new IdentityApi(http),
     appInfo: new AppInfoApi(http),
+    dataAccess: new DataAccessApi(http),
     policies: new PoliciesApi(http),
     identityAttributes: new IdentityAttributesApi(http),
     rowFilters: new RowFiltersApi(http),

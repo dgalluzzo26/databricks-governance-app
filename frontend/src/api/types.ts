@@ -816,3 +816,112 @@ export interface TreeTableList {
   /** `true` when the backend stopped at its result limit. */
   truncated: boolean;
 }
+
+/** How the planner treats an ancestor grant that would over-expose descendants. */
+export type DataAccessConflictPolicy = "hold" | "warn";
+
+/** Admin-editable configuration for the data-access group dry-run. */
+export interface DataAccessSettings {
+  accessTagKey: string;
+  reviewTagKey: string;
+  reviewTagValue: string;
+  groupPrefix: string;
+  hierarchySeparator: string;
+  allowedCatalogs: string[];
+  dataPrivileges: string[];
+  intervalMinutes: number;
+  conflictPolicy: DataAccessConflictPolicy;
+  dryRun: boolean;
+}
+
+/** Settings plus constants the UI needs (`GET /data-access/settings`). */
+export interface DataAccessSettingsView {
+  settings: DataAccessSettings;
+  minIntervalMinutes: number;
+  applyAvailable: boolean;
+}
+
+/** One Account Admin SP / warehouse capability probe. */
+export interface DataAccessReadinessCheck {
+  id: string;
+  label: string;
+  ok: boolean;
+  requiredFor: string;
+  detail: string | null;
+}
+
+/** Rolled-up readiness for dry-run vs apply (`GET /data-access/readiness`). */
+export interface DataAccessReadiness {
+  dryRunReady: boolean;
+  applyReady: boolean;
+  checks: DataAccessReadinessCheck[];
+}
+
+/** A managed group the dry-run would create or reuse. */
+export interface DataAccessPlannedGroup {
+  name: string;
+  value: string;
+  parentGroup: string | null;
+  exists: boolean;
+}
+
+/** One privilege on one securable for one managed group. */
+export interface DataAccessPlannedGrant {
+  securableType: string;
+  fullName: string;
+  principal: string;
+  privilege: string;
+  reason: string;
+}
+
+/** Ancestor grant that would expose a descendant the tags do not allow. */
+export interface DataAccessConflict {
+  ancestorType: string;
+  ancestorName: string;
+  ancestorValue: string;
+  descendantName: string;
+  descendantValue: string | null;
+  reason: string;
+}
+
+/** Counts for a dry-run plan. */
+export interface DataAccessPlanSummary {
+  eligibleObjects: number;
+  skippedUnreviewed: number;
+  uniqueValues: number;
+  groupsToCreate: number;
+  groupsExisting: number;
+  grantsToAdd: number;
+  grantsToRevoke: number;
+  grantsUnchanged: number;
+  conflicts: number;
+  invalidValues: number;
+}
+
+/** Truncated dry-run plan. */
+export interface DataAccessPlan {
+  summary: DataAccessPlanSummary;
+  fingerprint: string;
+  groups: DataAccessPlannedGroup[];
+  grantsToAdd: DataAccessPlannedGrant[];
+  grantsToRevoke: DataAccessPlannedGrant[];
+  conflicts: DataAccessConflict[];
+  invalidValues: string[];
+  truncated: boolean;
+  driftSinceLastRun: string[];
+}
+
+/** One stored dry-run execution (`GET/POST /data-access/runs`). */
+export interface DataAccessRun {
+  runId: string;
+  status: "running" | "success" | "failed";
+  trigger: "schedule" | "user";
+  mode: string;
+  startedAt: string;
+  finishedAt: string | null;
+  triggeredBy: string;
+  error: string | null;
+  summary: DataAccessPlanSummary | null;
+  plan: DataAccessPlan | null;
+  fingerprint: string | null;
+}

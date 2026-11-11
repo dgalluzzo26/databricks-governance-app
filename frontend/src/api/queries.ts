@@ -23,6 +23,7 @@ import type {
   UpsertMaskRuleRequest,
   UpsertPolicyExceptionRequest,
   UpsertRowFilterDimensionRequest,
+  DataAccessSettings,
 } from "./types";
 
 /**
@@ -52,6 +53,10 @@ export const queryKeys = {
   maskRulePack: ["mask-rules", "pack"] as const,
   helpFlows: ["help", "flows"] as const,
   policyExceptions: ["policy-exceptions"] as const,
+  dataAccessSettings: ["data-access", "settings"] as const,
+  dataAccessReadiness: ["data-access", "readiness"] as const,
+  dataAccessRuns: ["data-access", "runs"] as const,
+  dataAccessLatestRun: ["data-access", "runs", "latest"] as const,
 };
 
 /**
@@ -83,6 +88,97 @@ export function useAppInfo(enabled = true) {
     queryFn: ({ signal }) => api.appInfo.get(signal),
     staleTime: 30_000,
     enabled,
+  });
+}
+
+/**
+ * Fetches data-access dry-run settings (`GET /data-access/settings`, admin only).
+ *
+ * @remarks Key: `queryKeys.dataAccessSettings`.
+ * @returns The query result for {@link DataAccessSettingsView}.
+ */
+export function useDataAccessSettings() {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.dataAccessSettings,
+    queryFn: ({ signal }) => api.dataAccess.getSettings(signal),
+  });
+}
+
+/**
+ * Saves data-access dry-run settings (`PUT /data-access/settings`).
+ *
+ * @returns A mutation taking {@link DataAccessSettings}.
+ */
+export function useSaveDataAccessSettings() {
+  const api = useApi();
+  const client = useQueryClient();
+  return useMutation({
+    meta: { busyMessage: "Saving data-access settings…" },
+    mutationFn: (body: DataAccessSettings) => api.dataAccess.saveSettings(body),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ["data-access"] });
+    },
+  });
+}
+
+/**
+ * Probes Account Admin SP readiness for data-access sync (`GET /data-access/readiness`).
+ *
+ * @remarks Key: `queryKeys.dataAccessReadiness`. Stale after 30 seconds.
+ * @returns The query result for {@link DataAccessReadiness}.
+ */
+export function useDataAccessReadiness() {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.dataAccessReadiness,
+    queryFn: ({ signal }) => api.dataAccess.readiness(signal),
+    staleTime: 30_000,
+  });
+}
+
+/**
+ * Fetches recent data-access dry-runs (`GET /data-access/runs`).
+ *
+ * @remarks Key: `queryKeys.dataAccessRuns`.
+ * @returns The query result for {@link DataAccessRun}[].
+ */
+export function useDataAccessRuns() {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.dataAccessRuns,
+    queryFn: ({ signal }) => api.dataAccess.listRuns(signal),
+  });
+}
+
+/**
+ * Fetches the latest data-access dry-run including its plan (`GET /data-access/runs/latest`).
+ *
+ * @remarks Key: `queryKeys.dataAccessLatestRun`.
+ * @returns The query result for {@link DataAccessRun} or `null`.
+ */
+export function useDataAccessLatestRun() {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.dataAccessLatestRun,
+    queryFn: ({ signal }) => api.dataAccess.latestRun(signal),
+  });
+}
+
+/**
+ * Runs a data-access dry-run now (`POST /data-access/runs`). Never creates groups or grants.
+ *
+ * @returns A mutation with no variables, resolving to a {@link DataAccessRun}.
+ */
+export function useRunDataAccessSync() {
+  const api = useApi();
+  const client = useQueryClient();
+  return useMutation({
+    meta: { busyMessage: "Running data-access dry-run…" },
+    mutationFn: () => api.dataAccess.runNow(),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ["data-access"] });
+    },
   });
 }
 
