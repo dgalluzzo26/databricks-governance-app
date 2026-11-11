@@ -194,7 +194,7 @@ export function IdentityPage() {
               className={`${styles.tab}${tab === "approvers" ? ` ${styles.tabActive}` : ""}`}
               onClick={() => setTab("approvers")}
             >
-              Category approvers
+              Approvers
             </button>
             <button
               type="button"
@@ -553,8 +553,8 @@ function ApprovalsPanel() {
     <Card title="Approvals inbox" actions={data ? <Badge>{data.total}</Badge> : null}>
       <p className={styles.muted}>
         Pending sensitivity and row-filter requests plus sensitivity assignments expiring within 30
-        days. Category approvers decide matching sensitivity paths; row-filter requests and unrouted
-        sensitivity go to app admins.
+        days. Category and dimension approvers decide matching requests; when none are configured,
+        app admins review.
       </p>
       {isPending && <Spinner label="Loading approvals" />}
       {error && <ErrorAlert error={error} title="Could not load approvals" />}
@@ -680,51 +680,90 @@ function ApprovalsPanel() {
 }
 
 /**
- * "Category approvers" tab: configure which users or groups approve sensitivity requests for each
- * `sensitivity_category` path.
+ * "Approvers" tab: configure who reviews sensitivity category requests and row-filter
+ * dimension requests.
  *
- * Uses `useGovernedTags("sensitivity_category")` to populate the category picker and
- * `useCategoryApprovers` to list existing approvers. Adding calls `useUpsertCategoryApprover`
- * (clearing the principal field on success); removing calls `useDeleteCategoryApprover`.
+ * Uses `useGovernedTags("sensitivity_category")` and `useRowFilterDimensions` for pickers,
+ * and `useCategoryApprovers` to list existing approvers. Adding calls
+ * `useUpsertCategoryApprover`; removing calls `useDeleteCategoryApprover`.
  *
  * @remarks
- * Rendered only for app admins. The most specific configured category path wins when routing a
- * request; a parent path's approvers cover child paths only when no deeper path is configured.
+ * Rendered only for app admins. Sensitivity uses most-specific category path routing.
+ * Row-filter dimensions use exact designated approvers and fall back to app admins when none
+ * are configured.
  */
 function CategoryApproversPanel() {
   const { data, isPending, error } = useCategoryApprovers();
   const tags = useGovernedTags("sensitivity_category");
+  const dimensions = useRowFilterDimensions();
   const upsert = useUpsertCategoryApprover();
   const remove = useDeleteCategoryApprover();
   const categoryTag = tags.data?.tags.find((tag) => tag.tagKey === "sensitivity_category");
+  const [scope, setScope] = useState<"sensitivity" | "row_filter">("sensitivity");
   const [categoryPath, setCategoryPath] = useState("");
+  const [dimensionKey, setDimensionKey] = useState("");
   const [principalName, setPrincipalName] = useState("");
   const [principalType, setPrincipalType] = useState<PrincipalKind>("GROUP");
 
+  const pathReady = scope === "sensitivity" ? Boolean(categoryPath) : Boolean(dimensionKey);
+
   return (
     <div className={styles.stack}>
-      <Card title="Add category approver">
+      <Card title="Add approver">
         <p className={styles.muted}>
-          Approvers are set on sensitivity_category paths. The most specific path wins — an approver
-          on finance.budget handles finance.budget… requests; finance approvers cover children only
-          when no deeper category is configured.
+          Sensitivity approvers are set on sensitivity_category paths (most specific path wins).
+          Row-filter approvers are set per dimension; when none are configured, app admins review
+          those requests.
         </p>
         <div className={styles.formGrid}>
           <label className={styles.field}>
-            <span className={styles.label}>Category</span>
+            <span className={styles.label}>Scope</span>
             <select
               className={styles.select}
-              value={categoryPath}
-              onChange={(event) => setCategoryPath(event.target.value)}
+              value={scope}
+              onChange={(event) => {
+                setScope(event.target.value as "sensitivity" | "row_filter");
+                setCategoryPath("");
+                setDimensionKey("");
+              }}
             >
-              <option value="">Select category</option>
-              {(categoryTag?.values ?? []).map((value) => (
-                <option key={value} value={value}>
-                  {value}
-                </option>
-              ))}
+              <option value="sensitivity">Sensitivity category</option>
+              <option value="row_filter">Row-filter dimension</option>
             </select>
           </label>
+          {scope === "sensitivity" ? (
+            <label className={styles.field}>
+              <span className={styles.label}>Category</span>
+              <select
+                className={styles.select}
+                value={categoryPath}
+                onChange={(event) => setCategoryPath(event.target.value)}
+              >
+                <option value="">Select category</option>
+                {(categoryTag?.values ?? []).map((value) => (
+                  <option key={value} value={value}>
+                    {value}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <label className={styles.field}>
+              <span className={styles.label}>Dimension</span>
+              <select
+                className={styles.select}
+                value={dimensionKey}
+                onChange={(event) => setDimensionKey(event.target.value)}
+              >
+                <option value="">Select dimension</option>
+                {(dimensions.data?.dimensions ?? []).map((item) => (
+                  <option key={item.key} value={item.key}>
+                    {item.key}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <label className={styles.field}>
             <span className={styles.label}>Principal type</span>
             <select
@@ -753,15 +792,18 @@ function CategoryApproversPanel() {
           <button
             type="button"
             className={`${styles.button} ${styles.buttonPrimary}`}
-            disabled={!categoryPath || !principalName.trim() || upsert.isPending}
+            disabled={!pathReady || !principalName.trim() || upsert.isPending}
             onClick={() =>
-              void upsert.mutateAsync({
-                categoryPath,
-                principalName: principalName.trim(),
-                principalType,
-              }).then(() => {
-                setPrincipalName("");
-              })
+              void upsert
+                .mutateAsync({
+                  attributeKey: scope === "sensitivity" ? "sensitivity" : dimensionKey,
+                  categoryPath: scope === "sensitivity" ? categoryPath : dimensionKey,
+                  principalName: principalName.trim(),
+                  principalType,
+                })
+                .then(() => {
+                  setPrincipalName("");
+                })
             }
           >
             {upsert.isPending ? "Saving…" : "Add approver"}
@@ -774,14 +816,15 @@ function CategoryApproversPanel() {
         {isPending && <Spinner label="Loading approvers" />}
         {error && <ErrorAlert error={error} title="Could not load approvers" />}
         {data && data.approvers.length === 0 && (
-          <div className={styles.empty}>No category approvers configured yet.</div>
+          <div className={styles.empty}>No approvers configured yet.</div>
         )}
         {data && data.approvers.length > 0 && (
           <div className={styles.tableWrap}>
-            <table className={styles.table} aria-label="Category approvers">
+            <table className={styles.table} aria-label="Approvers">
               <thead>
                 <tr>
-                  <th>Category</th>
+                  <th>Attribute</th>
+                  <th>Path / dimension</th>
                   <th>Principal</th>
                   <th>Type</th>
                   <th />
@@ -790,6 +833,9 @@ function CategoryApproversPanel() {
               <tbody>
                 {data.approvers.map((item) => (
                   <tr key={item.approverId}>
+                    <td>
+                      <code>{item.attributeKey}</code>
+                    </td>
                     <td>
                       <code>{item.categoryPath}</code>
                     </td>

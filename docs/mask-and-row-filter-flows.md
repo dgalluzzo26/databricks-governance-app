@@ -288,7 +288,7 @@ UC grants are intentionally omitted for now.
 | Attribute | Routing |
 | --- | --- |
 | `sensitivity` | Most-specific configured **category approver** for a path prefix of the requested value. If none is configured (or the matched category has zero approvers) → **app admins**. |
-| Row-filter dimensions (`state`, …) | Always **app admins** (no category hierarchy for dimensions). |
+| Row-filter dimensions (`state`, …) | Designated **dimension approvers** (Identity → Approvers → Row-filter dimension). If none are configured → **app admins**. |
 
 Create requests via `POST /api/identity/access-requests` with `attribute_key` + `attribute_value`
 (defaults to `sensitivity` when `attribute_key` is omitted). Approvals appear in Identity → Approvals.

@@ -37,6 +37,7 @@ from backend.app.models.identity_attribute import (
     AssignAttributeRequest,
     AttributeAssignmentFilter,
     AttributeSource,
+    ValueSource,
 )
 from backend.app.models.principal import PrincipalKind
 from backend.app.models.user import CurrentUser
@@ -98,28 +99,37 @@ class AccessRequestService:
 
     # --- category approvers ---
 
-    def list_approvers(self, category_path: str | None = None) -> CategoryApproverList:
-        """List configured category approvers.
+    def list_approvers(
+        self,
+        category_path: str | None = None,
+        *,
+        attribute_key: str | None = None,
+    ) -> CategoryApproverList:
+        """List configured approvers.
 
         Args:
-            category_path: Restrict to one category; None lists approvers for all categories.
+            category_path: Restrict to one path; None lists every path.
+            attribute_key: Restrict to ``sensitivity`` or a row-filter dimension; None lists all.
 
         Returns:
             The approvers and their count.
         """
-        items = self._storage.category_approvers.list_approvers(category_path)
+        items = self._storage.category_approvers.list_approvers(
+            category_path, attribute_key=attribute_key
+        )
         return CategoryApproverList(approvers=items, total=len(items))
 
     def is_category_approver(self, actor: CurrentUser) -> bool:
-        """True when the actor is listed (or in a listed group) for any sensitivity category.
+        """True when the actor is listed (or in a listed group) for any approver scope.
 
-        App admins always qualify. Used to decide whether to show the approvals inbox.
+        Covers sensitivity categories and row-filter dimensions. App admins always qualify.
+        Used to decide whether to show the approvals inbox.
 
         Args:
             actor: The signed-in user.
 
         Returns:
-            Whether the actor can approve requests for at least one category.
+            Whether the actor can approve requests for at least one configured scope.
         """
         if actor.is_admin:
             return True
@@ -140,36 +150,54 @@ class AccessRequestService:
     def upsert_approver(
         self, request: UpsertCategoryApproverRequest, actor: CurrentUser
     ) -> CategoryApprover:
-        """Add or update an approver for a sensitivity category.
+        """Add or update an approver for a sensitivity category or row-filter dimension.
 
-        The category must be a current value of the ``sensitivity_category`` governed tag
-        and is stored in that tag's casing. Records a
-        ``sensitivity_category_approver.upserted`` audit event.
+        Sensitivity categories must be current ``sensitivity_category`` values. Row-filter
+        dimensions must already exist as non-governed-tag attribute definitions; the stored
+        path is the dimension key. Records a ``sensitivity_category_approver.upserted`` audit
+        event (legacy name; payload includes ``attribute_key``).
 
         Args:
-            request: Category path and the USER or GROUP principal to register.
+            request: Attribute key, path, and the USER or GROUP principal to register.
             actor: The admin making the change.
 
         Returns:
             The saved approver.
 
         Raises:
-            InvalidRequestError: If the principal is not a USER or GROUP, the category is not
-                a ``sensitivity_category`` value, or the tag values cannot be loaded.
+            InvalidRequestError: If the principal is not a USER or GROUP, or the path / dimension
+                is not valid.
         """
         if request.principal_type not in {PrincipalKind.USER, PrincipalKind.GROUP}:
             raise InvalidRequestError("Approvers must be USER or GROUP principals")
-        categories = self._sensitivity_category_values()
-        allowed = {value.lower(): value for value in categories}
-        if request.category_path.lower() not in allowed:
-            raise InvalidRequestError(
-                f"Category '{request.category_path}' is not a sensitivity_category value. "
-                f"Allowed: {', '.join(categories)}"
-            )
-        category = allowed[request.category_path.lower()]
+        attribute_key = (request.attribute_key or SENSITIVITY_ATTRIBUTE_KEY).strip().lower()
+        if attribute_key == SENSITIVITY_ATTRIBUTE_KEY:
+            categories = self._sensitivity_category_values()
+            allowed = {value.lower(): value for value in categories}
+            if request.category_path.lower() not in allowed:
+                raise InvalidRequestError(
+                    f"Category '{request.category_path}' is not a sensitivity_category value. "
+                    f"Allowed: {', '.join(categories)}"
+                )
+            category = allowed[request.category_path.lower()]
+        else:
+            definition = self._storage.identity_attributes.get_definition(attribute_key)
+            if definition is None or definition.value_source == ValueSource.GOVERNED_TAGS:
+                raise InvalidRequestError(
+                    f"'{attribute_key}' is not a configured row-filter dimension"
+                )
+            # Dimension approvers are exact-match on the dimension key.
+            if request.category_path.strip().lower() not in {attribute_key, definition.key.lower()}:
+                raise InvalidRequestError(
+                    f"Row-filter approvers use the dimension key as the path "
+                    f"(expected '{definition.key}')"
+                )
+            category = definition.key
+            attribute_key = definition.key
         saved = self._storage.category_approvers.upsert_approver(
             CategoryApprover(
                 approver_id=str(uuid.uuid4()),
+                attribute_key=attribute_key,
                 category_path=category,
                 principal_name=request.principal_name,
                 principal_type=request.principal_type,
@@ -182,6 +210,7 @@ class AccessRequestService:
             actor.user_name,
             {
                 "approver_id": saved.approver_id,
+                "attribute_key": saved.attribute_key,
                 "category_path": saved.category_path,
                 "principal_name": saved.principal_name,
                 "principal_type": saved.principal_type.value,
@@ -242,14 +271,7 @@ class AccessRequestService:
                 f"You already have a pending request for {key}='{value}'"
             )
         now = datetime.now(UTC)
-        routing = self.resolve_routing(value if key == SENSITIVITY_ATTRIBUTE_KEY else key)
-        # Row-filter / non-sensitivity attributes have no category hierarchy — app admins.
-        if key != SENSITIVITY_ATTRIBUTE_KEY:
-            routing = {
-                "resolved_category": None,
-                "routed_to": AccessRequestRouteKind.APP_ADMINS,
-                "approvers": [],
-            }
+        routing = self.resolve_attribute_routing(key, value)
         created = self._storage.access_requests.create(
             AccessRequest(
                 request_id=str(uuid.uuid4()),
@@ -306,39 +328,84 @@ class AccessRequestService:
             (``AccessRequestRouteKind``), and ``approvers`` (list of
             ``AccessRequestApprover``, empty when routed to app admins).
         """
-        configured = self._storage.category_approvers.list_configured_categories()
-        category = resolve_category(path, configured)
-        approvers: list[AccessRequestApprover] = []
-        if category is not None:
-            approvers = [
-                AccessRequestApprover(
-                    principal_name=item.principal_name,
-                    principal_type=item.principal_type,
-                )
-                for item in self._storage.category_approvers.list_approvers(category)
-            ]
-        if not approvers:
+        return self.resolve_attribute_routing(SENSITIVITY_ATTRIBUTE_KEY, path)
+
+    def resolve_attribute_routing(self, attribute_key: str, attribute_value: str) -> dict:
+        """Who reviews a request for ``attribute_key`` / ``attribute_value``.
+
+        Sensitivity uses most-specific category routing. Row-filter dimensions use exact
+        designated approvers for that dimension key; when none are configured, app admins
+        decide.
+
+        Args:
+            attribute_key: ``sensitivity`` or a row-filter dimension key.
+            attribute_value: Requested value (sensitivity path or dimension value).
+
+        Returns:
+            A dict with ``resolved_category`` (str or None), ``routed_to``
+            (``AccessRequestRouteKind``), and ``approvers`` (list of
+            ``AccessRequestApprover``, empty when routed to app admins).
+        """
+        key = (attribute_key or SENSITIVITY_ATTRIBUTE_KEY).strip().lower()
+        if key == SENSITIVITY_ATTRIBUTE_KEY:
+            configured = self._storage.category_approvers.list_configured_categories(
+                attribute_key=SENSITIVITY_ATTRIBUTE_KEY
+            )
+            category = resolve_category(attribute_value, configured)
+            approvers: list[AccessRequestApprover] = []
+            if category is not None:
+                approvers = [
+                    AccessRequestApprover(
+                        principal_name=item.principal_name,
+                        principal_type=item.principal_type,
+                    )
+                    for item in self._storage.category_approvers.list_approvers(
+                        category, attribute_key=SENSITIVITY_ATTRIBUTE_KEY
+                    )
+                ]
+            if not approvers:
+                return {
+                    "resolved_category": category,
+                    "routed_to": AccessRequestRouteKind.APP_ADMINS,
+                    "approvers": [],
+                }
             return {
                 "resolved_category": category,
-                "routed_to": AccessRequestRouteKind.APP_ADMINS,
-                "approvers": [],
+                "routed_to": AccessRequestRouteKind.CATEGORY_APPROVERS,
+                "approvers": approvers,
             }
-        return {
-            "resolved_category": category,
-            "routed_to": AccessRequestRouteKind.CATEGORY_APPROVERS,
-            "approvers": approvers,
-        }
 
-    def _with_routing(self, request: AccessRequest) -> AccessRequest:
-        """Return a copy of ``request`` with live routing fields (non-sensitivity -> app admins)."""
-        if request.attribute_key != SENSITIVITY_ATTRIBUTE_KEY:
-            routing = {
+        # Row-filter (or other) dimension: designated approvers for this attribute key.
+        dimension_approvers = self._storage.category_approvers.list_approvers(
+            key, attribute_key=key
+        )
+        if not dimension_approvers:
+            # Also accept rows stored with attribute_key only (path may match key casing).
+            dimension_approvers = [
+                item
+                for item in self._storage.category_approvers.list_approvers(attribute_key=key)
+            ]
+        if not dimension_approvers:
+            return {
                 "resolved_category": None,
                 "routed_to": AccessRequestRouteKind.APP_ADMINS,
                 "approvers": [],
             }
-        else:
-            routing = self.resolve_routing(request.attribute_value)
+        return {
+            "resolved_category": key,
+            "routed_to": AccessRequestRouteKind.CATEGORY_APPROVERS,
+            "approvers": [
+                AccessRequestApprover(
+                    principal_name=item.principal_name,
+                    principal_type=item.principal_type,
+                )
+                for item in dimension_approvers
+            ],
+        }
+
+    def _with_routing(self, request: AccessRequest) -> AccessRequest:
+        """Return a copy of ``request`` with live routing fields."""
+        routing = self.resolve_attribute_routing(request.attribute_key, request.attribute_value)
         return request.model_copy(
             update={
                 "resolved_category": routing["resolved_category"],
@@ -576,7 +643,9 @@ class AccessRequestService:
         Returns:
             Inbox items sorted by soonest expiry.
         """
-        configured = self._storage.category_approvers.list_configured_categories()
+        configured = self._storage.category_approvers.list_configured_categories(
+            attribute_key=SENSITIVITY_ATTRIBUTE_KEY
+        )
         pending = self._storage.access_requests.list_by_status(AccessRequestStatus.PENDING)
         items: list[ApprovalInboxItem] = []
 
@@ -585,11 +654,13 @@ class AccessRequestService:
                 actor, request.attribute_value, attribute_key=request.attribute_key
             ):
                 continue
-            category = (
-                resolve_category(request.attribute_value, configured)
-                if request.attribute_key == SENSITIVITY_ATTRIBUTE_KEY
-                else None
-            )
+            if request.attribute_key == SENSITIVITY_ATTRIBUTE_KEY:
+                category = resolve_category(request.attribute_value, configured)
+            else:
+                routing = self.resolve_attribute_routing(
+                    request.attribute_key, request.attribute_value
+                )
+                category = routing["resolved_category"]
             items.append(
                 ApprovalInboxItem(
                     kind=ApprovalItemKind.REQUEST,
@@ -628,7 +699,12 @@ class AccessRequestService:
             ):
                 continue
             category = resolve_category(assignment.attribute_value, configured)
-            if not self._can_decide(actor, assignment.attribute_value, category):
+            if not self._can_decide(
+                actor,
+                assignment.attribute_value,
+                category,
+                attribute_key=SENSITIVITY_ATTRIBUTE_KEY,
+            ):
                 continue
             items.append(
                 ApprovalInboxItem(
@@ -726,21 +802,36 @@ class AccessRequestService:
         if not self._can_decide_for(actor, path, attribute_key=attribute_key):
             if attribute_key == SENSITIVITY_ATTRIBUTE_KEY:
                 raise ForbiddenError("You are not an approver for this sensitivity category")
-            raise ForbiddenError("Only app admins can decide this attribute request")
+            raise ForbiddenError("You are not an approver for this row-filter dimension")
 
     def _can_decide_for(
         self, actor: CurrentUser, path: str, *, attribute_key: str = SENSITIVITY_ATTRIBUTE_KEY
     ) -> bool:
-        """Whether the actor may decide: sensitivity via category routing, others admins only."""
-        if attribute_key != SENSITIVITY_ATTRIBUTE_KEY:
+        """Whether the actor may decide a request for this attribute and path/value."""
+        key = (attribute_key or SENSITIVITY_ATTRIBUTE_KEY).strip().lower()
+        if key == SENSITIVITY_ATTRIBUTE_KEY:
+            category = resolve_category(
+                path,
+                self._storage.category_approvers.list_configured_categories(
+                    attribute_key=SENSITIVITY_ATTRIBUTE_KEY
+                ),
+            )
+            return self._can_decide(
+                actor, path, category, attribute_key=SENSITIVITY_ATTRIBUTE_KEY
+            )
+        routing = self.resolve_attribute_routing(key, path)
+        # No designated dimension approvers → app admins only.
+        if routing["routed_to"] == AccessRequestRouteKind.APP_ADMINS:
             return actor.is_admin
-        category = resolve_category(
-            path, self._storage.category_approvers.list_configured_categories()
-        )
-        return self._can_decide(actor, path, category)
+        return self._can_decide(actor, path, key, attribute_key=key)
 
     def _can_decide(
-        self, actor: CurrentUser, path: str, category: str | None
+        self,
+        actor: CurrentUser,
+        path: str,
+        category: str | None,
+        *,
+        attribute_key: str = SENSITIVITY_ATTRIBUTE_KEY,
     ) -> bool:
         """Whether the actor is an app admin or a USER/GROUP approver of ``category``."""
         # App admins always see and decide unrouted requests and can override.
@@ -748,9 +839,11 @@ class AccessRequestService:
             return True
         if category is None:
             return False
-        approvers = self._storage.category_approvers.list_approvers(category)
+        approvers = self._storage.category_approvers.list_approvers(
+            category, attribute_key=attribute_key
+        )
         if not approvers:
-            # Category exists but no reviewers — only app admins (handled above).
+            # Category / dimension exists but no reviewers — only app admins (handled above).
             return False
         actor_groups = {group.lower() for group in actor.groups}
         for approver in approvers:

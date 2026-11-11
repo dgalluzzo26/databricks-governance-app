@@ -357,6 +357,74 @@ def test_row_filter_request_routes_to_admins(container) -> None:  # noqa: ANN001
     assert inbox_other.total == 0
 
 
+def test_row_filter_request_routes_to_dimension_approvers(container) -> None:  # noqa: ANN001
+    from backend.app.models.identity_attribute import ValueSource
+    from backend.app.models.user import CurrentUser
+
+    identity = _service(container)
+    access = AccessRequestService(container.storage, identity)
+    actor = _admin()
+    identity.upsert_definition(
+        UpsertAttributeDefinitionRequest(
+            key="state",
+            description="US state",
+            value_source=ValueSource.FREE_FORM,
+            allowed_values=["CA", "NY", "*"],
+        ),
+        actor,
+    )
+    access.upsert_approver(
+        UpsertCategoryApproverRequest(
+            attribute_key="state",
+            category_path="state",
+            principal_name="geo-owners",
+            principal_type=PrincipalKind.GROUP,
+        ),
+        actor,
+    )
+    requester = CurrentUser(
+        user_name="analyst@example.com",
+        email="analyst@example.com",
+        display_name="Analyst",
+        groups=["users"],
+        is_admin=False,
+    )
+    created = access.create_request(
+        CreateAccessRequestBody(
+            attribute_key="state",
+            attribute_value="CA",
+            requested_expires_at=datetime.now(UTC) + timedelta(days=30),
+            justification="Need California rows",
+        ),
+        requester,
+    )
+    assert created.routed_to.value == "category_approvers"
+    assert created.resolved_category == "state"
+    assert [a.principal_name for a in created.approvers] == ["geo-owners"]
+
+    member = CurrentUser(
+        user_name="lead@example.com",
+        email="lead@example.com",
+        display_name="Lead",
+        groups=["geo-owners"],
+        is_admin=False,
+    )
+    outsider = CurrentUser(
+        user_name="other@example.com",
+        email="other@example.com",
+        display_name="Other",
+        groups=["users"],
+        is_admin=False,
+    )
+    inbox_member = access.approvals_inbox(member)
+    assert any(i.request and i.request.request_id == created.request_id for i in inbox_member.items)
+    inbox_outsider = access.approvals_inbox(outsider)
+    assert inbox_outsider.total == 0
+    # Admins still see and can decide dimension-routed requests.
+    inbox_admin = access.approvals_inbox(actor)
+    assert any(i.request and i.request.request_id == created.request_id for i in inbox_admin.items)
+
+
 def test_is_category_approver_for_user_and_group(container) -> None:  # noqa: ANN001
     from backend.app.models.user import CurrentUser
 

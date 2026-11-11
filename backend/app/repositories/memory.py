@@ -235,39 +235,59 @@ class InMemoryCategoryApproverRepository(CategoryApproverRepository):
         self._items: dict[str, CategoryApprover] = {}
         self._lock = threading.Lock()
 
-    def list_approvers(self, category_path: str | None = None) -> list[CategoryApprover]:
-        """Return approvers, optionally filtered by category path.
+    def list_approvers(
+        self,
+        category_path: str | None = None,
+        *,
+        attribute_key: str | None = None,
+    ) -> list[CategoryApprover]:
+        """Return approvers, optionally filtered by path and/or attribute key.
 
-        Category matching is case-insensitive. Results are sorted by category,
-        principal type, then principal name.
+        Matching is case-insensitive. Results are sorted by attribute, path, principal
+        type, then principal name.
 
         Args:
-            category_path: When set, only approvers for this category are returned.
+            category_path: When set, only approvers for this path are returned.
+            attribute_key: When set, only approvers for this attribute are returned.
 
         Returns:
             Matching approvers in stable sort order.
         """
         with self._lock:
             items = list(self._items.values())
+        if attribute_key:
+            key = attribute_key.lower()
+            items = [a for a in items if a.attribute_key.lower() == key]
         if category_path:
             needle = category_path.lower()
             items = [a for a in items if a.category_path.lower() == needle]
         return sorted(
             items,
-            key=lambda a: (a.category_path.lower(), a.principal_type.value, a.principal_name.lower()),
+            key=lambda a: (
+                a.attribute_key.lower(),
+                a.category_path.lower(),
+                a.principal_type.value,
+                a.principal_name.lower(),
+            ),
         )
 
-    def list_configured_categories(self) -> list[str]:
-        """Return unique category paths with at least one approver.
+    def list_configured_categories(self, *, attribute_key: str | None = None) -> list[str]:
+        """Return unique paths with at least one approver.
 
         First-seen casing is preserved; the list is ordered case-insensitively.
 
+        Args:
+            attribute_key: When set, only paths for this attribute are returned.
+
         Returns:
-            Distinct category paths.
+            Distinct category / dimension paths.
         """
         with self._lock:
-            paths = {a.category_path for a in self._items.values()}
-        # Preserve first-seen casing by sorting case-insensitively on unique lower keys.
+            items = list(self._items.values())
+        if attribute_key:
+            key = attribute_key.lower()
+            items = [a for a in items if a.attribute_key.lower() == key]
+        paths = {a.category_path for a in items}
         by_lower: dict[str, str] = {}
         for path in paths:
             by_lower.setdefault(path.lower(), path)
@@ -300,7 +320,8 @@ class InMemoryCategoryApproverRepository(CategoryApproverRepository):
         with self._lock:
             for existing in self._items.values():
                 if (
-                    existing.category_path.lower() == approver.category_path.lower()
+                    existing.attribute_key.lower() == approver.attribute_key.lower()
+                    and existing.category_path.lower() == approver.category_path.lower()
                     and existing.principal_name.lower() == approver.principal_name.lower()
                     and existing.principal_type == approver.principal_type
                 ):

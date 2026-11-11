@@ -260,9 +260,16 @@ export class IdentityAttributesApi {
    * @returns The approvers.
    * @throws {@link ApiError} On a non-2xx response.
    */
-  listCategoryApprovers(categoryPath?: string, signal?: AbortSignal): Promise<CategoryApproverList> {
+  listCategoryApprovers(
+    categoryPath?: string,
+    signal?: AbortSignal,
+    attributeKey?: string,
+  ): Promise<CategoryApproverList> {
     return this.http.get<CategoryApproverList>(
-      `/identity/category-approvers${toQuery({ category_path: categoryPath })}`,
+      `/identity/category-approvers${toQuery({
+        category_path: categoryPath,
+        attribute_key: attributeKey,
+      })}`,
       signal,
     );
   }

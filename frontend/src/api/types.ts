@@ -403,7 +403,12 @@ export interface ApproverPreview {
 /** A principal allowed to decide sensitivity requests under a category path. */
 export interface CategoryApprover {
   approverId: string;
-  /** Dotted sensitivity path prefix this approver covers; requests route to the most specific matching prefix (case-insensitive). */
+  /** `sensitivity` for category routing, or a row-filter dimension key. */
+  attributeKey: string;
+  /**
+   * For sensitivity: dotted category path prefix (most specific match wins).
+   * For row filters: the dimension key (exact match).
+   */
   categoryPath: string;
   principalName: string;
   principalType: PrincipalKind;
@@ -458,6 +463,8 @@ export interface ApplyPolicyExceptionsResult {
 
 /** Body for `PUT /identity/category-approvers`. Values are trimmed and must be non-empty. */
 export interface UpsertCategoryApproverRequest {
+  /** `sensitivity` (default) or a row-filter dimension key. */
+  attributeKey?: string;
   categoryPath: string;
   principalName: string;
   principalType: PrincipalKind;

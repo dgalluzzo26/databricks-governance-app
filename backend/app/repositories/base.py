@@ -181,26 +181,36 @@ class IdentityAttributeRepository(ABC):
 
 
 class CategoryApproverRepository(ABC):
-    """Store mapping sensitivity category paths to their designated approvers."""
+    """Store designated approvers for sensitivity categories and row-filter dimensions."""
 
     @abstractmethod
-    def list_approvers(self, category_path: str | None = None) -> list[CategoryApprover]:
-        """List category approvers, optionally for one path.
+    def list_approvers(
+        self,
+        category_path: str | None = None,
+        *,
+        attribute_key: str | None = None,
+    ) -> list[CategoryApprover]:
+        """List approvers, optionally filtered by path and/or attribute key.
 
         Args:
-            category_path: When set, only approvers for this sensitivity path; when None,
-                return every configured approver.
+            category_path: When set, only approvers for this path (sensitivity category or
+                dimension key).
+            attribute_key: When set, only approvers for this attribute (``sensitivity`` or a
+                row-filter dimension).
 
         Returns:
-            Matching approver rows. Empty when none are configured (or none match the path).
+            Matching approver rows. Empty when none are configured (or none match).
         """
 
     @abstractmethod
-    def list_configured_categories(self) -> list[str]:
-        """List distinct sensitivity category paths that have at least one approver.
+    def list_configured_categories(self, *, attribute_key: str | None = None) -> list[str]:
+        """List distinct paths that have at least one approver.
+
+        Args:
+            attribute_key: When set, only paths for this attribute key.
 
         Returns:
-            Category paths. Empty when no approvers are configured.
+            Category / dimension paths. Empty when no approvers are configured.
         """
 
     @abstractmethod

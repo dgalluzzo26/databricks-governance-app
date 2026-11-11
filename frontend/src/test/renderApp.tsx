@@ -356,6 +356,7 @@ export const testCategoryApprovers: CategoryApproverList = {
   approvers: [
     {
       approverId: "ap1",
+      attributeKey: "sensitivity",
       categoryPath: "finance",
       principalName: "finance-owners",
       principalType: "GROUP",
@@ -550,6 +551,7 @@ export function fakeServices(
           : Promise.resolve(categoryApprovers),
       upsertCategoryApprover: async (body: UpsertCategoryApproverRequest) => ({
         approverId: "new-ap",
+        attributeKey: body.attributeKey ?? "sensitivity",
         categoryPath: body.categoryPath,
         principalName: body.principalName,
         principalType: body.principalType,

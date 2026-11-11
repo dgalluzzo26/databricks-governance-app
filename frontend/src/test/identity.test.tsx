@@ -62,7 +62,7 @@ describe("Identity attributes", () => {
     expect(await screen.findByRole("heading", { name: "Identity attributes" })).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Definitions" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Assignments" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("tab", { name: "Category approvers" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Approvers" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Approvals" })).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Request access" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "My attributes" })).toBeInTheDocument();
@@ -105,7 +105,7 @@ describe("Identity attributes", () => {
   it("lists category approvers for admins", async () => {
     renderApp("/identity?tab=approvers");
     expect(await screen.findByText("Configured approvers")).toBeInTheDocument();
-    const table = await screen.findByRole("table", { name: "Category approvers" });
+    const table = await screen.findByRole("table", { name: "Approvers" });
     expect(within(table).getByText("finance")).toBeInTheDocument();
     expect(within(table).getByText("finance-owners")).toBeInTheDocument();
   });

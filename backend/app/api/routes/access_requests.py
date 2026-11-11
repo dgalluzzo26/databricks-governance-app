@@ -29,22 +29,24 @@ def list_category_approvers(
     _: Admin,
     container: Container,
     category_path: str | None = None,
+    attribute_key: str | None = None,
 ) -> CategoryApproverList:
-    """List sensitivity category approvers.
+    """List designated approvers for sensitivity categories and row-filter dimensions.
 
     Requires app admin.
 
     Args:
         container: Process-scoped service container (dependency injection).
-        category_path: Optional sensitivity path filter.
+        category_path: Optional path filter (sensitivity category or dimension key).
+        attribute_key: Optional attribute filter (``sensitivity`` or a dimension key).
 
     Returns:
-        Matching category approver records.
+        Matching approver records.
 
     Raises:
         ForbiddenError: If the caller is not an app admin (HTTP 403).
     """
-    return container.access_requests.list_approvers(category_path)
+    return container.access_requests.list_approvers(category_path, attribute_key=attribute_key)
 
 
 @router.put("/category-approvers", response_model=CategoryApprover)

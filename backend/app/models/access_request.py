@@ -44,11 +44,14 @@ class ApprovalItemKind(StrEnum):
 
 
 class CategoryApprover(ApiModel):
-    """Principal allowed to decide requests for a sensitivity category.
+    """Principal allowed to decide requests for a sensitivity category or row-filter dimension.
 
     Attributes:
         approver_id: Unique identifier of the approver entry.
-        category_path: ``sensitivity_category`` value (dotted path prefix) the approver covers.
+        attribute_key: ``sensitivity`` for category routing, or a row-filter dimension key
+            for dimension-scoped approvers.
+        category_path: For sensitivity, the ``sensitivity_category`` path prefix. For a
+            row-filter dimension, the dimension key (exact match).
         principal_name: User name or group name of the approver.
         principal_type: ``USER`` or ``GROUP``.
         created_by: Admin who registered the approver, or None when unknown.
@@ -56,6 +59,7 @@ class CategoryApprover(ApiModel):
     """
 
     approver_id: str
+    attribute_key: str = SENSITIVITY_ATTRIBUTE_KEY
     category_path: str
     principal_name: str
     principal_type: PrincipalKind
@@ -64,19 +68,25 @@ class CategoryApprover(ApiModel):
 
 
 class UpsertCategoryApproverRequest(ApiModel):
-    """Request body to register an approver for a sensitivity category.
+    """Request body to register an approver for a sensitivity category or row-filter dimension.
 
     Attributes:
-        category_path: Category to cover; stripped, 1-256 chars.
+        attribute_key: ``sensitivity`` (default) or a row-filter dimension key; stripped and
+            lower-cased, 1-128 chars.
+        category_path: Category path (sensitivity) or dimension key (row filter); stripped,
+            1-256 chars. For row filters this should match ``attribute_key``.
         principal_name: Approver user or group name; stripped, 1-256 chars.
         principal_type: Kind of principal; the service accepts only ``USER`` or ``GROUP``.
     """
 
+    attribute_key: str = Field(
+        default=SENSITIVITY_ATTRIBUTE_KEY, min_length=1, max_length=128
+    )
     category_path: str = Field(min_length=1, max_length=256)
     principal_name: str = Field(min_length=1, max_length=256)
     principal_type: PrincipalKind
 
-    @field_validator("category_path", "principal_name")
+    @field_validator("category_path", "principal_name", "attribute_key")
     @classmethod
     def _strip(cls, value: str) -> str:
         """Strip whitespace and reject blank values.
@@ -95,6 +105,12 @@ class UpsertCategoryApproverRequest(ApiModel):
             raise ValueError("Value cannot be empty")
         return text
 
+    @field_validator("attribute_key")
+    @classmethod
+    def _lower_attribute_key(cls, value: str) -> str:
+        """Normalize the attribute key to stripped lower case."""
+        return value.strip().lower()
+
 
 class CategoryApproverList(ApiModel):
     """Registered category approvers.
@@ -112,9 +128,9 @@ class AccessRequestRouteKind(StrEnum):
     """Who reviews an access request.
 
     Attributes:
-        CATEGORY_APPROVERS: Approvers of the most specific matching sensitivity category.
-        APP_ADMINS: App admins, used when no category approver applies or for
-            non-sensitivity attributes such as row-filter dimensions.
+        CATEGORY_APPROVERS: Designated approvers (sensitivity category or row-filter
+            dimension). Falls back to ``APP_ADMINS`` when none are configured.
+        APP_ADMINS: App admins, used when no designated approver applies.
     """
 
     CATEGORY_APPROVERS = "category_approvers"
@@ -151,10 +167,10 @@ class AccessRequest(ApiModel):
         decision_note: Optional note from the decider.
         approved_expires_at: Expiry actually granted on approval; None otherwise.
         created_at: Submission time.
-        resolved_category: Sensitivity category the request routes to; None for
-            non-sensitivity attributes or when no category matches.
+        resolved_category: Sensitivity category the request routes to; for row-filter
+            dimensions this is the dimension key when designated approvers exist, else None.
         routed_to: Who reviews the request.
-        approvers: Category approvers reviewing it; empty when routed to app admins.
+        approvers: Designated approvers reviewing it; empty when routed to app admins.
     """
 
     request_id: str

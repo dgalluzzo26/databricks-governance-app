@@ -213,19 +213,28 @@ class _UnavailableIdentityAttributes(_Unavailable, IdentityAttributeRepository):
 class _UnavailableCategoryApprovers(_Unavailable, CategoryApproverRepository):
     """Category-approver repository that always raises ``NotConfiguredError``."""
 
-    def list_approvers(self, category_path: str | None = None) -> list[CategoryApprover]:
+    def list_approvers(
+        self,
+        category_path: str | None = None,
+        *,
+        attribute_key: str | None = None,
+    ) -> list[CategoryApprover]:
         """Raise because no category-approver store is configured.
 
         Args:
-            category_path: Optional category filter that would have been applied.
+            category_path: Optional path filter that would have been applied.
+            attribute_key: Optional attribute filter that would have been applied.
 
         Raises:
             NotConfiguredError: Storage is unavailable.
         """
         self._fail()
 
-    def list_configured_categories(self) -> list[str]:
+    def list_configured_categories(self, *, attribute_key: str | None = None) -> list[str]:
         """Raise because no category-approver store is configured.
+
+        Args:
+            attribute_key: Optional attribute filter that would have been applied.
 
         Raises:
             NotConfiguredError: Storage is unavailable.

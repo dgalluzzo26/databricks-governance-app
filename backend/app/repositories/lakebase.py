@@ -172,6 +172,7 @@ CREATE INDEX IF NOT EXISTS identity_attributes_key_idx
 
 CREATE TABLE IF NOT EXISTS {schema}.sensitivity_category_approvers (
   approver_id     TEXT PRIMARY KEY,
+  attribute_key   TEXT NOT NULL DEFAULT 'sensitivity',
   category_path   TEXT NOT NULL,
   principal_name  TEXT NOT NULL,
   principal_type  TEXT NOT NULL,
@@ -180,10 +181,10 @@ CREATE TABLE IF NOT EXISTS {schema}.sensitivity_category_approvers (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS sensitivity_category_approvers_uniq
   ON {schema}.sensitivity_category_approvers (
-    lower(category_path), lower(principal_name), principal_type
+    lower(attribute_key), lower(category_path), lower(principal_name), principal_type
   );
 CREATE INDEX IF NOT EXISTS sensitivity_category_approvers_path_idx
-  ON {schema}.sensitivity_category_approvers (lower(category_path));
+  ON {schema}.sensitivity_category_approvers (lower(attribute_key), lower(category_path));
 
 CREATE TABLE IF NOT EXISTS {schema}.access_requests (
   request_id             TEXT PRIMARY KEY,
@@ -681,39 +682,59 @@ class LakebaseCategoryApproverRepository(CategoryApproverRepository):
     def __init__(self, pg: _Pg) -> None:
         self._pg = pg
 
-    def list_approvers(self, category_path: str | None = None) -> list[CategoryApprover]:
-        """List approvers, optionally filtered by category path.
+    def list_approvers(
+        self,
+        category_path: str | None = None,
+        *,
+        attribute_key: str | None = None,
+    ) -> list[CategoryApprover]:
+        """List approvers, optionally filtered by path and/or attribute key.
 
         Args:
-            category_path: When set, match path case-insensitively; otherwise return all.
+            category_path: When set, match path case-insensitively.
+            attribute_key: When set, match attribute key case-insensitively.
 
         Returns:
-            Approvers ordered by path, principal type, and name.
+            Approvers ordered by attribute, path, principal type, and name.
         """
+        clauses: list[str] = []
+        params: dict[str, str] = {}
+        if attribute_key:
+            clauses.append("lower(attribute_key) = lower(%(attribute_key)s)")
+            params["attribute_key"] = attribute_key
         if category_path:
+            clauses.append("lower(category_path) = lower(%(path)s)")
+            params["path"] = category_path
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        rows = self._pg.fetch(
+            "SELECT * FROM {schema}.sensitivity_category_approvers "
+            f"{where} "
+            "ORDER BY attribute_key, category_path, principal_type, principal_name",
+            params or None,
+        )
+        return [self._from_row(r) for r in rows]
+
+    def list_configured_categories(self, *, attribute_key: str | None = None) -> list[str]:
+        """Return distinct paths that have at least one approver.
+
+        Args:
+            attribute_key: When set, only paths for this attribute key.
+
+        Returns:
+            Sorted path strings.
+        """
+        if attribute_key:
             rows = self._pg.fetch(
-                "SELECT * FROM {schema}.sensitivity_category_approvers "
-                "WHERE lower(category_path) = lower(%(path)s) "
-                "ORDER BY category_path, principal_type, principal_name",
-                {"path": category_path},
+                "SELECT DISTINCT category_path FROM {schema}.sensitivity_category_approvers "
+                "WHERE lower(attribute_key) = lower(%(attribute_key)s) "
+                "ORDER BY category_path",
+                {"attribute_key": attribute_key},
             )
         else:
             rows = self._pg.fetch(
-                "SELECT * FROM {schema}.sensitivity_category_approvers "
-                "ORDER BY category_path, principal_type, principal_name"
+                "SELECT DISTINCT category_path FROM {schema}.sensitivity_category_approvers "
+                "ORDER BY category_path"
             )
-        return [self._from_row(r) for r in rows]
-
-    def list_configured_categories(self) -> list[str]:
-        """Return distinct category paths that have at least one approver.
-
-        Returns:
-            Sorted category path strings.
-        """
-        rows = self._pg.fetch(
-            "SELECT DISTINCT category_path FROM {schema}.sensitivity_category_approvers "
-            "ORDER BY category_path"
-        )
         return [str(r["category_path"]) for r in rows]
 
     def get_approver(self, approver_id: str) -> CategoryApprover | None:
@@ -746,11 +767,13 @@ class LakebaseCategoryApproverRepository(CategoryApproverRepository):
         existing = self._pg.fetch(
             """
             SELECT approver_id FROM {schema}.sensitivity_category_approvers
-            WHERE lower(category_path) = lower(%(path)s)
+            WHERE lower(attribute_key) = lower(%(attribute_key)s)
+              AND lower(category_path) = lower(%(path)s)
               AND lower(principal_name) = lower(%(principal)s)
               AND principal_type = %(ptype)s
             """,
             {
+                "attribute_key": approver.attribute_key,
                 "path": approver.category_path,
                 "principal": approver.principal_name,
                 "ptype": approver.principal_type.value,
@@ -761,14 +784,16 @@ class LakebaseCategoryApproverRepository(CategoryApproverRepository):
         self._pg.run(
             """
             INSERT INTO {schema}.sensitivity_category_approvers (
-              approver_id, category_path, principal_name, principal_type, created_by, created_at
+              approver_id, attribute_key, category_path, principal_name, principal_type,
+              created_by, created_at
             ) VALUES (
-              %(approver_id)s, %(category_path)s, %(principal_name)s, %(principal_type)s,
-              %(created_by)s, %(created_at)s
+              %(approver_id)s, %(attribute_key)s, %(category_path)s, %(principal_name)s,
+              %(principal_type)s, %(created_by)s, %(created_at)s
             )
             """,
             {
                 "approver_id": approver.approver_id,
+                "attribute_key": approver.attribute_key,
                 "category_path": approver.category_path,
                 "principal_name": approver.principal_name,
                 "principal_type": approver.principal_type.value,
@@ -801,6 +826,7 @@ class LakebaseCategoryApproverRepository(CategoryApproverRepository):
         """Map an approver table row to a ``CategoryApprover``."""
         return CategoryApprover(
             approver_id=row["approver_id"],
+            attribute_key=str(row.get("attribute_key") or "sensitivity"),
             category_path=row["category_path"],
             principal_name=row["principal_name"],
             principal_type=PrincipalKind(row["principal_type"]),
@@ -1425,6 +1451,17 @@ class LakebaseStorageProvider(StorageProvider):
         self._pg.run(
             "ALTER TABLE {schema}.mask_rule_definitions "
             "ADD COLUMN IF NOT EXISTS validated_at TIMESTAMPTZ"
+        )
+        # Approvers gained attribute_key so row-filter dimensions can have their own reviewers.
+        self._pg.run(
+            "ALTER TABLE {schema}.sensitivity_category_approvers "
+            "ADD COLUMN IF NOT EXISTS attribute_key TEXT NOT NULL DEFAULT 'sensitivity'"
+        )
+        self._pg.run("DROP INDEX IF EXISTS {schema}.sensitivity_category_approvers_uniq")
+        self._pg.run(
+            "CREATE UNIQUE INDEX IF NOT EXISTS sensitivity_category_approvers_uniq "
+            "ON {schema}.sensitivity_category_approvers ("
+            "lower(attribute_key), lower(category_path), lower(principal_name), principal_type)"
         )
         logger.info("Lakebase schema %s ready", self._location)
 

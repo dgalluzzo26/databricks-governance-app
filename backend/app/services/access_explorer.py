@@ -682,10 +682,11 @@ class AccessExplorerService:
             star_allowed = not allowed or any(v == "*" for v in allowed)
             if "*" not in {v.lower() for v in held_dim} and star_allowed:
                 suggestions.append(
-                    SuggestedAttribute(
-                        kind=SuggestedAttributeKind.ROW_FILTER,
-                        attribute_key=dim,
-                        attribute_value="*",
+                    self._row_filter_suggestion(
+                        dim=dim,
+                        value="*",
+                        column_name=row_filter.column_name,
+                        requestable=dim_def is not None,
                         reason=(
                             (
                                 f"Row filter dimension '{dim}' is tagged on this table but has no "
@@ -695,22 +696,9 @@ class AccessExplorerService:
                             if dim_def is None
                             else (
                                 f"Row filter on column {row_filter.column_name} uses dimension "
-                                f"'{dim}'. Request * to see all rows. App admins will review "
-                                "(row-filter attributes have no category approvers)."
+                                f"'{dim}'. Request * to see all rows"
                             )
                         ),
-                        requestable=dim_def is not None,
-                        request_path=(
-                            f"/identity?tab=request&key={dim}&value=*"
-                            if dim_def is not None
-                            else None
-                        ),
-                        column_names=[row_filter.column_name] if row_filter.column_name else [],
-                        covers_paths=["*"],
-                        is_hierarchy_parent=False,
-                        routed_to=RequestRouteKind.APP_ADMINS,
-                        resolved_category=None,
-                        approvers=[],
                     )
                 )
             # Also offer concrete dimension values the user does not already hold.
@@ -718,25 +706,76 @@ class AccessExplorerService:
                 if value == "*" or value.lower() in {v.lower() for v in held_dim}:
                     continue
                 suggestions.append(
-                    SuggestedAttribute(
-                        kind=SuggestedAttributeKind.ROW_FILTER,
-                        attribute_key=dim,
-                        attribute_value=value,
+                    self._row_filter_suggestion(
+                        dim=dim,
+                        value=value,
+                        column_name=row_filter.column_name,
+                        requestable=True,
                         reason=(
                             f"Row filter on column {row_filter.column_name}: request "
-                            f"{dim}={value} to see matching rows. App admins will review."
+                            f"{dim}={value} to see matching rows"
                         ),
-                        requestable=True,
-                        request_path=f"/identity?tab=request&key={dim}&value={value}",
-                        column_names=[row_filter.column_name] if row_filter.column_name else [],
-                        covers_paths=[value],
-                        is_hierarchy_parent=False,
-                        routed_to=RequestRouteKind.APP_ADMINS,
-                        resolved_category=None,
-                        approvers=[],
                     )
                 )
         return suggestions
+
+    def _row_filter_suggestion(
+        self,
+        *,
+        dim: str,
+        value: str,
+        column_name: str | None,
+        reason: str,
+        requestable: bool,
+    ) -> SuggestedAttribute:
+        """Build a row-filter suggestion annotated with its approval routing preview.
+
+        Designated dimension approvers win when configured; otherwise app admins review.
+        """
+        routing = (
+            self._access_requests.resolve_attribute_routing(dim, value)
+            if self._access_requests is not None
+            else {
+                "resolved_category": None,
+                "routed_to": RequestRouteKind.APP_ADMINS,
+                "approvers": [],
+            }
+        )
+        routed = routing["routed_to"]
+        route_kind = routed if isinstance(routed, RequestRouteKind) else RequestRouteKind(str(routed))
+        approvers = [
+            ApproverPreview(
+                principal_name=a.principal_name,
+                principal_type=a.principal_type.value
+                if hasattr(a.principal_type, "value")
+                else str(a.principal_type),
+            )
+            for a in routing["approvers"]
+        ]
+        route_note = (
+            "App admins will review (no dimension approvers configured)."
+            if route_kind == RequestRouteKind.APP_ADMINS
+            else (
+                f"Routed to {dim} approvers: "
+                + ", ".join(f"{a.principal_name} ({a.principal_type})" for a in approvers)
+            )
+        )
+        return SuggestedAttribute(
+            kind=SuggestedAttributeKind.ROW_FILTER,
+            attribute_key=dim,
+            attribute_value=value,
+            reason=f"{reason}. {route_note}",
+            requestable=requestable,
+            request_path=(
+                f"/identity?tab=request&key={dim}&value={value}" if requestable else None
+            ),
+            column_names=[column_name] if column_name else [],
+            covers_paths=[value],
+            is_hierarchy_parent=False,
+            routed_to=route_kind,
+            resolved_category=routing["resolved_category"],
+            approvers=approvers,
+        )
 
     def _sensitivity_suggestion(
         self,
