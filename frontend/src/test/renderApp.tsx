@@ -678,7 +678,7 @@ export function fakeServices(
           : Promise.resolve(overrides.dataAccessRun ?? testDataAccessRun),
     },
     attributeExplorer: {
-      analyze: async (body) => ({
+      analyze: async (body: import("@/api/types").AnalyzeAttributeRequest) => ({
         attributeKey: body.attributeKey,
         attributeValue: body.attributeValue,
         kind: "data_access" as const,
