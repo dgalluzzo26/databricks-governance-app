@@ -5,7 +5,7 @@
  * Live tab: apply readiness, manual apply, live-only logs.
  * Schedule can pause, dry-run only, or plan-then-apply each interval.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   useDataAccessLatestRun,
@@ -286,34 +286,7 @@ function LiveTab(props: {
         </p>
         {run.error && <ErrorAlert error={run.error} title="Apply failed" />}
         {latestPending && <Spinner label="Loading latest apply" />}
-        {latest?.plan && (
-          <>
-            <p>
-              Latest apply plan: members +{latest.plan.summary.membersToAdd ?? 0} / −
-              {latest.plan.summary.membersToRemove ?? 0}; grants +{latest.plan.summary.grantsToAdd}{" "}
-              / −{latest.plan.summary.grantsToRevoke}; groups to create{" "}
-              {latest.plan.summary.groupsToCreate}.
-            </p>
-            {(latest.plan.membershipChanges?.length ?? 0) > 0 && (
-              <GrantTable
-                caption="Membership changes"
-                headers={["Action", "Group", "Principal", "Type", "Reason"]}
-                rows={latest.plan.membershipChanges.map((m) => [
-                  m.action,
-                  m.group,
-                  m.principalName,
-                  m.principalType,
-                  m.reason,
-                ])}
-              />
-            )}
-            {(latest.plan.applyErrors?.length ?? 0) > 0 && (
-              <Alert tone="warning" title="Apply reported step errors">
-                {latest.plan.applyErrors.join("; ")}
-              </Alert>
-            )}
-          </>
-        )}
+        {latest && <RunReport run={latest} compact />}
       </Card>
 
       <RunHistoryCard
@@ -584,99 +557,181 @@ function SettingsCard(props: {
 }
 
 /**
- * KPI summary plus truncated grant/group/conflict tables for one run.
+ * Summary-first report for one run. Detail tables stay collapsed as small samples.
  */
-function RunReport({ run }: { run: DataAccessRun }) {
+function RunReport({ run, compact = false }: { run: DataAccessRun; compact?: boolean }) {
   const plan = run.plan;
   const summary = run.summary ?? plan?.summary;
+  const grantSample = summarizeGrantSample(plan?.grantsToAdd ?? []);
+  const revokeSample = summarizeGrantSample(plan?.grantsToRevoke ?? []);
+
   return (
     <div className={styles.stack}>
-      <div className={styles.muted}>
-        {run.status} · {run.mode} · {run.trigger} · {new Date(run.startedAt).toLocaleString()}
-        {run.triggeredBy ? ` · ${run.triggeredBy}` : ""}
-      </div>
+      {!compact && (
+        <div className={styles.muted}>
+          {run.status} · {run.mode} · {run.trigger} · {new Date(run.startedAt).toLocaleString()}
+          {run.triggeredBy ? ` · ${run.triggeredBy}` : ""}
+        </div>
+      )}
       {run.error && <Alert tone="danger" title="Run failed">{run.error}</Alert>}
       {summary && (
-        <p>
-          Eligible objects {summary.eligibleObjects}. Unreviewed skipped {summary.skippedUnreviewed}.
-          Groups to create {summary.groupsToCreate}. Members to add {summary.membersToAdd ?? 0},
-          remove {summary.membersToRemove ?? 0}. Grants to add {summary.grantsToAdd}, revoke{" "}
-          {summary.grantsToRevoke}, unchanged {summary.grantsUnchanged}. Conflicts {summary.conflicts}.
-        </p>
+        <div className={styles.formGrid} aria-label="Plan summary">
+          <SummaryStat label="Eligible objects" value={summary.eligibleObjects} />
+          <SummaryStat label="Unreviewed skipped" value={summary.skippedUnreviewed} />
+          <SummaryStat label="Groups to create" value={summary.groupsToCreate} />
+          <SummaryStat label="Groups existing" value={summary.groupsExisting} />
+          <SummaryStat label="Members +" value={summary.membersToAdd ?? 0} />
+          <SummaryStat label="Members −" value={summary.membersToRemove ?? 0} />
+          <SummaryStat label="Grants +" value={summary.grantsToAdd} />
+          <SummaryStat label="Grants −" value={summary.grantsToRevoke} />
+          <SummaryStat label="Grants unchanged" value={summary.grantsUnchanged} />
+          <SummaryStat label="Conflicts" value={summary.conflicts} />
+        </div>
       )}
       {plan?.driftSinceLastRun.map((note) => (
         <div key={note} className={styles.muted}>
           {note}
         </div>
       ))}
-      {plan?.truncated && (
-        <Alert tone="warning" title="Lists truncated">
-          Showing the first 200 rows in each table.
-        </Alert>
-      )}
       {(plan?.applyErrors?.length ?? 0) > 0 && (
         <Alert tone="warning" title="Apply step errors">
           {plan!.applyErrors.join("; ")}
         </Alert>
       )}
+      {plan && (
+        <p className={styles.muted}>
+          Detail tables below are samples only
+          {plan.truncated ? " (full counts are in the summary above)." : "."} At scale, use the
+          summary — listing every grant would be thousands of rows.
+        </p>
+      )}
       {plan && plan.groups.length > 0 && (
-        <GrantTable
-          caption="Groups"
-          headers={["Group", "Value", "Parent", "Exists"]}
-          rows={plan.groups.map((g) => [
-            g.name,
-            g.value,
-            g.parentGroup ?? "—",
-            g.exists ? "yes" : "would create",
-          ])}
-        />
+        <SampleDetails
+          title={`Groups sample (${plan.groups.length}${summary ? ` of ${summary.groupsToCreate + summary.groupsExisting}` : ""})`}
+        >
+          <GrantTable
+            caption="Groups"
+            headers={["Group", "Value", "Parent", "Exists"]}
+            rows={plan.groups.map((g) => [
+              g.name,
+              g.value,
+              g.parentGroup ?? "—",
+              g.exists ? "yes" : "would create",
+            ])}
+          />
+        </SampleDetails>
       )}
       {plan && (plan.membershipChanges?.length ?? 0) > 0 && (
-        <GrantTable
-          caption="Membership"
-          headers={["Action", "Group", "Principal", "Type", "Reason"]}
-          rows={plan.membershipChanges.map((m) => [
-            m.action,
-            m.group,
-            m.principalName,
-            m.principalType,
-            m.reason,
-          ])}
-        />
+        <SampleDetails
+          title={`Membership sample (${plan.membershipChanges.length}${
+            summary
+              ? ` of ${(summary.membersToAdd ?? 0) + (summary.membersToRemove ?? 0)}`
+              : ""
+          })`}
+        >
+          <GrantTable
+            caption="Membership"
+            headers={["Action", "Group", "Principal", "Type", "Reason"]}
+            rows={plan.membershipChanges.map((m) => [
+              m.action,
+              m.group,
+              m.principalName,
+              m.principalType,
+              m.reason,
+            ])}
+          />
+        </SampleDetails>
       )}
       {plan && plan.grantsToAdd.length > 0 && (
-        <GrantTable
-          caption="Would grant"
-          headers={["Type", "Object", "Group", "Privilege"]}
-          rows={plan.grantsToAdd.map((g) => [g.securableType, g.fullName, g.principal, g.privilege])}
-        />
+        <SampleDetails
+          title={`Grants to add sample (${plan.grantsToAdd.length}${
+            summary ? ` of ${summary.grantsToAdd}` : ""
+          }${grantSample ? ` · ${grantSample}` : ""})`}
+        >
+          <GrantTable
+            caption="Would grant"
+            headers={["Type", "Object", "Group", "Privilege"]}
+            rows={plan.grantsToAdd.map((g) => [
+              g.securableType,
+              g.fullName,
+              g.principal,
+              g.privilege,
+            ])}
+          />
+        </SampleDetails>
       )}
       {plan && plan.grantsToRevoke.length > 0 && (
-        <GrantTable
-          caption="Would revoke"
-          headers={["Type", "Object", "Group", "Privilege"]}
-          rows={plan.grantsToRevoke.map((g) => [
-            g.securableType,
-            g.fullName,
-            g.principal,
-            g.privilege,
-          ])}
-        />
+        <SampleDetails
+          title={`Grants to revoke sample (${plan.grantsToRevoke.length}${
+            summary ? ` of ${summary.grantsToRevoke}` : ""
+          }${revokeSample ? ` · ${revokeSample}` : ""})`}
+        >
+          <GrantTable
+            caption="Would revoke"
+            headers={["Type", "Object", "Group", "Privilege"]}
+            rows={plan.grantsToRevoke.map((g) => [
+              g.securableType,
+              g.fullName,
+              g.principal,
+              g.privilege,
+            ])}
+          />
+        </SampleDetails>
       )}
       {plan && plan.conflicts.length > 0 && (
-        <GrantTable
-          caption="Conflicts"
-          headers={["Ancestor", "Value", "Descendant", "Reason"]}
-          rows={plan.conflicts.map((c) => [
-            `${c.ancestorType} ${c.ancestorName}`,
-            c.ancestorValue,
-            c.descendantName,
-            c.reason,
-          ])}
-        />
+        <SampleDetails
+          title={`Conflicts sample (${plan.conflicts.length}${
+            summary ? ` of ${summary.conflicts}` : ""
+          })`}
+        >
+          <GrantTable
+            caption="Conflicts"
+            headers={["Ancestor", "Value", "Descendant", "Reason"]}
+            rows={plan.conflicts.map((c) => [
+              `${c.ancestorType} ${c.ancestorName}`,
+              c.ancestorValue,
+              c.descendantName,
+              c.reason,
+            ])}
+          />
+        </SampleDetails>
       )}
     </div>
   );
+}
+
+function SummaryStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className={styles.field}>
+      <span className={styles.label}>{label}</span>
+      <div style={{ fontSize: "1.25rem", fontWeight: 600 }}>{value}</div>
+    </div>
+  );
+}
+
+function SampleDetails({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <details>
+      <summary className={styles.label} style={{ cursor: "pointer" }}>
+        {title}
+      </summary>
+      <div style={{ marginTop: "var(--space-2)" }}>{children}</div>
+    </details>
+  );
+}
+
+function summarizeGrantSample(
+  grants: Array<{ securableType: string }>,
+): string | null {
+  if (grants.length === 0) return null;
+  const counts: Record<string, number> = {};
+  for (const grant of grants) {
+    const key = grant.securableType;
+    counts[key] = (counts[key] ?? 0) + 1;
+  }
+  return Object.entries(counts)
+    .map(([type, count]) => `${count} ${type}`)
+    .join(", ");
 }
 
 function GrantTable(props: { caption: string; headers: string[]; rows: string[][] }) {

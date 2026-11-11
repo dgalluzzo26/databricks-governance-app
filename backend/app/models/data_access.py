@@ -11,7 +11,8 @@ from backend.app.models.base import ApiModel
 
 MIN_SYNC_INTERVAL_MINUTES = 5
 DEFAULT_SYNC_INTERVAL_MINUTES = 15
-PLAN_ITEM_LIMIT = 200
+# Sample rows kept on the plan for UI inspection; full counts live on the summary.
+PLAN_ITEM_LIMIT = 25
 # Persist enough history for the UI's 30-day window (paginated); prune older on write.
 RUN_HISTORY_LIMIT = 500
 RUN_HISTORY_RETENTION_DAYS = 30

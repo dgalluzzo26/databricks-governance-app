@@ -77,6 +77,7 @@ def list_runs(
     Requires app admin. Filter by mode so Dry-run and Live tabs stay separate.
 
     Args:
+        container: Service container.
         mode: Optional ``dry_run`` or ``apply``.
         page: 1-based page.
         page_size: Rows per page.
@@ -98,6 +99,7 @@ def latest_run(
     Requires app admin.
 
     Args:
+        container: Service container.
         mode: Optional ``dry_run`` or ``apply`` filter.
 
     Returns:

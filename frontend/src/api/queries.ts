@@ -53,6 +53,9 @@ export const queryKeys = {
   maskRules: ["mask-rules"] as const,
   maskRulePack: ["mask-rules", "pack"] as const,
   helpFlows: ["help", "flows"] as const,
+  helpDocs: ["help", "docs"] as const,
+  helpDoc: (slug: string) => ["help", "docs", slug] as const,
+  helpApiReference: ["help", "api-reference"] as const,
   policyExceptions: ["policy-exceptions"] as const,
   dataAccessSettings: ["data-access", "settings"] as const,
   dataAccessReadiness: ["data-access", "readiness"] as const,
@@ -984,6 +987,52 @@ export function useHelpFlows() {
   return useQuery({
     queryKey: queryKeys.helpFlows,
     queryFn: ({ signal }) => api.help.flows(signal),
+    staleTime: 10 * 60_000,
+  });
+}
+
+/**
+ * Lists the developer guides shown as Help tabs (`GET /help/docs`).
+ *
+ * @remarks Key: `queryKeys.helpDocs`. Stale after 10 minutes.
+ */
+export function useHelpDocs() {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.helpDocs,
+    queryFn: ({ signal }) => api.help.docs(signal),
+    staleTime: 10 * 60_000,
+  });
+}
+
+/**
+ * Fetches one developer guide as Markdown (`GET /help/docs/{slug}`).
+ *
+ * @param slug - Guide key; the query is disabled while `null`.
+ * @remarks Key: `queryKeys.helpDoc(slug)`. Stale after 10 minutes.
+ */
+export function useHelpDoc(slug: string | null) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.helpDoc(slug ?? ""),
+    queryFn: ({ signal }) => api.help.doc(slug ?? "", signal),
+    enabled: slug !== null,
+    staleTime: 10 * 60_000,
+  });
+}
+
+/**
+ * Fetches the generated backend API reference (`GET /help/api-reference`).
+ *
+ * @param enabled - Only fetch when the API reference view is open.
+ * @remarks Key: `queryKeys.helpApiReference`. Stale after 10 minutes.
+ */
+export function useHelpApiReference(enabled = true) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.helpApiReference,
+    queryFn: ({ signal }) => api.help.apiReference(signal),
+    enabled,
     staleTime: 10 * 60_000,
   });
 }

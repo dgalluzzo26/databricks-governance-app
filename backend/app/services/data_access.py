@@ -47,6 +47,7 @@ from backend.app.services.data_access_planner import (
     AssignmentRow,
     TagRow,
     plan_data_access,
+    truncate_plan,
 )
 from backend.app.services.identity_attributes import IdentityAttributeService
 
@@ -306,6 +307,7 @@ class DataAccessService:
             )
             if mode == "apply":
                 plan = self._apply_plan(settings, plan)
+            plan = truncate_plan(plan)
             finished = running.model_copy(
                 update={
                     "status": SyncRunStatus.SUCCESS,

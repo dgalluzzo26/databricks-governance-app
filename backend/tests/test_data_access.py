@@ -295,6 +295,43 @@ def test_apply_runs_when_readiness_forced(client: TestClient, container) -> None
     del DataAccessPlan
 
 
+def test_apply_receives_full_plan_but_stored_run_is_truncated(client: TestClient, container) -> None:
+    from backend.app.models.data_access import PLAN_ITEM_LIMIT, DataAccessReadiness
+
+    table_count = PLAN_ITEM_LIMIT + 10
+    tags = [
+        row
+        for i in range(table_count)
+        for row in _reviewed("table", "sandbox", "finance", f"t{i}", "finance")
+    ]
+    container.data_access._tag_loader = lambda _settings: tags  # noqa: SLF001
+    container.data_access._grant_loader = lambda _settings: []  # noqa: SLF001
+    container.data_access._group_loader = lambda _settings: set()  # noqa: SLF001
+    container.data_access._member_loader = lambda _settings, _groups: []  # noqa: SLF001
+    container.data_access._assignment_loader = lambda _settings: []  # noqa: SLF001
+    container.data_access.readiness = lambda: DataAccessReadiness(  # type: ignore[method-assign]
+        dry_run_ready=True, apply_ready=True, checks=[], setup_checks=[], setup_ready=True
+    )
+    seen: list[int] = []
+
+    def _fake_apply(settings, plan):  # noqa: ANN001
+        seen.append(len(plan.grants_to_add))
+        return plan
+
+    container.data_access._apply_plan = _fake_apply  # noqa: SLF001
+
+    run = client.post(
+        "/api/data-access/runs",
+        headers=headers_for("admin@example.com"),
+        json={"mode": "apply"},
+    ).json()
+    # One SELECT per table plus shared USE CATALOG / USE SCHEMA.
+    assert seen == [table_count + 2]
+    assert run["plan"]["summary"]["grantsToAdd"] == table_count + 2
+    assert len(run["plan"]["grantsToAdd"]) == PLAN_ITEM_LIMIT
+    assert run["plan"]["truncated"] is True
+
+
 def test_readiness_reports_checks(client: TestClient) -> None:
     body = client.get("/api/data-access/readiness", headers=headers_for("admin@example.com")).json()
     ids = {c["id"] for c in body["checks"]}

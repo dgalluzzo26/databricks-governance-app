@@ -9,6 +9,7 @@ import type {
   AccessRequest,
   AccessRequestList,
   AnalyzeAttributeRequest,
+  ApiReference,
   AppInfo,
   AttributeExplorerResult,
   DataAccessReadiness,
@@ -16,6 +17,7 @@ import type {
   DataAccessRunList,
   DataAccessSettings,
   DataAccessSettingsView,
+  HelpDocList,
   DirectoryPrincipalList,
   PrincipalKind,
   AttachRowFilterRequest,
@@ -864,6 +866,38 @@ export class HelpApi {
    */
   flows(signal?: AbortSignal): Promise<string> {
     return this.http.getText("/help/flows", signal);
+  }
+
+  /**
+   * `GET /help/docs` — the developer guides shown as Help tabs.
+   *
+   * @param signal - Optional abort signal.
+   * @returns Guides in display order.
+   */
+  docs(signal?: AbortSignal): Promise<HelpDocList> {
+    return this.http.get<HelpDocList>("/help/docs", signal);
+  }
+
+  /**
+   * `GET /help/docs/{slug}` — one developer guide.
+   *
+   * @param slug - Guide key from {@link HelpApi.docs}.
+   * @param signal - Optional abort signal.
+   * @returns The guide as raw Markdown.
+   * @throws {@link ApiError} On a non-2xx response (404 for an unknown slug).
+   */
+  doc(slug: string, signal?: AbortSignal): Promise<string> {
+    return this.http.getText(`/help/docs/${encodeURIComponent(slug)}`, signal);
+  }
+
+  /**
+   * `GET /help/api-reference` — every backend endpoint from the live route table.
+   *
+   * @param signal - Optional abort signal.
+   * @returns Endpoints in registration order.
+   */
+  apiReference(signal?: AbortSignal): Promise<ApiReference> {
+    return this.http.get<ApiReference>("/help/api-reference", signal);
   }
 }
 

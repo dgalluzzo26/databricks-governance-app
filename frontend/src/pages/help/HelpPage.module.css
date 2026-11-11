@@ -1,5 +1,5 @@
 .doc {
-  max-width: 52rem;
+  max-width: 64rem;
   line-height: 1.55;
 }
 
@@ -102,4 +102,165 @@
 
 .toc a {
   text-decoration: none;
+}
+
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.tab {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  font: inherit;
+  font-weight: 500;
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+
+.tabActive {
+  color: var(--color-text);
+  border-bottom-color: var(--color-primary);
+}
+
+.diagram {
+  margin: 1rem 0;
+  padding: 1rem;
+  overflow-x: auto;
+  border: 1px solid var(--border-subtle, rgba(127, 127, 127, 0.25));
+  border-radius: 8px;
+  background: var(--color-surface);
+  text-align: center;
+}
+
+.diagram svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: end;
+  margin: var(--space-4) 0;
+}
+
+.field {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 160px;
+}
+
+.fieldGrow {
+  display: grid;
+  gap: var(--space-1);
+  flex: 1 1 260px;
+}
+
+.label {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.input {
+  height: 34px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+}
+
+.muted {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm, 0.875rem);
+}
+
+.apiGroup + .apiGroup {
+  margin-top: var(--space-5, 1.5rem);
+}
+
+.apiGroup h3 {
+  margin: 0 0 var(--space-2);
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.endpoint {
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-2);
+  background: var(--color-surface);
+}
+
+.endpoint summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+}
+
+.endpointPath {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.9em;
+  font-weight: 600;
+}
+
+.endpointSummary {
+  color: var(--color-text-muted);
+  flex: 1 1 240px;
+}
+
+.endpointBody {
+  padding: 0 var(--space-3) var(--space-3);
+  font-size: 0.92rem;
+}
+
+.endpointBody table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: var(--space-2) 0;
+}
+
+.endpointBody th,
+.endpointBody td {
+  text-align: left;
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.endpointMeta {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem var(--space-3);
+  margin: var(--space-2) 0;
+}
+
+.endpointMeta dt {
+  color: var(--color-text-muted);
+}
+
+.endpointMeta dd {
+  margin: 0;
+}
+
+.docstring {
+  white-space: pre-wrap;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  background: var(--surface-muted, rgba(127, 127, 127, 0.12));
+  font-size: 0.85rem;
+  margin: var(--space-2) 0 0;
 }

@@ -11,10 +11,11 @@ describe("Data access dry-run", () => {
     expect(await screen.findByText("Dry-run ready")).toBeInTheDocument();
     expect(screen.getByDisplayValue("data_access_control")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Run now" })).toBeEnabled();
-    expect(screen.getByRole("table", { name: "Would grant" })).toBeInTheDocument();
-    expect(screen.getByText("sandbox.finance.budget")).toBeInTheDocument();
+    expect(screen.getByLabelText("Plan summary")).toBeInTheDocument();
+    expect(screen.getByText("Eligible objects")).toBeInTheDocument();
+    expect(screen.getByText("Grants +")).toBeInTheDocument();
     expect(screen.getByText("Dry-run logs")).toBeInTheDocument();
-    expect(screen.getByRole("table", { name: "Membership" })).toBeInTheDocument();
+    expect(screen.getByText(/Grants to add sample/i)).toBeInTheDocument();
     expect(screen.getByLabelText("Schedule mode")).toHaveValue("dry_run");
   });
 
@@ -29,7 +30,7 @@ describe("Data access dry-run", () => {
     renderApp("/data-access", fakeServices({ dataAccessRun: { ...testDataAccessRun, trigger: "user" } }));
     await user.click(await screen.findByRole("button", { name: "Run now" }));
     expect(await screen.findByRole("button", { name: "Run now" })).toBeEnabled();
-    expect(screen.getByRole("table", { name: "Would grant" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Plan summary")).toBeInTheDocument();
   });
 
   it("shows Live tab with apply ready, Run apply, and apply-only logs", async () => {

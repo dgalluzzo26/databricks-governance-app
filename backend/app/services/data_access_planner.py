@@ -333,29 +333,44 @@ def plan_data_access(
         invalid_values=len(invalid_values),
     )
     drift = _drift(fingerprint, previous_fingerprint, previous_summary, draft_summary)
-    truncated = any(
-        len(items) > PLAN_ITEM_LIMIT
-        for items in (
-            groups,
-            grants_to_add,
-            grants_to_revoke,
-            membership_changes,
-            conflicts,
-            invalid_values,
-        )
-    )
     return DataAccessPlan(
         summary=draft_summary,
         fingerprint=fingerprint,
-        groups=groups[:PLAN_ITEM_LIMIT],
-        grants_to_add=grants_to_add[:PLAN_ITEM_LIMIT],
-        grants_to_revoke=grants_to_revoke[:PLAN_ITEM_LIMIT],
-        membership_changes=membership_changes[:PLAN_ITEM_LIMIT],
-        conflicts=conflicts[:PLAN_ITEM_LIMIT],
-        invalid_values=invalid_values[:PLAN_ITEM_LIMIT],
-        truncated=truncated,
+        groups=groups,
+        grants_to_add=grants_to_add,
+        grants_to_revoke=grants_to_revoke,
+        membership_changes=membership_changes,
+        conflicts=conflicts,
+        invalid_values=invalid_values,
         drift_since_last_run=drift,
     )
+
+
+def truncate_plan(plan: DataAccessPlan, limit: int = PLAN_ITEM_LIMIT) -> DataAccessPlan:
+    """Cut every plan list to ``limit`` sample items for storage and display.
+
+    Apply must run against the full plan from ``plan_data_access``; only the persisted run
+    record is truncated. Summary counts always reflect the full plan.
+
+    Args:
+        plan: Full plan.
+        limit: Maximum items kept per list.
+
+    Returns:
+        A copy with lists truncated and ``truncated`` set when anything was cut.
+    """
+    lists = (
+        "groups",
+        "grants_to_add",
+        "grants_to_revoke",
+        "membership_changes",
+        "conflicts",
+        "invalid_values",
+    )
+    truncated = plan.truncated or any(len(getattr(plan, name)) > limit for name in lists)
+    update: dict[str, object] = {name: getattr(plan, name)[:limit] for name in lists}
+    update["truncated"] = truncated
+    return plan.model_copy(update=update)
 
 
 def _membership_changes(
@@ -372,6 +387,8 @@ def _membership_changes(
     assignments are ignored (no single target group).
     """
     managed_groups = {g.name.lower(): g.name for g in groups}
+    prefix = settings.group_prefix if settings.group_prefix.endswith("_") else f"{settings.group_prefix}_"
+    managed_prefix = prefix.lower()
     nested_parents: set[tuple[str, str]] = set()
     for group in groups:
         if group.parent_group:
@@ -429,9 +446,7 @@ def _membership_changes(
                 member.principal_name.lower(),
             ) in nested_parents:
                 continue
-            if member_type == "GROUP" and member.principal_name.lower().startswith(
-                (settings.group_prefix if settings.group_prefix.endswith("_") else f"{settings.group_prefix}_").lower()
-            ):
+            if member_type == "GROUP" and member.principal_name.lower().startswith(managed_prefix):
                 # Other managed-group nesting edges are left alone.
                 continue
             if (group.name.lower(), member.principal_name.lower()) in desired:

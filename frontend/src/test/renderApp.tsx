@@ -971,6 +971,54 @@ export function fakeServices(
     help: {
       flows: async () =>
         "# Developer guide\n\n## Mental model\n\nMasks and row filters.\n\n## Row filter flow\n\nUse `state=*`.\n",
+      docs: async () => ({
+        docs: [
+          {
+            slug: "masking-row-filters",
+            title: "Masking & row filters",
+            description: "Masks and row filters.",
+            sourcePath: "docs/mask-and-row-filter-flows.md",
+          },
+          {
+            slug: "grants-sync",
+            title: "Grants sync",
+            description: "dac_* groups and grants.",
+            sourcePath: "docs/grants-sync.md",
+          },
+        ],
+      }),
+      doc: async (slug: string) =>
+        slug === "grants-sync"
+          ? "# Grants sync\n\n## Apply order and APIs\n\nAccount SCIM then GRANT.\n\n```mermaid\nflowchart TD\n  a --> b\n```\n"
+          : "# Developer guide\n\n## Mental model\n\nMasks and row filters.\n\n## Row filter flow\n\nUse `state=*`.\n",
+      apiReference: async () => ({
+        endpoints: [
+          {
+            method: "POST",
+            path: "/api/data-access/runs",
+            tag: "data-access",
+            summary: "Run a data-access sync now (dry-run or apply).",
+            description: "Requires app admin.",
+            access: "admin" as const,
+            requestBody: "RunDataAccessRequest | None",
+            responseModel: "DataAccessRun",
+            parameters: [],
+            handler: "backend.app.api.routes.data_access.run_now",
+          },
+          {
+            method: "GET",
+            path: "/api/me",
+            tag: "identity",
+            summary: "Return the signed-in user.",
+            description: "",
+            access: "user" as const,
+            requestBody: null,
+            responseModel: "CurrentUser",
+            parameters: [],
+            handler: "backend.app.api.routes.me.me",
+          },
+        ],
+      }),
     },
     policyExceptions: {
       list: async () => ({

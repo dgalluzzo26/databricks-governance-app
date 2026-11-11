@@ -1,12 +1,22 @@
 /**
  * @file Minimal dependency-free Markdown renderer used by the Help developer guide.
  *
- * Supports a constrained subset of CommonMark-like syntax sufficient for
- * `docs/mask-and-row-filter-flows.md`: ATX headings, fenced code, pipe tables, lists,
+ * Supports a constrained subset of CommonMark-like syntax sufficient for the guides in `docs/`:
+ * ATX headings, fenced code (```mermaid blocks render as diagrams), pipe tables, lists,
  * horizontal rules, paragraphs, and inline `` `code` `` / `**bold**`.
  */
 import type { ReactNode } from "react";
+import { MermaidDiagram } from "./MermaidDiagram";
 import styles from "./HelpPage.module.css";
+
+/**
+ * Anchor id for a heading: lowercased text with non-alphanumeric runs replaced by `-`.
+ *
+ * @param text - Raw heading text (inline markup included).
+ */
+export function headingId(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+}
 
 /**
  * Parses a single line of text into React nodes with inline code and bold spans.
@@ -115,6 +125,10 @@ export function MarkdownDoc({ source }: { source: string }) {
         i += 1;
       }
       i += 1;
+      if (lang === "mermaid") {
+        blocks.push(<MermaidDiagram key={key++} source={body.join("\n")} />);
+        continue;
+      }
       blocks.push(
         <pre key={key++} data-lang={lang || undefined}>
           <code>{body.join("\n")}</code>
@@ -133,7 +147,7 @@ export function MarkdownDoc({ source }: { source: string }) {
     }
     if (line.startsWith("# ")) {
       const text = line.slice(2);
-      const id = text.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+      const id = headingId(text);
       blocks.push(
         <h1 key={key++} id={id}>
           {inline(text)}
@@ -144,7 +158,7 @@ export function MarkdownDoc({ source }: { source: string }) {
     }
     if (line.startsWith("## ")) {
       const text = line.slice(3);
-      const id = text.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+      const id = headingId(text);
       blocks.push(
         <h2 key={key++} id={id}>
           {inline(text)}
@@ -155,7 +169,7 @@ export function MarkdownDoc({ source }: { source: string }) {
     }
     if (line.startsWith("### ")) {
       const text = line.slice(4);
-      const id = text.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+      const id = headingId(text);
       blocks.push(
         <h3 key={key++} id={id}>
           {inline(text)}

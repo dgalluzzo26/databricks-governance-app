@@ -39,8 +39,9 @@ Authorization and presentation are separate:
 2. **How does a denied value look?** Column tag `mask_rule` → registry → `apply_mask_rule`.
 3. **Which rows are visible?** Column tag `row_filter=<dimension>` → `has_row_access(row, dim)`.
 
-Unity Catalog table **grants** are out of scope for Access Explorer today; this guide focuses on
-ABAC masks and row filters only.
+Unity Catalog table **grants** (who may `SELECT` a table at all) are handled by the separate
+tag-driven sync; see the **Grants sync** guide. This guide covers ABAC masks and row filters,
+which apply only after a caller can already read the table.
 
 ```mermaid
 flowchart TD
@@ -162,6 +163,58 @@ LLM draft uses Foundation Model endpoint `MASK_HANDLER_LLM_ENDPOINT`.
 Governed tag values for `mask_rule` are ensured via `GovernedTagService.ensure_values` so
 admins can attach the names as column tags.
 
+### Decision flow: one column value at query time
+
+```mermaid
+flowchart TD
+  q["SELECT reads a column value"] --> tagged{"Column has sensitivity_category, sensitivity, data_type tags?"}
+  tagged -->|no| clearNoPolicy["No app mask policy matches: value returned"]
+  tagged -->|yes| geo{"data_type is geometry or geography?"}
+  geo -->|yes| geoPolicy["Static geo policies (outside this pack)"]
+  geo -->|no| except{"Caller in policy EXCEPT list (app/admin SPs, Policy exceptions)?"}
+  except -->|yes| clearExcept["Value returned unmasked"]
+  except -->|no| variant["mask_variant(value, category, sensitivity, mask_rule)"]
+  variant --> path["required_path = category.sensitivity, e.g. finance.budget.PII.Name"]
+  path --> holder{"Active, unexpired, unrevoked sensitivity assignment for session user or one of their account groups?"}
+  holder -->|no| mask
+  holder -->|yes| match{"Assigned value equals required_path or is a dot-prefix of it?"}
+  match -->|yes| clear["Value returned"]
+  match -->|no| mask["apply_mask_rule(value, mask_rule)"]
+  mask --> isNull{"value is NULL?"}
+  isNull -->|yes| nullOut["NULL"]
+  isNull -->|no| isString{"VARIANT holds a STRING?"}
+  isString -->|no| nullOut2["NULL"]
+  isString -->|yes| resolve["_resolve_mask_handler(mask_rule)"]
+  resolve --> known{"mask_rule in UC mask_rule_definitions?"}
+  known -->|no or tag missing| full["full: ***"]
+  known -->|custom| custom["Stored custom expression over the value"]
+  known -->|builtin| builtin{"handler"}
+  builtin -->|full| full
+  builtin -->|joinable| joinable["sha2 of lower(trim(v)) with salt"]
+  builtin -->|email / phone / keep_last_n| fixed["Fixed SQL partial mask"]
+```
+
+Example: column tagged `finance.budget` + `PII.Name` + `mask_rule=joinable`. A user holding
+`sensitivity=finance` sees clear text (prefix match). A user holding `finance.contracts` sees the
+salted hash. A user holding nothing sees the hash too.
+
+### Decision flow: admin edits a mask rule
+
+```mermaid
+flowchart TD
+  edit["Admin: upsert / delete / seed rule, rotate salt"] --> customRule{"Custom handler?"}
+  customRule -->|yes| validated{"Has valid HMAC validation_token from /handlers/validate?"}
+  validated -->|no| reject["422: validate first"]
+  validated -->|yes| save
+  customRule -->|no| save["Save to app storage (Lakebase / Delta / memory)"]
+  save --> mirror["sync_to_uc: replace UC mask_rule_definitions + masking_config"]
+  mirror --> regen["Regenerate _resolve_mask_handler + apply_mask_rule"]
+  regen --> tagValues["ensure_values: rule names become governed mask_rule tag values"]
+  tagValues --> live["Next query uses the new handler; no table changes needed"]
+  pack["Admin: Sync registry, UDF and policy (ensure_pack)"] --> mirror
+  pack --> policy["Recreate mask_sensitivity_variant with current EXCEPT list"]
+```
+
 ### Maintenance cheat sheet (masks)
 
 | Artifact | Maintained by | When it changes |
@@ -232,6 +285,41 @@ Admins manage a registry of USER / GROUP / SERVICE_PRINCIPAL principals that are
 (or clicking **Re-apply to policies**) regenerates both packs. App and admin SPs are always
 included as built-in system exceptions and cannot be removed.
 
+### Decision flow: one row at query time
+
+```mermaid
+flowchart TD
+  q["SELECT scans a table"] --> tagged{"A column is tagged row_filter = a registered dimension?"}
+  tagged -->|no| all["No app row filter: all rows visible"]
+  tagged -->|yes| except{"Caller in rf_by_dimension EXCEPT list?"}
+  except -->|yes| allExcept["All rows visible"]
+  except -->|no| fn["has_row_access(column value, dimension)"]
+  fn --> holder{"Active, unexpired, unrevoked assignment with attribute_key = dimension for session user or one of their account groups?"}
+  holder -->|no| deny["Row hidden (default deny)"]
+  holder -->|yes| value{"attribute_value is * or equals the row value (case-insensitive)?"}
+  value -->|yes| show["Row visible"]
+  value -->|no| deny
+```
+
+Example: `us_states.state` tagged `row_filter=state`. A user with `state=CA` and `state=NY`
+sees two rows; a user with `state=*` sees all; a user with no `state` assignment sees none.
+
+### Decision flow: admin configures a dimension
+
+```mermaid
+flowchart TD
+  upsert["Admin: upsert dimension (e.g. state)"] --> def["Identity definition key=state; allowed values include *"]
+  def --> tagValue["ensure_values: state becomes a governed row_filter tag value"]
+  tagValue --> pack["ensure_pack"]
+  pack --> fn["CREATE OR REPLACE FUNCTION has_row_access"]
+  fn --> dims{"Any dimensions registered?"}
+  dims -->|no| drop["DROP POLICY rf_by_dimension"]
+  dims -->|yes| policy["CREATE OR REPLACE POLICY rf_by_dimension MATCH any registered dimension, EXCEPT exceptions"]
+  attach["Admin: attach dimension to table.column"] --> oneDim{"Table already has a different dimension?"}
+  oneDim -->|yes| reject["422: one dimension per table"]
+  oneDim -->|no| setTag["ALTER TABLE ... ALTER COLUMN ... SET TAGS (row_filter = state)"]
+```
+
 ### Maintenance cheat sheet (row filters)
 
 | Artifact | Maintained by | When it changes |
@@ -288,10 +376,42 @@ UC grants are intentionally omitted for now.
 | Attribute | Routing |
 | --- | --- |
 | `sensitivity` | Most-specific configured **category approver** for a path prefix of the requested value. If none is configured (or the matched category has zero approvers) → **app admins**. |
+| Data-access attribute (linked to `data_access_control`) | Same most-specific path routing as `sensitivity`, using data-access category approvers. |
 | Row-filter dimensions (`state`, …) | Designated **dimension approvers** (Identity → Approvers → Row-filter dimension). If none are configured → **app admins**. |
 
 Create requests via `POST /api/identity/access-requests` with `attribute_key` + `attribute_value`
 (defaults to `sensitivity` when `attribute_key` is omitted). Approvals appear in Identity → Approvals.
+
+### Decision flow: request to enforcement
+
+```mermaid
+flowchart TD
+  submit["POST /identity/access-requests (key, value, expiry, justification)"] --> future{"Expiry in the future?"}
+  future -->|no| e1["422 expiry must be in the future"]
+  future -->|yes| vocab{"Value in the definition's allowed values (case-insensitive)?"}
+  vocab -->|no| e2["422 not allowed"]
+  vocab -->|yes| dup{"Requester already has a pending request for key=value?"}
+  dup -->|yes| e3["422 already pending"]
+  dup -->|no| route{"Attribute key"}
+  route -->|sensitivity or data-access| path["Most-specific configured category that is a prefix of the value"]
+  route -->|row-filter dimension| dim["Designated approvers for that dimension key"]
+  path --> hasApprovers{"Matched category has approvers?"}
+  dim --> hasApprovers
+  hasApprovers -->|yes| approvers["Routed to category / dimension approvers"]
+  hasApprovers -->|no| admins["Routed to app admins"]
+  approvers --> decide{"Approve or deny (approver for this route, or app admin)"}
+  admins --> decide
+  decide -->|deny| denied["Request denied; nothing assigned"]
+  decide -->|approve| assign["IdentityAttributeService.assign (USER, source=ACCESS_REQUEST)"]
+  assign --> mirrorRow["Upsert UC mirror identity_attributes"]
+  mirrorRow --> enforce{"Attribute key"}
+  enforce -->|sensitivity| unmask["has_sensitivity now true: columns unmask on next query"]
+  enforce -->|row-filter dimension| rows["has_row_access now true: rows appear on next query"]
+  enforce -->|data-access| group["Next grants-sync apply adds the user to the dac_* group"]
+```
+
+Expiry and revocation run the same chain in reverse: the mirror row becomes inactive, the UDFs stop
+matching immediately, and the next grants-sync apply removes data-access group membership.
 
 ---
 
@@ -300,7 +420,8 @@ Create requests via `POST /api/identity/access-requests` with `attribute_key` + 
 | Attribute key | Used by | How users get it |
 | --- | --- | --- |
 | `sensitivity` | `has_sensitivity` / column unmask | Access request → category approver (or app admin) → assign |
-| Row-filter dimension keys (`state`, …) | `has_row_access` | Access request → app admin → assign (or admin assign) |
+| Row-filter dimension keys (`state`, …) | `has_row_access` | Access request → dimension approver (or app admin) → assign (or admin assign) |
+| Data-access attribute | Grants sync `dac_*` group membership | Access request → data-access category approver (or app admin) → assign |
 
 Mirror table: `data_governance_app.app.identity_attributes` (synced from Lakebase when that
 backend is active).

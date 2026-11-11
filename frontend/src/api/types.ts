@@ -997,6 +997,50 @@ export interface AttributeExplorerResult {
   note: string | null;
 }
 
+/** One developer guide listed by `GET /help/docs`. */
+export interface HelpDoc {
+  slug: string;
+  title: string;
+  description: string;
+  sourcePath: string;
+}
+
+/** Guides available in the Help page, in display order. */
+export interface HelpDocList {
+  docs: HelpDoc[];
+}
+
+/** Minimum caller role an endpoint requires. */
+export type EndpointAccess = "public" | "user" | "admin";
+
+/** A path or query parameter of a backend endpoint. */
+export interface ApiParameter {
+  name: string;
+  location: "path" | "query";
+  required: boolean;
+  type: string;
+  description: string | null;
+}
+
+/** One backend route, generated from the FastAPI route table. */
+export interface ApiEndpoint {
+  method: string;
+  path: string;
+  tag: string;
+  summary: string;
+  description: string;
+  access: EndpointAccess;
+  requestBody: string | null;
+  responseModel: string | null;
+  parameters: ApiParameter[];
+  handler: string;
+}
+
+/** Every `/api` endpoint (`GET /help/api-reference`). */
+export interface ApiReference {
+  endpoints: ApiEndpoint[];
+}
+
 /** Paginated sync history (`GET /data-access/runs`). */
 export interface DataAccessRunList {
   runs: DataAccessRun[];
