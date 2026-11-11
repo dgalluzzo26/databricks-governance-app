@@ -485,11 +485,10 @@ class AccessExplorerService:
             return None
         if (tags.get(review_key) or "").lower() != review_value:
             return None
-        try:
-            definition = self._identity.get_definition(access_key)
-        except NotFoundError:
-            definition = None
-        held_values = {v.lower() for v in held.get(access_key, set())}
+        # Identity key may differ from the UC tag (e.g. key=data_access, tag=data_access_control).
+        definition = self._definition_for_access_tag(access_key)
+        attribute_key = (definition.key if definition is not None else access_key).lower()
+        held_values = {v.lower() for v in held.get(attribute_key, set())}
         already = access_value.lower() in held_values or any(
             access_value.lower().startswith(f"{h}.") for h in held_values
         )
@@ -501,7 +500,7 @@ class AccessExplorerService:
         )
         routing = None
         if self._access_requests is not None:
-            routing = self._access_requests.resolve_attribute_routing(access_key, access_value)
+            routing = self._access_requests.resolve_attribute_routing(attribute_key, access_value)
         routed_to = RequestRouteKind.APP_ADMINS
         approvers: list[ApproverPreview] = []
         resolved = None
@@ -525,26 +524,27 @@ class AccessExplorerService:
             else "app admins"
         )
         if already:
-            reason = f"You already hold {access_key}={access_value}"
+            reason = f"You already hold {attribute_key}={access_value}"
         elif definition is None:
             reason = (
-                f"{level.title()} is tagged {access_value}, but attribute definition "
-                f"'{access_key}' is missing — create it under Identity → Definitions"
+                f"{level.title()} is tagged {access_value}, but no Identity attribute is linked "
+                f"to governed tag '{access_key}' — create or edit a definition under "
+                "Identity → Definitions"
             )
         elif requestable:
-            reason = f"Request {access_key}={access_value} for this {level}; reviewed by {who}"
+            reason = f"Request {attribute_key}={access_value} for this {level}; reviewed by {who}"
         else:
             reason = (
                 f"{level.title()} is tagged {access_value} but that value is not in the "
-                f"'{access_key}' allowed values yet"
+                f"'{attribute_key}' allowed values yet"
             )
         return SuggestedAttribute(
             kind=SuggestedAttributeKind.DATA_ACCESS,
-            attribute_key=access_key,
+            attribute_key=attribute_key,
             attribute_value=access_value,
             reason=reason,
             requestable=requestable,
-            request_path=f"/identity?tab=request&key={access_key}&value={access_value}"
+            request_path=f"/identity?tab=request&key={attribute_key}&value={access_value}"
             if requestable
             else None,
             column_names=[],
@@ -554,6 +554,26 @@ class AccessExplorerService:
             resolved_category=resolved,
             approvers=approvers,
         )
+
+    def _definition_for_access_tag(self, access_tag_key: str):
+        """Find the Identity attribute whose key or governed tags match ``access_tag_key``.
+
+        Returns:
+            Matching enriched definition, or None when none is configured.
+        """
+        needle = access_tag_key.strip().lower()
+        if not needle:
+            return None
+        try:
+            definitions = self._identity.list_definitions().definitions
+        except Exception:  # noqa: BLE001
+            return None
+        for item in definitions:
+            if item.key.lower() == needle:
+                return item
+            if any(tag.lower() == needle for tag in item.governed_tag_keys):
+                return item
+        return None
 
     def _object_tags(self, level: str, full_name: str, keys: set[str]) -> dict[str, str]:
         """Read access/review tags for one catalog, schema, or table."""

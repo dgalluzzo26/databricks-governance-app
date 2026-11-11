@@ -413,14 +413,21 @@ def test_analyze_catalog_suggests_data_access(container) -> None:  # noqa: ANN00
         {"tag_name": "clr_review_status", "tag_value": "reviewed"},
     ]
     actor = _admin()
+    # Real deployments often use attribute key data_access linked to tag data_access_control.
     container.identity_attributes.upsert_definition(
         UpsertAttributeDefinitionRequest(
-            key="data_access_control",
+            key="data_access",
             description="DAC",
             value_source=ValueSource.FREE_FORM,
             allowed_values=["finance", "finance.budget"],
         ),
         actor,  # type: ignore[arg-type]
+    )
+    # Free-form keys don't auto-link tags; simulate a governed-tag style link via storage.
+    stored = container.storage.identity_attributes.get_definition("data_access")
+    assert stored is not None
+    container.storage.identity_attributes.upsert_definition(
+        stored.model_copy(update={"governed_tag_keys": ["data_access_control"]})
     )
     user = CurrentUser(
         user_name="analyst@example.com",
@@ -434,12 +441,13 @@ def test_analyze_catalog_suggests_data_access(container) -> None:  # noqa: ANN00
     assert insight.securable_level == "catalog"
     assert insight.columns == []
     dac = next(s for s in insight.suggestions if s.kind.value == "data_access")
+    assert dac.attribute_key == "data_access"
     assert dac.attribute_value == "finance"
     assert dac.requestable is True
 
 
 def test_analyze_table_dac_without_definition_does_not_fail(container) -> None:  # noqa: ANN001
-    """Tagged objects must still analyze when data_access_control is undefined."""
+    """Tagged objects must still analyze when no Identity attribute maps the access tag."""
     service, sql = _explorer(container)
     sql.table_tags = [
         {"tag_name": "data_access_control", "tag_value": "finance.budget"},
@@ -458,7 +466,7 @@ def test_analyze_table_dac_without_definition_does_not_fail(container) -> None: 
     )
     dac = next(s for s in insight.suggestions if s.kind.value == "data_access")
     assert dac.requestable is False
-    assert "missing" in dac.reason.lower()
+    assert "linked" in dac.reason.lower()
     assert any(s.kind.value == "sensitivity" for s in insight.suggestions)
 
 
