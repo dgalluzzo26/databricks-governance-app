@@ -4,6 +4,7 @@
 import { Link } from "react-router-dom";
 import type { CurrentUser } from "@/api/types";
 import { DatabricksLogo } from "@/components/icons";
+import { BusyStatus } from "./BusyBar";
 import { ThemeToggle } from "./ThemeToggle";
 import { UserMenu } from "./UserMenu";
 import styles from "./TopBar.module.css";
@@ -20,6 +21,7 @@ export function TopBar({ user }: { user?: CurrentUser }) {
         <span className={styles.product}>Data Governance</span>
       </Link>
       <div className={styles.spacer} />
+      <BusyStatus />
       <ThemeToggle />
       {user && <UserMenu user={user} />}
     </header>

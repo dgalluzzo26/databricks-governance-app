@@ -191,6 +191,7 @@ export function useUpsertAttributeDefinition() {
   const api = useApi();
   const client = useQueryClient();
   return useMutation({
+    meta: { busyMessage: "Saving definition…" },
     mutationFn: (body: UpsertAttributeDefinitionRequest) => api.identityAttributes.upsertDefinition(body),
     onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.attributeDefinitions }),
   });
@@ -206,6 +207,7 @@ export function useDeleteAttributeDefinition() {
   const api = useApi();
   const client = useQueryClient();
   return useMutation({
+    meta: { busyMessage: "Deleting definition…" },
     mutationFn: (key: string) => api.identityAttributes.deleteDefinition(key),
     onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.attributeDefinitions }),
   });
@@ -221,6 +223,7 @@ export function useAssignAttribute() {
   const api = useApi();
   const client = useQueryClient();
   return useMutation({
+    meta: { busyMessage: "Assigning attribute…" },
     mutationFn: (body: AssignAttributeRequest) => api.identityAttributes.assign(body),
     onSuccess: () => {
       client.invalidateQueries({ queryKey: ["identity-assignments"] });
@@ -238,6 +241,7 @@ export function useRevokeAttribute() {
   const api = useApi();
   const client = useQueryClient();
   return useMutation({
+    meta: { busyMessage: "Revoking attribute…" },
     mutationFn: (assignmentId: string) => api.identityAttributes.revoke(assignmentId),
     onSuccess: () => {
       client.invalidateQueries({ queryKey: ["identity-assignments"] });
@@ -270,6 +274,7 @@ export function useUpsertCategoryApprover() {
   const api = useApi();
   const client = useQueryClient();
   return useMutation({
+    meta: { busyMessage: "Saving approver…" },
     mutationFn: (body: UpsertCategoryApproverRequest) => api.identityAttributes.upsertCategoryApprover(body),
     onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.categoryApprovers }),
   });
@@ -285,6 +290,7 @@ export function useDeleteCategoryApprover() {
   const api = useApi();
   const client = useQueryClient();
   return useMutation({
+    meta: { busyMessage: "Removing approver…" },
     mutationFn: (approverId: string) => api.identityAttributes.deleteCategoryApprover(approverId),
     onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.categoryApprovers }),
   });
@@ -315,6 +321,7 @@ export function useCreateAccessRequest() {
   const api = useApi();
   const client = useQueryClient();
   return useMutation({
+    meta: { busyMessage: "Submitting request…" },
     mutationFn: (body: CreateAccessRequestBody) => api.identityAttributes.createAccessRequest(body),
     onSuccess: () => {
       client.invalidateQueries({ queryKey: queryKeys.myAccessRequests });
@@ -333,6 +340,7 @@ export function useCancelAccessRequest() {
   const api = useApi();
   const client = useQueryClient();
   return useMutation({
+    meta: { busyMessage: "Cancelling request…" },
     mutationFn: (requestId: string) => api.identityAttributes.cancelAccessRequest(requestId),
     onSuccess: () => {
       client.invalidateQueries({ queryKey: queryKeys.myAccessRequests });
@@ -369,6 +377,7 @@ export function useApproveAccessRequest() {
   const api = useApi();
   const client = useQueryClient();
   return useMutation({
+    meta: { busyMessage: "Approving request…" },
     mutationFn: ({ requestId, body }: { requestId: string; body?: DecideAccessRequestBody }) =>
       api.identityAttributes.approveAccessRequest(requestId, body),
     onSuccess: () => {
@@ -389,6 +398,7 @@ export function useDenyAccessRequest() {
   const api = useApi();
   const client = useQueryClient();
   return useMutation({
+    meta: { busyMessage: "Denying request…" },
     mutationFn: ({ requestId, body }: { requestId: string; body?: DecideAccessRequestBody }) =>
       api.identityAttributes.denyAccessRequest(requestId, body),
     onSuccess: () => {
@@ -408,6 +418,7 @@ export function useApproveRenewal() {
   const api = useApi();
   const client = useQueryClient();
   return useMutation({
+    meta: { busyMessage: "Approving renewal…" },
     mutationFn: ({ assignmentId, body }: { assignmentId: string; body?: DecideAccessRequestBody }) =>
       api.identityAttributes.approveRenewal(assignmentId, body),
     onSuccess: () => {
@@ -427,6 +438,7 @@ export function useDismissRenewal() {
   const api = useApi();
   const client = useQueryClient();
   return useMutation({
+    meta: { busyMessage: "Dismissing renewal…" },
     mutationFn: (assignmentId: string) => api.identityAttributes.dismissRenewal(assignmentId),
     onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.approvals }),
   });
@@ -556,7 +568,11 @@ export function usePreviewSeed() {
 export function useEnsureRowFilterPack() {
   const api = useApi();
   const invalidate = useInvalidateRowFilters();
-  return useMutation({ mutationFn: () => api.rowFilters.ensurePack(), onSuccess: invalidate });
+  return useMutation({
+    meta: { busyMessage: "Syncing row-filter pack…" },
+    mutationFn: () => api.rowFilters.ensurePack(),
+    onSuccess: invalidate,
+  });
 }
 
 /**
@@ -669,7 +685,11 @@ export function useDeleteMaskRule() {
 export function useSeedMaskRules() {
   const api = useApi();
   const invalidate = useInvalidateMaskRules();
-  return useMutation({ mutationFn: () => api.maskRules.seed(), onSuccess: invalidate });
+  return useMutation({
+    meta: { busyMessage: "Seeding mask rules…" },
+    mutationFn: () => api.maskRules.seed(),
+    onSuccess: invalidate,
+  });
 }
 
 /**
@@ -681,7 +701,11 @@ export function useSeedMaskRules() {
 export function useEnsureMaskRulePack() {
   const api = useApi();
   const invalidate = useInvalidateMaskRules();
-  return useMutation({ mutationFn: () => api.maskRules.ensurePack(), onSuccess: invalidate });
+  return useMutation({
+    meta: { busyMessage: "Syncing mask pack…" },
+    mutationFn: () => api.maskRules.ensurePack(),
+    onSuccess: invalidate,
+  });
 }
 
 /**
@@ -693,7 +717,11 @@ export function useEnsureMaskRulePack() {
 export function useRotateMaskSalt() {
   const api = useApi();
   const invalidate = useInvalidateMaskRules();
-  return useMutation({ mutationFn: () => api.maskRules.rotateSalt(), onSuccess: invalidate });
+  return useMutation({
+    meta: { busyMessage: "Rotating mask salt…" },
+    mutationFn: () => api.maskRules.rotateSalt(),
+    onSuccess: invalidate,
+  });
 }
 
 /**
@@ -849,6 +877,7 @@ export function useUpsertPolicyException() {
   const api = useApi();
   const invalidate = useInvalidatePolicyExceptionState();
   return useMutation({
+    meta: { busyMessage: "Saving exception…" },
     mutationFn: (body: UpsertPolicyExceptionRequest) => api.policyExceptions.upsert(body),
     onSuccess: invalidate,
   });
@@ -867,6 +896,7 @@ export function useDeletePolicyException() {
   const api = useApi();
   const invalidate = useInvalidatePolicyExceptionState();
   return useMutation({
+    meta: { busyMessage: "Removing exception…" },
     mutationFn: (exceptionId: string) => api.policyExceptions.delete(exceptionId),
     onSuccess: invalidate,
   });
@@ -896,6 +926,7 @@ export function useApplyPolicyExceptions() {
   const api = useApi();
   const client = useQueryClient();
   return useMutation({
+    meta: { busyMessage: "Applying exceptions…" },
     mutationFn: () => api.policyExceptions.apply(),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: queryKeys.policyExceptions });

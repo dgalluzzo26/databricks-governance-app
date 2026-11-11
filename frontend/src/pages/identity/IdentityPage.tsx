@@ -501,9 +501,10 @@ function MyRequestsPanel() {
                         type="button"
                         className={styles.button}
                         disabled={cancel.isPending}
+                        aria-busy={cancel.isPending}
                         onClick={() => void cancel.mutateAsync(item.requestId)}
                       >
-                        Cancel
+                        {cancel.isPending ? "Cancelling…" : "Cancel"}
                       </button>
                     )}
                   </td>
@@ -803,9 +804,10 @@ function CategoryApproversPanel() {
                         type="button"
                         className={styles.button}
                         disabled={remove.isPending}
+                        aria-busy={remove.isPending}
                         onClick={() => void remove.mutateAsync(item.approverId)}
                       >
-                        Remove
+                        {remove.isPending ? "Removing…" : "Remove"}
                       </button>
                     </td>
                   </tr>
@@ -1083,9 +1085,10 @@ function AssignmentsPanel() {
                           type="button"
                           className={`${styles.button} ${styles.buttonDanger}`}
                           disabled={revoke.isPending}
+                          aria-busy={revoke.isPending}
                           onClick={() => void revoke.mutateAsync(item.assignmentId)}
                         >
-                          Revoke
+                          {revoke.isPending ? "Revoking…" : "Revoke"}
                         </button>
                       )}
                     </td>
@@ -1301,9 +1304,10 @@ function DefinitionsPanel() {
                             type="button"
                             className={`${styles.button} ${styles.buttonDanger}`}
                             disabled={remove.isPending}
+                            aria-busy={remove.isPending}
                             onClick={() => void remove.mutateAsync(item.key)}
                           >
-                            Delete
+                            {remove.isPending ? "Deleting…" : "Delete"}
                           </button>
                         </div>
                       </td>

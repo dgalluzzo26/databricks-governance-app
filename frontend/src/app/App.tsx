@@ -21,6 +21,10 @@ function createQueryClient(): QueryClient {
         // Retrying client errors (403, 404, 422) never helps.
         retry: (count, error) => !(error instanceof ApiError && error.status < 500) && count < 2,
       },
+      mutations: {
+        // Surfaced by BusyBar / BusyStatus while any mutation is in flight.
+        meta: { busyMessage: "Working…" },
+      },
     },
   });
 }
