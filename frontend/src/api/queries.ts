@@ -63,6 +63,7 @@ export const queryKeys = {
     ["data-access", "runs", mode, page] as const,
   dataAccessLatestRun: (mode: "dry_run" | "apply") =>
     ["data-access", "runs", "latest", mode] as const,
+  dataAccessRun: (runId: string) => ["data-access", "runs", "id", runId] as const,
   directoryPrincipals: (q: string, kind?: string) => ["directory", "principals", q, kind ?? ""] as const,
 };
 
@@ -170,6 +171,20 @@ export function useDataAccessLatestRun(mode: "dry_run" | "apply") {
   return useQuery({
     queryKey: queryKeys.dataAccessLatestRun(mode),
     queryFn: ({ signal }) => api.dataAccess.latestRun(mode, signal),
+  });
+}
+
+/**
+ * Fetches one stored run including its plan (`GET /data-access/runs/{runId}`).
+ *
+ * @param runId - Run identifier; disabled while `null`.
+ */
+export function useDataAccessRun(runId: string | null) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.dataAccessRun(runId ?? ""),
+    queryFn: ({ signal }) => api.dataAccess.getRun(runId ?? "", signal),
+    enabled: runId !== null,
   });
 }
 

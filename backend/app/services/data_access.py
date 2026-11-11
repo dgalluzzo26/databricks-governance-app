@@ -17,7 +17,7 @@ from pydantic import ValidationError
 
 from backend.app.clients.sql import SqlExecutor, quote_identifier, string_literal
 from backend.app.clients.workspace import WorkspaceClientFactory
-from backend.app.core.errors import InvalidRequestError, NotConfiguredError
+from backend.app.core.errors import InvalidRequestError, NotConfiguredError, NotFoundError
 from backend.app.models.data_access import (
     MIN_SYNC_INTERVAL_MINUTES,
     RUN_HISTORY_LIMIT,
@@ -242,6 +242,23 @@ class DataAccessService:
             mode=mode_filter,
             retention_days=RUN_HISTORY_RETENTION_DAYS,
         )
+
+    def get_run(self, run_id: str) -> DataAccessRun:
+        """Return one stored run including its truncated plan.
+
+        Args:
+            run_id: Identifier from a previous sync.
+
+        Returns:
+            The run.
+
+        Raises:
+            NotFoundError: If the id is unknown or outside the retention window.
+        """
+        for run in self._filtered_runs():
+            if run.run_id == run_id:
+                return run
+        raise NotFoundError(f"Data-access run {run_id} was not found")
 
     def latest_run(self, *, mode: str | None = None) -> DataAccessRun | None:
         """Return the most recent run (optionally mode-filtered) including its plan.
@@ -474,7 +491,10 @@ class DataAccessService:
                 for r in self._runs()
                 if r.run_id != run.run_id and r.started_at >= cutoff
             ]
-            blob = [run.model_dump(mode="json"), *[r.model_dump(mode="json") for r in existing]]
+            blob = [
+                run.model_dump(mode="json", exclude={"duration_seconds"}),
+                *[r.model_dump(mode="json", exclude={"duration_seconds"}) for r in existing],
+            ]
             self._storage.settings.put_many({_RUNS_KEY: blob[:RUN_HISTORY_LIMIT]}, "system")
 
     def _acquire_lock(self, run_id: str, started: datetime) -> bool:

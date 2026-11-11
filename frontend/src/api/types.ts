@@ -1064,4 +1064,6 @@ export interface DataAccessRun {
   summary: DataAccessPlanSummary | null;
   plan: DataAccessPlan | null;
   fingerprint: string | null;
+  /** Wall-clock seconds from start to finish; null while running. */
+  durationSeconds?: number | null;
 }

@@ -15,6 +15,7 @@ import {
   useUpsertPolicyException,
 } from "@/api/queries";
 import type { PrincipalKind } from "@/api/types";
+import { PrincipalPicker } from "@/components/PrincipalPicker";
 import { Alert, Badge, Card, ErrorAlert, PageHeader, Spinner } from "@/components/ui";
 import styles from "../identity/IdentityPage.module.css";
 
@@ -104,13 +105,16 @@ export function PolicyExceptionsPage() {
               ))}
             </select>
           </label>
-          <label className={styles.fieldGrow}>
+          <label className={styles.field}>
             <span className={styles.label}>Principal</span>
-            <input
-              className={styles.input}
+            <PrincipalPicker
               value={principalName}
-              onChange={(event) => setPrincipalName(event.target.value)}
-              placeholder="user@example.com, group name, or SP application id"
+              kind={principalType === "SERVICE_PRINCIPAL" ? undefined : principalType}
+              placeholder="Search users or groups…"
+              onChange={(name, nextKind) => {
+                setPrincipalName(name);
+                if (nextKind) setPrincipalType(nextKind);
+              }}
             />
           </label>
           <label className={styles.fieldGrow}>

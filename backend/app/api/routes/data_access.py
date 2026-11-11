@@ -108,6 +108,25 @@ def latest_run(
     return container.data_access.latest_run(mode=mode)
 
 
+@router.get("/runs/{run_id}", response_model=DataAccessRun)
+def get_run(_: Admin, container: Container, run_id: str) -> DataAccessRun:
+    """Return one sync including its truncated plan.
+
+    Requires app admin. Used when an operator clicks a row in Dry-run or Live logs.
+
+    Args:
+        container: Service container.
+        run_id: Identifier of the stored run.
+
+    Returns:
+        The run with sampled plan lists.
+
+    Raises:
+        NotFoundError: If the run is unknown or older than the retention window.
+    """
+    return container.data_access.get_run(run_id)
+
+
 @router.post("/runs", response_model=DataAccessRun)
 def run_now(
     admin: Admin, container: Container, body: RunDataAccessRequest | None = None

@@ -17,6 +17,16 @@ describe("Data access dry-run", () => {
     expect(screen.getByText("Dry-run logs")).toBeInTheDocument();
     expect(screen.getByText(/Grants to add sample/i)).toBeInTheDocument();
     expect(screen.getByLabelText("Schedule mode")).toHaveValue("dry_run");
+    expect(screen.getByText("2.0s")).toBeInTheDocument();
+  });
+
+  it("loads a log row into the report when clicked", async () => {
+    const user = userEvent.setup();
+    renderApp("/data-access");
+    const row = await screen.findByRole("button", { name: /View run from/i });
+    await user.click(row);
+    expect(await screen.findByLabelText("Plan summary")).toBeInTheDocument();
+    expect(row).toHaveAttribute("aria-pressed", "true");
   });
 
   it("shows an empty state when no run exists", async () => {

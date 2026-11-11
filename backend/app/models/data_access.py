@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import Field, field_validator
+from pydantic import Field, computed_field, field_validator
 
 from backend.app.models.base import ApiModel
 
@@ -356,6 +356,7 @@ class DataAccessRun(ApiModel):
         summary: Plan counts when the planner finished.
         plan: Truncated plan; omitted from history list entries.
         fingerprint: Desired-state hash from the plan.
+        duration_seconds: Elapsed wall time when finished; omitted from stored JSON.
     """
 
     run_id: str
@@ -369,6 +370,14 @@ class DataAccessRun(ApiModel):
     summary: DataAccessPlanSummary | None = None
     plan: DataAccessPlan | None = None
     fingerprint: str | None = None
+
+    @computed_field
+    @property
+    def duration_seconds(self) -> float | None:
+        """Wall-clock seconds from start to finish, or None while the run is in progress."""
+        if self.finished_at is None:
+            return None
+        return round(max(0.0, (self.finished_at - self.started_at).total_seconds()), 1)
 
 
 class DataAccessRunList(ApiModel):

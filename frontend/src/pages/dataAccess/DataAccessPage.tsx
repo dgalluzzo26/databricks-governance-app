@@ -10,6 +10,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import {
   useDataAccessLatestRun,
   useDataAccessReadiness,
+  useDataAccessRun,
   useDataAccessRuns,
   useDataAccessSettings,
   useRunDataAccessSync,
@@ -35,6 +36,8 @@ export function DataAccessPage() {
   const tab: DataAccessTab = requested === "live" ? "live" : "dry-run";
   const [dryPage, setDryPage] = useState(1);
   const [livePage, setLivePage] = useState(1);
+  const [drySelectedId, setDrySelectedId] = useState<string | null>(null);
+  const [liveSelectedId, setLiveSelectedId] = useState<string | null>(null);
 
   const setTab = (next: DataAccessTab) => {
     const params = new URLSearchParams(searchParams);
@@ -48,8 +51,12 @@ export function DataAccessPage() {
   const liveLatest = useDataAccessLatestRun("apply");
   const dryHistory = useDataAccessRuns("dry_run", dryPage);
   const liveHistory = useDataAccessRuns("apply", livePage);
+  const drySelected = useDataAccessRun(drySelectedId);
+  const liveSelected = useDataAccessRun(liveSelectedId);
   const save = useSaveDataAccessSettings();
   const run = useRunDataAccessSync();
+  const dryReport = resolveDisplayedRun(dryLatest.data, drySelectedId, drySelected.data);
+  const liveReport = resolveDisplayedRun(liveLatest.data, liveSelectedId, liveSelected.data);
 
   return (
     <div className={styles.stack}>
@@ -121,7 +128,9 @@ export function DataAccessPage() {
                 type="button"
                 className={`${styles.button} ${styles.buttonPrimary}`}
                 disabled={run.isPending || readiness.data?.dryRunReady === false}
-                onClick={() => void run.mutateAsync("dry_run")}
+                onClick={() =>
+                  void run.mutateAsync("dry_run").then((finished) => setDrySelectedId(finished.runId))
+                }
               >
                 {run.isPending ? "Running…" : "Run now"}
               </button>
@@ -132,14 +141,19 @@ export function DataAccessPage() {
               mutating Unity Catalog.
             </p>
             {run.error && <ErrorAlert error={run.error} title="Dry-run failed" />}
-            {dryLatest.isPending && <Spinner label="Loading latest dry-run" />}
+            {(dryLatest.isPending || (drySelectedId !== null && drySelected.isPending)) && (
+              <Spinner label="Loading dry-run" />
+            )}
             {dryLatest.error && (
               <ErrorAlert error={dryLatest.error} title="Could not load latest dry-run" />
+            )}
+            {drySelected.error && (
+              <ErrorAlert error={drySelected.error} title="Could not load selected dry-run" />
             )}
             {dryLatest.data == null && !dryLatest.isPending && (
               <p className={styles.muted}>No dry-run has been stored yet.</p>
             )}
-            {dryLatest.data && <RunReport run={dryLatest.data} />}
+            {dryReport && <RunReport run={dryReport} />}
           </Card>
           <RunHistoryCard
             title="Dry-run logs"
@@ -149,6 +163,8 @@ export function DataAccessPage() {
             error={dryHistory.error}
             page={dryPage}
             onPageChange={setDryPage}
+            selectedRunId={drySelectedId ?? dryLatest.data?.runId ?? null}
+            onSelectRun={setDrySelectedId}
           />
         </>
       )}
@@ -163,8 +179,12 @@ export function DataAccessPage() {
           historyError={liveHistory.error}
           page={livePage}
           onPageChange={setLivePage}
-          latest={liveLatest.data}
           latestPending={liveLatest.isPending}
+          displayed={liveReport}
+          selectedPending={liveSelectedId !== null && liveSelected.isPending}
+          selectedError={liveSelected.error}
+          selectedRunId={liveSelectedId ?? liveLatest.data?.runId ?? null}
+          onSelectRun={setLiveSelectedId}
           scheduleMode={settingsQuery.data?.settings.scheduleMode}
           scheduleEnabled={settingsQuery.data?.settings.scheduleEnabled}
           run={run}
@@ -186,8 +206,12 @@ function LiveTab(props: {
   historyError: Error | null;
   page: number;
   onPageChange: (page: number) => void;
-  latest: DataAccessRun | null | undefined;
   latestPending: boolean;
+  displayed: DataAccessRun | null | undefined;
+  selectedPending: boolean;
+  selectedError: Error | null;
+  selectedRunId: string | null;
+  onSelectRun: (runId: string) => void;
   scheduleMode: "dry_run" | "apply" | undefined;
   scheduleEnabled: boolean | undefined;
   run: ReturnType<typeof useRunDataAccessSync>;
@@ -201,8 +225,12 @@ function LiveTab(props: {
     historyError,
     page,
     onPageChange,
-    latest,
     latestPending,
+    displayed,
+    selectedPending,
+    selectedError,
+    selectedRunId,
+    onSelectRun,
     scheduleMode,
     scheduleEnabled,
     run,
@@ -272,7 +300,7 @@ function LiveTab(props: {
                   "Apply will create/nest dac_* groups, sync membership from Identity, and GRANT/REVOKE table access. Continue?",
                 )
               ) {
-                void run.mutateAsync("apply");
+                void run.mutateAsync("apply").then((finished) => onSelectRun(finished.runId));
               }
             }}
           >
@@ -285,8 +313,9 @@ function LiveTab(props: {
           → GRANT adds → REVOKE stale managed grants.
         </p>
         {run.error && <ErrorAlert error={run.error} title="Apply failed" />}
-        {latestPending && <Spinner label="Loading latest apply" />}
-        {latest && <RunReport run={latest} compact />}
+        {(latestPending || selectedPending) && <Spinner label="Loading apply" />}
+        {selectedError && <ErrorAlert error={selectedError} title="Could not load selected apply" />}
+        {displayed && <RunReport run={displayed} />}
       </Card>
 
       <RunHistoryCard
@@ -297,6 +326,8 @@ function LiveTab(props: {
         error={historyError}
         page={page}
         onPageChange={onPageChange}
+        selectedRunId={selectedRunId}
+        onSelectRun={onSelectRun}
       />
     </div>
   );
@@ -310,8 +341,20 @@ function RunHistoryCard(props: {
   error: Error | null;
   page: number;
   onPageChange: (page: number) => void;
+  selectedRunId: string | null;
+  onSelectRun: (runId: string) => void;
 }) {
-  const { history, title, emptyHint, isPending, error, page, onPageChange } = props;
+  const {
+    history,
+    title,
+    emptyHint,
+    isPending,
+    error,
+    page,
+    onPageChange,
+    selectedRunId,
+    onSelectRun,
+  } = props;
   const totalPages = history ? Math.max(1, Math.ceil(history.total / history.pageSize)) : 1;
 
   return (
@@ -332,6 +375,7 @@ function RunHistoryCard(props: {
               <thead>
                 <tr>
                   <th>When</th>
+                  <th>Elapsed</th>
                   <th>Status</th>
                   <th>Trigger</th>
                   <th>Add / revoke / conflicts</th>
@@ -339,8 +383,25 @@ function RunHistoryCard(props: {
               </thead>
               <tbody>
                 {history.runs.map((item) => (
-                  <tr key={item.runId}>
+                  <tr
+                    key={item.runId}
+                    className={`${styles.tableRowClickable}${
+                      selectedRunId === item.runId ? ` ${styles.tableRowSelected}` : ""
+                    }`}
+                    tabIndex={0}
+                    role="button"
+                    aria-pressed={selectedRunId === item.runId}
+                    aria-label={`View run from ${new Date(item.startedAt).toLocaleString()}`}
+                    onClick={() => onSelectRun(item.runId)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        onSelectRun(item.runId);
+                      }
+                    }}
+                  >
                     <td>{new Date(item.startedAt).toLocaleString()}</td>
+                    <td>{formatElapsed(item)}</td>
                     <td>
                       <Badge
                         tone={
@@ -559,7 +620,7 @@ function SettingsCard(props: {
 /**
  * Summary-first report for one run. Detail tables stay collapsed as small samples.
  */
-function RunReport({ run, compact = false }: { run: DataAccessRun; compact?: boolean }) {
+function RunReport({ run }: { run: DataAccessRun }) {
   const plan = run.plan;
   const summary = run.summary ?? plan?.summary;
   const grantSample = summarizeGrantSample(plan?.grantsToAdd ?? []);
@@ -567,12 +628,11 @@ function RunReport({ run, compact = false }: { run: DataAccessRun; compact?: boo
 
   return (
     <div className={styles.stack}>
-      {!compact && (
-        <div className={styles.muted}>
-          {run.status} · {run.mode} · {run.trigger} · {new Date(run.startedAt).toLocaleString()}
-          {run.triggeredBy ? ` · ${run.triggeredBy}` : ""}
-        </div>
-      )}
+      <div className={styles.muted}>
+        {run.status} · {run.mode} · {run.trigger} · {new Date(run.startedAt).toLocaleString()}
+        {` · ${formatElapsed(run)}`}
+        {run.triggeredBy ? ` · ${run.triggeredBy}` : ""}
+      </div>
       {run.error && <Alert tone="danger" title="Run failed">{run.error}</Alert>}
       {summary && (
         <div className={styles.formGrid} aria-label="Plan summary">
@@ -758,4 +818,33 @@ function GrantTable(props: { caption: string; headers: string[]; rows: string[][
       </table>
     </div>
   );
+}
+
+function resolveDisplayedRun(
+  latest: DataAccessRun | null | undefined,
+  selectedId: string | null,
+  selected: DataAccessRun | undefined,
+): DataAccessRun | null | undefined {
+  if (selectedId) {
+    if (selected?.runId === selectedId) return selected;
+    if (latest?.runId === selectedId) return latest;
+    return selected;
+  }
+  return latest;
+}
+
+function formatElapsed(
+  run: Pick<DataAccessRun, "startedAt" | "finishedAt" | "durationSeconds">,
+): string {
+  const seconds =
+    run.durationSeconds ??
+    (run.finishedAt
+      ? Math.max(0, (Date.parse(run.finishedAt) - Date.parse(run.startedAt)) / 1000)
+      : null);
+  if (seconds == null || Number.isNaN(seconds)) return "running";
+  if (seconds < 1) return "<1s";
+  if (seconds < 60) return `${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = Math.round(seconds % 60);
+  return rest === 0 ? `${minutes}m` : `${minutes}m ${rest}s`;
 }

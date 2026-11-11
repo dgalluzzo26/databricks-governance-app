@@ -106,6 +106,7 @@ export const testDataAccessRun: DataAccessRun = {
   triggeredBy: "ana.lopez@example.com",
   error: null,
   fingerprint: "abc123",
+  durationSeconds: 2,
   summary: {
     eligibleObjects: 1,
     skippedUnreviewed: 0,
@@ -693,6 +694,17 @@ export function fakeServices(
           mode: mode ?? null,
           retentionDays: 30,
         };
+      },
+      getRun: async (runId: string) => {
+        if (overrides.dataAccessRun instanceof Error) {
+          return Promise.reject(overrides.dataAccessRun);
+        }
+        if (overrides.dataAccessRun === null) {
+          throw new Error("Run not found");
+        }
+        const run = overrides.dataAccessRun ?? testDataAccessRun;
+        if (run.runId !== runId) throw new Error("Run not found");
+        return run;
       },
       latestRun: async (mode?: "dry_run" | "apply") => {
         if (overrides.dataAccessRun instanceof Error) {

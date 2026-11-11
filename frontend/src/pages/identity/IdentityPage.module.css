@@ -185,6 +185,18 @@
   white-space: nowrap;
 }
 
+.tableRowClickable {
+  cursor: pointer;
+}
+
+.tableRowClickable:hover {
+  background: var(--surface-muted, rgba(127, 127, 127, 0.08));
+}
+
+.tableRowSelected {
+  background: var(--color-primary-subtle, rgba(0, 90, 200, 0.08));
+}
+
 .chipRow {
   display: flex;
   flex-wrap: wrap;

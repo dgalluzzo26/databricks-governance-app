@@ -216,6 +216,17 @@ export class DataAccessApi {
   }
 
   /**
+   * `GET /data-access/runs/{runId}` — one stored run including its sampled plan.
+   *
+   * @param runId - Identifier from the history list.
+   * @param signal - Optional abort signal.
+   * @returns The run.
+   */
+  getRun(runId: string, signal?: AbortSignal): Promise<DataAccessRun> {
+    return this.http.get<DataAccessRun>(`/data-access/runs/${encodeURIComponent(runId)}`, signal);
+  }
+
+  /**
    * `POST /data-access/runs` — run a sync now (`dry_run` or `apply`).
    *
    * @param mode - Plan only, or mutate groups / membership / grants.

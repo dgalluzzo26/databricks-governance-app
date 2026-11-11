@@ -310,6 +310,13 @@ def test_dry_run_uses_injected_inventory(client: TestClient, container) -> None:
     assert history["retentionDays"] == 30
     assert history["runs"][0]["runId"] == run["runId"]
     assert history["runs"][0]["plan"] is None
+    assert history["runs"][0]["durationSeconds"] is not None
+    fetched = client.get(f"/api/data-access/runs/{run['runId']}", headers=admin)
+    assert fetched.status_code == 200
+    assert fetched.json()["plan"]["grantsToAdd"]
+    assert fetched.json()["durationSeconds"] is not None
+    missing = client.get("/api/data-access/runs/does-not-exist", headers=admin)
+    assert missing.status_code == 404
     apply_only = client.get("/api/data-access/runs?mode=apply", headers=admin).json()
     assert apply_only["total"] == 0
 
