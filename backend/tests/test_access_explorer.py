@@ -438,6 +438,30 @@ def test_analyze_catalog_suggests_data_access(container) -> None:  # noqa: ANN00
     assert dac.requestable is True
 
 
+def test_analyze_table_dac_without_definition_does_not_fail(container) -> None:  # noqa: ANN001
+    """Tagged objects must still analyze when data_access_control is undefined."""
+    service, sql = _explorer(container)
+    sql.table_tags = [
+        {"tag_name": "data_access_control", "tag_value": "finance.budget"},
+        {"tag_name": "clr_review_status", "tag_value": "reviewed"},
+    ]
+    user = CurrentUser(
+        user_name="analyst@example.com",
+        email="analyst@example.com",
+        display_name="Analyst",
+        user_id="2",
+        groups=["users"],
+        is_admin=False,
+    )
+    insight = service.analyze_table(
+        AnalyzeTableRequest(full_name="demo.default.customers"), user
+    )
+    dac = next(s for s in insight.suggestions if s.kind.value == "data_access")
+    assert dac.requestable is False
+    assert "missing" in dac.reason.lower()
+    assert any(s.kind.value == "sensitivity" for s in insight.suggestions)
+
+
 def test_directory_principal_search(client: TestClient) -> None:
     body = client.get(
         "/api/directory/principals",

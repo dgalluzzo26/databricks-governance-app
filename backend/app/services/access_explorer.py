@@ -485,14 +485,19 @@ class AccessExplorerService:
             return None
         if (tags.get(review_key) or "").lower() != review_value:
             return None
-        definition = self._identity.get_definition(access_key)
+        try:
+            definition = self._identity.get_definition(access_key)
+        except NotFoundError:
+            definition = None
         held_values = {v.lower() for v in held.get(access_key, set())}
         already = access_value.lower() in held_values or any(
             access_value.lower().startswith(f"{h}.") for h in held_values
         )
         allowed = {v.lower() for v in (definition.allowed_values if definition else [])}
         requestable = (
-            not already and definition is not None and (not allowed or access_value.lower() in allowed)
+            not already
+            and definition is not None
+            and (not allowed or access_value.lower() in allowed)
         )
         routing = None
         if self._access_requests is not None:
@@ -519,15 +524,20 @@ class AccessExplorerService:
             if routed_to == RequestRouteKind.CATEGORY_APPROVERS and approvers
             else "app admins"
         )
-        reason = (
-            f"You already hold {access_key}={access_value}"
-            if already
-            else (
-                f"Request {access_key}={access_value} for this {level}; reviewed by {who}"
-                if requestable
-                else f"{level.title()} is tagged {access_value} but that value is not requestable yet"
+        if already:
+            reason = f"You already hold {access_key}={access_value}"
+        elif definition is None:
+            reason = (
+                f"{level.title()} is tagged {access_value}, but attribute definition "
+                f"'{access_key}' is missing — create it under Identity → Definitions"
             )
-        )
+        elif requestable:
+            reason = f"Request {access_key}={access_value} for this {level}; reviewed by {who}"
+        else:
+            reason = (
+                f"{level.title()} is tagged {access_value} but that value is not in the "
+                f"'{access_key}' allowed values yet"
+            )
         return SuggestedAttribute(
             kind=SuggestedAttributeKind.DATA_ACCESS,
             attribute_key=access_key,
