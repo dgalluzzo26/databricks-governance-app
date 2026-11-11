@@ -251,15 +251,24 @@ def test_settings_round_trip_allows_dry_run_flag(client: TestClient) -> None:
     body = client.get("/api/data-access/settings", headers=admin).json()
     assert body["minIntervalMinutes"] == 5
     assert body["settings"]["accessTagKey"] == "data_access_control"
+    assert body["settings"]["enrollmentCatalogTagKey"] == "data_access_controlled"
+    assert body["settings"]["enrollmentCatalogTagValue"] == "true"
     assert body["applyAvailable"] is True
+    assert "enrolledCatalogs" in body
 
     saved = client.put(
         "/api/data-access/settings",
         headers=admin,
-        json={**body["settings"], "intervalMinutes": 20, "allowedCatalogs": ["sandbox"]},
+        json={
+            **body["settings"],
+            "intervalMinutes": 20,
+            "enrollmentCatalogTagKey": "data_access_controlled",
+            "enrollmentCatalogTagValue": "true",
+        },
     )
     assert saved.status_code == 200
     assert saved.json()["settings"]["intervalMinutes"] == 20
+    assert saved.json()["settings"]["enrollmentCatalogTagKey"] == "data_access_controlled"
 
     too_small = client.put(
         "/api/data-access/settings",

@@ -114,6 +114,7 @@ export function DataAccessPage() {
           {settingsQuery.data && (
             <SettingsCard
               initial={settingsQuery.data.settings}
+              enrolledCatalogs={settingsQuery.data.enrolledCatalogs}
               minInterval={settingsQuery.data.minIntervalMinutes}
               applyReady={readiness.data?.applyReady === true && readiness.data?.setupReady === true}
               saving={save.isPending}
@@ -451,10 +452,11 @@ function RunHistoryCard(props: {
 }
 
 /**
- * Editable settings form for tags, catalogs, interval, schedule, and conflict policy.
+ * Editable settings form for tags, enrollment, interval, schedule, and conflict policy.
  */
 function SettingsCard(props: {
   initial: DataAccessSettings;
+  enrolledCatalogs: string[];
   minInterval: number;
   applyReady: boolean;
   saving: boolean;
@@ -474,7 +476,6 @@ function SettingsCard(props: {
           event.preventDefault();
           props.onSave({
             ...form,
-            allowedCatalogs: form.allowedCatalogs,
             dryRun: true,
           });
         }}
@@ -519,6 +520,24 @@ function SettingsCard(props: {
               value={form.hierarchySeparator}
               onChange={(e) => setForm({ ...form, hierarchySeparator: e.target.value })}
               maxLength={1}
+            />
+          </label>
+          <label className={styles.field}>
+            <span className={styles.label}>Enrollment catalog tag</span>
+            <input
+              className={styles.input}
+              value={form.enrollmentCatalogTagKey}
+              onChange={(e) => setForm({ ...form, enrollmentCatalogTagKey: e.target.value })}
+              aria-label="Enrollment catalog tag"
+            />
+          </label>
+          <label className={styles.field}>
+            <span className={styles.label}>Enrollment tag value</span>
+            <input
+              className={styles.input}
+              value={form.enrollmentCatalogTagValue}
+              onChange={(e) => setForm({ ...form, enrollmentCatalogTagValue: e.target.value })}
+              aria-label="Enrollment tag value"
             />
           </label>
           <label className={styles.field}>
@@ -579,22 +598,27 @@ function SettingsCard(props: {
               <option value="warn">Report mismatches (warn)</option>
             </select>
           </label>
-          <label className={styles.fieldGrow}>
-            <span className={styles.label}>Allowed catalogs (comma-separated; empty = all)</span>
-            <input
-              className={styles.input}
-              value={form.allowedCatalogs.join(", ")}
-              onChange={(e) =>
-                setForm({
-                  ...form,
-                  allowedCatalogs: e.target.value
-                    .split(",")
-                    .map((part) => part.trim())
-                    .filter(Boolean),
-                })
-              }
-            />
-          </label>
+          <div className={styles.fieldGrow}>
+            <span className={styles.label}>Enrolled catalogs</span>
+            <p className={styles.muted}>
+              Catalogs tagged{" "}
+              <code>
+                {form.enrollmentCatalogTagKey}={form.enrollmentCatalogTagValue}
+              </code>
+              . Access Explorer, sync, and ABAC only include these. Unset the tag to unenroll.
+            </p>
+            {props.enrolledCatalogs.length === 0 ? (
+              <p className={styles.muted}>No catalogs currently carry this tag.</p>
+            ) : (
+              <ul className={styles.muted} aria-label="Enrolled catalogs">
+                {props.enrolledCatalogs.map((name) => (
+                  <li key={name}>
+                    <code>{name}</code>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         </div>
         {form.scheduleEnabled && form.scheduleMode === "apply" && (
           <Alert tone="warning" title="Scheduled apply will mutate Unity Catalog">

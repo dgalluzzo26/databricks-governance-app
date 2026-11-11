@@ -157,6 +157,9 @@ class AccessExplorerService:
         if len(q) < 2:
             raise InvalidRequestError("Search query must be at least 2 characters")
         limit = max(1, min(limit, 100))
+        catalog_filter = self._enrolled_catalog_sql("table_catalog")
+        if catalog_filter is None:
+            return TableSearchResult(tables=[], total=0)
         # instr() is a literal substring match, so _ and % in names are not wildcards.
         needle = string_literal(q.lower())
         rows = self._sql.query(
@@ -164,6 +167,7 @@ class AccessExplorerService:
             SELECT table_catalog, table_schema, table_name
             FROM system.information_schema.tables
             WHERE instr(lower(concat_ws('.', table_catalog, table_schema, table_name)), {needle}) > 0
+              {catalog_filter}
             ORDER BY table_catalog, table_schema, table_name
             LIMIT {limit}
             """
@@ -181,21 +185,14 @@ class AccessExplorerService:
     # --- tree browser (lazy: one level per request) ---------------------------------
 
     def list_catalogs(self) -> TreeCatalogList:
-        """List catalogs for the top level of the tree browser.
+        """List enrollment-tagged catalogs for the top level of the tree browser.
 
         Returns:
             Up to the tree limit of catalogs, with ``truncated`` set when more exist.
         """
-        rows = self._sql.query(
-            f"""
-            SELECT catalog_name
-            FROM system.information_schema.catalogs
-            ORDER BY catalog_name
-            LIMIT {_TREE_LIMIT + 1}
-            """
-        )
-        truncated = len(rows) > _TREE_LIMIT
-        items = [TreeCatalog(catalog_name=str(r["catalog_name"])) for r in rows[:_TREE_LIMIT]]
+        enrolled = self._enrolled_catalogs()
+        truncated = len(enrolled) > _TREE_LIMIT
+        items = [TreeCatalog(catalog_name=name) for name in enrolled[:_TREE_LIMIT]]
         return TreeCatalogList(catalogs=items, total=len(items), truncated=truncated)
 
     def list_schemas(self, catalog: str) -> TreeSchemaList:
@@ -208,9 +205,10 @@ class AccessExplorerService:
             Up to the tree limit of schemas, with ``truncated`` set when more exist.
 
         Raises:
-            InvalidRequestError: If the catalog name is invalid.
+            InvalidRequestError: If the catalog name is invalid or not enrollment-tagged.
         """
         name = _require_identifier(catalog, "catalog")
+        self._require_enrolled_catalog(name)
         rows = self._sql.query(
             f"""
             SELECT schema_name
@@ -236,10 +234,11 @@ class AccessExplorerService:
             Up to the tree limit of tables, with ``truncated`` set when more exist.
 
         Raises:
-            InvalidRequestError: If the catalog or schema name is invalid.
+            InvalidRequestError: If the catalog or schema name is invalid or not enrolled.
         """
         cat = _require_identifier(catalog, "catalog")
         sch = _require_identifier(schema, "schema")
+        self._require_enrolled_catalog(cat)
         rows = self._sql.query(
             f"""
             SELECT table_name, table_type
@@ -273,7 +272,8 @@ class AccessExplorerService:
             Access insight and suggested attribute requests (including data-access).
 
         Raises:
-            InvalidRequestError: If the name is not a valid three-part table name.
+            InvalidRequestError: If the name is not a valid three-part table name or the
+                catalog is not enrollment-tagged.
             NotFoundError: If the table does not exist or is not visible.
         """
         parts = [p for p in request.resolved_name().split(".") if p]
@@ -283,6 +283,7 @@ class AccessExplorerService:
         _require_identifier(catalog, "catalog")
         _require_identifier(schema, "schema")
         _require_identifier(table, "table")
+        self._require_enrolled_catalog(catalog)
         exists = self._sql.query(
             f"""
             SELECT 1 AS ok
@@ -480,6 +481,31 @@ class AccessExplorerService:
             resolved_category=resolved,
             approvers=approvers,
         )
+
+    def _enrolled_catalogs(self) -> list[str]:
+        """Return enrollment-tagged catalogs, or empty when data-access is unavailable."""
+        if self._data_access is None:
+            return []
+        return self._data_access.list_enrolled_catalogs()
+
+    def _enrolled_catalog_sql(self, column: str) -> str | None:
+        """Return an AND-clause limiting ``column`` to enrolled catalogs, or None if none."""
+        enrolled = self._enrolled_catalogs()
+        if not enrolled:
+            return None
+        allowed = ", ".join(string_literal(c.lower()) for c in enrolled)
+        return f"AND lower({column}) IN ({allowed})"
+
+    def _require_enrolled_catalog(self, catalog: str) -> None:
+        """Raise if ``catalog`` is not in the enrollment-tag perimeter."""
+        enrolled = {c.lower() for c in self._enrolled_catalogs()}
+        if catalog.lower() not in enrolled:
+            tag_key = "data_access_controlled"
+            if self._data_access is not None:
+                tag_key = self._data_access.get_settings().settings.enrollment_catalog_tag_key
+            raise InvalidRequestError(
+                f"Catalog '{catalog}' is not enrolled (missing '{tag_key}' catalog tag)"
+            )
 
     def _definition_for_access_tag(self, access_tag_key: str):
         """Find the Identity attribute whose key or governed tags match ``access_tag_key``."""

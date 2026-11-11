@@ -58,7 +58,8 @@ Stored as JSON in the app settings store under `data_access`.
 | `review_tag_key` / `review_tag_value` | `clr_review_status` / `reviewed` | Must also be on the same object |
 | `group_prefix` | `dac_` | Managed-group prefix; only `dac_*` principals are ever revoked |
 | `hierarchy_separator` | `.` | Splits values into parents for nesting |
-| `allowed_catalogs` | empty (all) | Restrict the scan; `system`, `samples`, `__databricks_internal` are always skipped |
+| `enrollment_catalog_tag_key` / `enrollment_catalog_tag_value` | `data_access_controlled` / `true` | Catalog tag that enrolls a catalog; sync and Access Explorer only see tagged catalogs |
+| `allowed_catalogs` | empty | Deprecated / ignored (perimeter is enrollment tags only) |
 | `data_privileges` | `SELECT` | Privileges granted on each eligible table |
 | `interval_minutes` | 15 (min 5) | Scheduler interval |
 | `schedule_enabled` | true | Pause switch for the scheduler |
@@ -136,11 +137,12 @@ re-added and revoked.
 
 ```mermaid
 flowchart TD
-  row["Each tag row"] --> sys{"Catalog is system / samples / internal?"}
+  inv["Inventory loader"] --> enroll{"Catalog has enrollment tag?"}
+  enroll -->|no| skip0["Not scanned"]
+  enroll -->|yes| row["Each tag row in enrolled catalogs"]
+  row --> sys{"Catalog is system / samples / internal?"}
   sys -->|yes| skip1["Ignore"]
-  sys -->|no| allowed{"allowed_catalogs set and catalog not in it?"}
-  allowed -->|yes| skip2["Ignore"]
-  allowed -->|no| obj["Group tags by object (catalog / schema / table)"]
+  sys -->|no| obj["Group tags by object (catalog / schema / table)"]
   obj --> hasAccess{"Object has access tag?"}
   hasAccess -->|no| skip3["Not managed"]
   hasAccess -->|yes| reviewed{"Review tag == reviewed on the same object?"}

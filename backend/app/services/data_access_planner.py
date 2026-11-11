@@ -197,10 +197,7 @@ def plan_data_access(
     for row in tags:
         if row.catalog.lower() in _SYSTEM_CATALOGS:
             continue
-        if settings.allowed_catalogs:
-            allowed = {c.lower() for c in settings.allowed_catalogs}
-            if row.catalog.lower() not in allowed:
-                continue
+        # Catalog perimeter is enforced by the inventory loader (enrollment tag).
         obj = _Object(row.level, row.full_name, row.catalog, row.schema, row.table)
         key = (obj.level, obj.full_name.lower())
         objects[key] = obj

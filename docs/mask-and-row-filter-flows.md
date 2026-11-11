@@ -82,6 +82,8 @@ column tags when editing mask rules (except ensuring governed tag *values* exist
 Created by `MaskRuleService._recreate_variant_policy` on **Sync registry / Ensure pack**.
 
 - Scope: `ON METASTORE`, `TO account users`, `FOR TABLES`
+- When: `has_tag_value('data_access_controlled', 'true')` (catalog enrollment tag; configurable
+  via Data Access settings). Tables inherit the catalog tag for this check.
 - Match: columns with `sensitivity_category`, `sensitivity`, `data_type` where `data_type` is
   **not** `geometry` or `geography`
 - Action: `COLUMN MASK data_governance_app.masking_functions.mask_variant`
@@ -270,6 +272,7 @@ Default deny when the caller has no matching attribute.
 Builder: `build_policy_sql`. Recreated on every `ensure_pack`.
 
 - `ROW FILTER has_row_access`
+- `WHEN has_tag_value('data_access_controlled', 'true')` (same enrollment tag as masks)
 - `MATCH COLUMNS` is the OR of `has_tag_value('row_filter', '<each dimension>')`
 - Passes `(column_value, get_column_tag_value(c, 'row_filter'))`
 - `EXCEPT` built-in app + admin service principals **plus** any principals in the global

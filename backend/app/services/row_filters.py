@@ -101,12 +101,15 @@ def build_policy_sql(
     tag_key: str,
     dimensions: list[str],
     except_principals: list[str],
+    *,
+    enrollment_tag_key: str = "data_access_controlled",
+    enrollment_tag_value: str = "true",
 ) -> str:
     """Return DDL for the metastore row-filter policy covering all dimensions.
 
-    The policy applies to ``account users`` (minus EXCEPT principals) on any table with a
-    column tagged ``<tag_key> = <dimension>`` and passes that column's value and dimension
-    to the row-filter function.
+    The policy applies to ``account users`` (minus EXCEPT principals) on enrollment-tagged
+    catalogs when a column is tagged ``<tag_key> = <dimension>``, and passes that column's
+    value and dimension to the row-filter function.
 
     Args:
         policy_name: Validated policy name.
@@ -114,10 +117,14 @@ def build_policy_sql(
         tag_key: Row-filter governed tag key.
         dimensions: Registered dimension keys (must be non-empty).
         except_principals: Principals exempt from the filter.
+        enrollment_tag_key: Catalog enrollment tag key used in the ``WHEN`` clause.
+        enrollment_tag_value: Required enrollment tag value.
 
     Returns:
         A ``CREATE OR REPLACE POLICY ... ON METASTORE`` statement.
     """
+    from backend.app.services.catalog_enrollment import enrollment_when_clause
+
     match = "\n  OR ".join(
         f"has_tag_value({string_literal(tag_key)}, {string_literal(dim)})" for dim in dimensions
     )
@@ -126,11 +133,13 @@ def build_policy_sql(
         if except_principals
         else ""
     )
+    when_clause = enrollment_when_clause(enrollment_tag_key, enrollment_tag_value)
     return f"""CREATE OR REPLACE POLICY {policy_name} ON METASTORE
 COMMENT 'App-managed row filter over {tag_key} dimensions: {", ".join(dimensions)}'
 ROW FILTER {function_name}
 TO `account users`{except_clause}
 FOR TABLES
+{when_clause}
 MATCH COLUMNS (
   {match}
 ) AS c
@@ -425,12 +434,25 @@ class RowFilterService:
             UpstreamError: If policy DDL fails for a reason other than a missing tag value,
                 or still fails after retries.
         """
+        enrollment_key, enrollment_value = self._enrollment_tag()
+        # Enrollment may be an ungoverned catalog tag when tag-policy quota is exhausted.
+        try:
+            self._governed_tags.ensure_values(enrollment_key, [enrollment_value])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Could not ensure governed enrollment tag %s=%s: %s",
+                enrollment_key,
+                enrollment_value,
+                exc,
+            )
         statement = build_policy_sql(
             policy_name,
             self.function_name,
             self.tag_key,
             dims,
             self._except_principals(),
+            enrollment_tag_key=enrollment_key,
+            enrollment_tag_value=enrollment_value,
         )
         last_error: UpstreamError | None = None
         for attempt in range(5):
@@ -599,6 +621,12 @@ class RowFilterService:
             key = str(row["tag_value"]).lower()
             counts[key] = counts.get(key, 0) + 1
         return counts
+
+    def _enrollment_tag(self) -> tuple[str, str]:
+        """Return the catalog enrollment tag key/value from data-access settings."""
+        from backend.app.services.catalog_enrollment import enrollment_tag_from_storage
+
+        return enrollment_tag_from_storage(self._storage.settings.get_all())
 
     def _except_principals(self) -> list[str]:
         """Built-in SPs plus configured global exceptions bypass the row filter."""

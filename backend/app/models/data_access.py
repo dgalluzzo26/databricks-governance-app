@@ -68,7 +68,9 @@ class DataAccessSettings(ApiModel):
         review_tag_value: Required value of ``review_tag_key`` (e.g. ``reviewed``).
         group_prefix: Prefix for managed group names; values are slugified after it.
         hierarchy_separator: Splits an access value into parent prefixes for nested groups.
-        allowed_catalogs: Catalogs to scan; empty means every catalog except system catalogs.
+        enrollment_catalog_tag_key: Catalog tag that enrolls a catalog in the governance perimeter.
+        enrollment_catalog_tag_value: Required value of ``enrollment_catalog_tag_key``.
+        allowed_catalogs: Deprecated; ignored. Perimeter is enrollment-tag discovery only.
         data_privileges: Privileges granted on the tagged securable (traversal is added).
         interval_minutes: How often the in-app scheduler runs when enabled.
         schedule_enabled: When false, the background scheduler is paused.
@@ -82,6 +84,8 @@ class DataAccessSettings(ApiModel):
     review_tag_value: str = "reviewed"
     group_prefix: str = "dac_"
     hierarchy_separator: str = "."
+    enrollment_catalog_tag_key: str = "data_access_controlled"
+    enrollment_catalog_tag_value: str = "true"
     allowed_catalogs: list[str] = Field(default_factory=list)
     data_privileges: list[str] = Field(default_factory=lambda: ["SELECT"])
     interval_minutes: int = DEFAULT_SYNC_INTERVAL_MINUTES
@@ -90,7 +94,14 @@ class DataAccessSettings(ApiModel):
     conflict_policy: ConflictPolicy = ConflictPolicy.HOLD
     dry_run: bool = True
 
-    @field_validator("access_tag_key", "review_tag_key", "review_tag_value", "group_prefix")
+    @field_validator(
+        "access_tag_key",
+        "review_tag_key",
+        "review_tag_value",
+        "group_prefix",
+        "enrollment_catalog_tag_key",
+        "enrollment_catalog_tag_value",
+    )
     @classmethod
     def _strip_nonempty(cls, value: str) -> str:
         """Reject blank tag keys, review values, and group prefixes."""
@@ -139,11 +150,13 @@ class DataAccessSettingsView(ApiModel):
         settings: Current persisted (or default) settings.
         min_interval_minutes: Smallest interval the API will accept.
         apply_available: True when live apply is implemented (still gated by readiness).
+        enrolled_catalogs: Catalogs currently carrying the enrollment tag (from UC).
     """
 
     settings: DataAccessSettings
     min_interval_minutes: int = MIN_SYNC_INTERVAL_MINUTES
     apply_available: bool = True
+    enrolled_catalogs: list[str] = Field(default_factory=list)
 
 
 class RunDataAccessRequest(ApiModel):

@@ -58,6 +58,8 @@ export const testDataAccessSettings: DataAccessSettingsView = {
     reviewTagValue: "reviewed",
     groupPrefix: "dac_",
     hierarchySeparator: ".",
+    enrollmentCatalogTagKey: "data_access_controlled",
+    enrollmentCatalogTagValue: "true",
     allowedCatalogs: [],
     dataPrivileges: ["SELECT"],
     intervalMinutes: 15,
@@ -68,6 +70,7 @@ export const testDataAccessSettings: DataAccessSettingsView = {
   },
   minIntervalMinutes: 5,
   applyAvailable: true,
+  enrolledCatalogs: ["data_access_control", "dgalluzzo_sandbox_7474655957102538"],
 };
 
 export const testDataAccessReadiness: DataAccessReadiness = {

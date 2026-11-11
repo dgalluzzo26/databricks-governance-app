@@ -846,6 +846,11 @@ export interface DataAccessSettings {
   reviewTagValue: string;
   groupPrefix: string;
   hierarchySeparator: string;
+  /** Catalog tag key that enrolls a catalog in the governance perimeter. */
+  enrollmentCatalogTagKey: string;
+  /** Required value of the enrollment catalog tag. */
+  enrollmentCatalogTagValue: string;
+  /** @deprecated Ignored; perimeter is enrollment-tag discovery only. */
   allowedCatalogs: string[];
   dataPrivileges: string[];
   intervalMinutes: number;
@@ -862,6 +867,8 @@ export interface DataAccessSettingsView {
   settings: DataAccessSettings;
   minIntervalMinutes: number;
   applyAvailable: boolean;
+  /** Catalogs currently carrying the enrollment tag (from UC). */
+  enrolledCatalogs: string[];
 }
 
 /** One Account Admin SP / warehouse capability probe. */

@@ -41,6 +41,7 @@ from backend.app.models.data_access import (
 from backend.app.models.identity_attribute import AttributeAssignmentFilter
 from backend.app.models.user import CurrentUser
 from backend.app.repositories.base import StorageProvider
+from backend.app.services.catalog_enrollment import enrolled_catalogs_sql
 from backend.app.services.data_access_planner import (
     ActualGrant,
     ActualMember,
@@ -131,7 +132,12 @@ class DataAccessService:
         Returns:
             Settings view. Invalid stored JSON falls back to defaults and is logged.
         """
-        return DataAccessSettingsView(settings=self._settings(), apply_available=True)
+        settings = self._settings()
+        return DataAccessSettingsView(
+            settings=settings,
+            apply_available=True,
+            enrolled_catalogs=self.list_enrolled_catalogs(settings),
+        )
 
     def save_settings(self, body: DataAccessSettings, actor: CurrentUser) -> DataAccessSettingsView:
         """Validate and persist settings (including preferred dry_run flag).
@@ -145,7 +151,43 @@ class DataAccessService:
         """
         self._storage.settings.put_many({_SETTINGS_KEY: body.model_dump(mode="json")}, actor.user_name)
         logger.info("Data-access settings updated by %s", actor.user_name)
-        return DataAccessSettingsView(settings=body, apply_available=True)
+        return DataAccessSettingsView(
+            settings=body,
+            apply_available=True,
+            enrolled_catalogs=self.list_enrolled_catalogs(body),
+        )
+
+    def list_enrolled_catalogs(self, settings: DataAccessSettings | None = None) -> list[str]:
+        """Return catalogs tagged with the configured enrollment tag.
+
+        Args:
+            settings: Settings to use; defaults to stored settings.
+
+        Returns:
+            Sorted catalog names. Empty when the warehouse is unavailable or none are tagged.
+        """
+        cfg = settings or self._settings()
+        if not self._sql.configured:
+            return []
+        try:
+            rows = self._sql.query(
+                enrolled_catalogs_sql(
+                    cfg.enrollment_catalog_tag_key,
+                    cfg.enrollment_catalog_tag_value,
+                )
+            )
+        except (NotConfiguredError, DatabricksError) as exc:
+            logger.warning("Could not list enrolled catalogs: %s", exc)
+            return []
+        names = sorted(
+            {
+                str(row["catalog_name"])
+                for row in rows
+                if row.get("catalog_name")
+                and str(row["catalog_name"]).lower() not in _EXCLUDED_CATALOGS
+            }
+        )
+        return names
 
     def readiness(self) -> DataAccessReadiness:
         """Probe Account Admin SP and warehouse capabilities.
@@ -535,7 +577,8 @@ class DataAccessService:
         keys = ", ".join(
             string_literal(k.lower()) for k in (settings.access_tag_key, settings.review_tag_key)
         )
-        catalog_filter = self._catalog_sql(settings, "catalog_name")
+        enrolled = self.list_enrolled_catalogs(settings)
+        catalog_filter = self._catalog_sql(settings, "catalog_name", enrolled)
         rows: list[TagRow] = []
         catalog_rows = self._sql.query(
             f"""
@@ -556,13 +599,12 @@ class DataAccessService:
                     tag_value="" if row.get("tag_value") is None else str(row["tag_value"]),
                 )
             )
-        schema_filter = self._catalog_sql(settings, "catalog_name")
         schema_rows = self._sql.query(
             f"""
             SELECT catalog_name, schema_name, tag_name, tag_value
             FROM system.information_schema.schema_tags
             WHERE lower(tag_name) IN ({keys})
-              {schema_filter}
+              {catalog_filter}
             """
         )
         for row in schema_rows:
@@ -581,7 +623,7 @@ class DataAccessService:
             SELECT catalog_name, schema_name, table_name, tag_name, tag_value
             FROM system.information_schema.table_tags
             WHERE lower(tag_name) IN ({keys})
-              {self._catalog_sql(settings, "catalog_name")}
+              {catalog_filter}
             """
         )
         for row in table_rows:
@@ -605,7 +647,9 @@ class DataAccessService:
         like = prefix.replace("_", r"\_") + "%"
         like_sql = string_literal(like)
         grants: list[ActualGrant] = []
-        catalog_filter = self._catalog_sql(settings, "catalog_name")
+        enrolled = self.list_enrolled_catalogs(settings)
+        catalog_filter = self._catalog_sql(settings, "catalog_name", enrolled)
+        table_catalog_filter = self._catalog_sql(settings, "table_catalog", enrolled)
         for row in self._sql.query(
             f"""
             SELECT catalog_name, grantee, privilege_type, inherited_from
@@ -629,7 +673,7 @@ class DataAccessService:
             SELECT catalog_name, schema_name, grantee, privilege_type, inherited_from
             FROM system.information_schema.schema_privileges
             WHERE lower(grantee) LIKE {like_sql} ESCAPE '\\\\'
-              {self._catalog_sql(settings, "catalog_name")}
+              {catalog_filter}
             """
         ):
             if self._is_inherited_privilege(row.get("inherited_from")):
@@ -647,7 +691,7 @@ class DataAccessService:
             SELECT table_catalog, table_schema, table_name, grantee, privilege_type, inherited_from
             FROM system.information_schema.table_privileges
             WHERE lower(grantee) LIKE {like_sql} ESCAPE '\\\\'
-              {self._catalog_sql(settings, "table_catalog")}
+              {table_catalog_filter}
             """
         ):
             if self._is_inherited_privilege(row.get("inherited_from")):
@@ -1038,13 +1082,25 @@ class DataAccessService:
         """Expose tag inventory for Attribute Explorer (same loader as sync)."""
         return self._tag_loader(settings or self._settings())
 
-    def _catalog_sql(self, settings: DataAccessSettings, column: str) -> str:
-        """Return an AND-clause limiting ``column`` to allowed, non-system catalogs."""
-        excluded = " AND ".join(f"lower({column}) <> {string_literal(name)}" for name in _EXCLUDED_CATALOGS)
+    def _catalog_sql(
+        self,
+        settings: DataAccessSettings,
+        column: str,
+        enrolled: list[str] | None = None,
+    ) -> str:
+        """Return an AND-clause limiting ``column`` to enrollment-tagged, non-system catalogs.
+
+        Fail closed: when no catalogs carry the enrollment tag, the clause matches nothing.
+        """
+        del settings  # Perimeter is enrollment tags only; kept for call-site consistency.
+        excluded = " AND ".join(
+            f"lower({column}) <> {string_literal(name)}" for name in _EXCLUDED_CATALOGS
+        )
         clause = f"AND {excluded}" if excluded else ""
-        if not settings.allowed_catalogs:
-            return clause
-        allowed = ", ".join(string_literal(c.lower()) for c in settings.allowed_catalogs)
+        catalogs = enrolled if enrolled is not None else []
+        if not catalogs:
+            return f"{clause} AND 1 = 0"
+        allowed = ", ".join(string_literal(c.lower()) for c in catalogs)
         return f"{clause} AND lower({column}) IN ({allowed})"
 
     def _check_credentials(self) -> ReadinessCheck:

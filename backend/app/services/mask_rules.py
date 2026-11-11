@@ -642,8 +642,14 @@ class MaskRuleService:
         """Recreate the metastore column-mask policy for non-geo sensitivity-tagged columns.
 
         Applies ``mask_variant`` to ``account users`` (minus EXCEPT principals) on columns
-        tagged with ``sensitivity_category``, ``sensitivity``, and a non-geo ``data_type``.
+        tagged with ``sensitivity_category``, ``sensitivity``, and a non-geo ``data_type``,
+        only within catalogs carrying the enrollment tag.
         """
+        from backend.app.services.catalog_enrollment import (
+            enrollment_tag_from_storage,
+            enrollment_when_clause,
+        )
+
         name = self._config.mask_variant_policy_name
         except_clause = ""
         principals = self._except_principals()
@@ -651,6 +657,20 @@ class MaskRuleService:
             except_clause = "\nEXCEPT " + ", ".join(
                 f"`{p.replace('`', '')}`" for p in principals
             )
+        enrollment_key, enrollment_value = enrollment_tag_from_storage(
+            self._storage.settings.get_all()
+        )
+        # Enrollment may be an ungoverned catalog tag when tag-policy quota is exhausted.
+        try:
+            self._governed_tags.ensure_values(enrollment_key, [enrollment_value])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Could not ensure governed enrollment tag %s=%s: %s",
+                enrollment_key,
+                enrollment_value,
+                exc,
+            )
+        when_clause = enrollment_when_clause(enrollment_key, enrollment_value)
         self._sql.execute(
             f"""
             CREATE OR REPLACE POLICY {name} ON METASTORE
@@ -658,6 +678,7 @@ class MaskRuleService:
             COLUMN MASK {self.function_name}
             TO `account users`{except_clause}
             FOR TABLES
+            {when_clause}
             MATCH COLUMNS (
               has_tag('sensitivity_category')
               AND has_tag('sensitivity')

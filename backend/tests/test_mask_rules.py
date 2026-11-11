@@ -27,7 +27,7 @@ class MaskRuleTags(FakeGovernedTags):
         )
 
     def ensure_values(self, tag_key: str, values: list[str]) -> GovernedTagSummary:
-        tag = self.tags[tag_key]
+        tag = self.tags.get(tag_key) or GovernedTagSummary(tag_key=tag_key, values=[], value_count=0)
         merged = [*tag.values, *[v for v in values if v not in tag.values]]
         self.tags[tag_key] = tag.model_copy(update={"values": merged, "value_count": len(merged)})
         return self.tags[tag_key]

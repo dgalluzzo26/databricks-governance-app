@@ -51,7 +51,7 @@ class RowFilterTags(FakeGovernedTags):
         )
 
     def ensure_values(self, tag_key: str, values: list[str]) -> GovernedTagSummary:
-        tag = self.tags[tag_key]
+        tag = self.tags.get(tag_key) or GovernedTagSummary(tag_key=tag_key, values=[], value_count=0)
         merged = [*tag.values, *[v for v in values if v not in tag.values]]
         self.tags[tag_key] = tag.model_copy(update={"values": merged, "value_count": len(merged)})
         return self.tags[tag_key]
@@ -178,6 +178,7 @@ def test_upsert_dimension_regenerates_policy(container) -> None:  # noqa: ANN001
     assert dim.allowed_value_count == 2
     policy = next(s for s in sql.executed if "CREATE OR REPLACE POLICY" in s)
     assert "has_tag_value('row_filter', 'state')" in policy
+    assert "WHEN has_tag_value('data_access_controlled', 'true')" in policy
     assert "EXCEPT `app-sp-id`, `admin-sp-id`" in policy
     assert "geo_region" not in policy
     assert any("CREATE OR REPLACE FUNCTION" in s for s in sql.executed)
@@ -218,6 +219,7 @@ def test_policy_sql_matches_every_dimension() -> None:
         "rf_by_dimension", "`c`.`s`.`has_row_access`", "row_filter", ["state", "region"], []
     )
     assert "has_tag_value('row_filter', 'state')\n  OR has_tag_value('row_filter', 'region')" in text
+    assert "WHEN has_tag_value('data_access_controlled', 'true')" in text
     assert "EXCEPT" not in text
     assert "USING COLUMNS (c, get_column_tag_value(c, 'row_filter'))" in text
 

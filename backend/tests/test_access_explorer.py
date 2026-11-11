@@ -106,11 +106,19 @@ def _explorer(container):  # noqa: ANN001
     mask, sql = mask_service(container)
     # Replace with richer SQL double
     sql = ExplorerSql()
+    sql.catalog_tags = [
+        {
+            "catalog_name": "demo",
+            "tag_name": "data_access_controlled",
+            "tag_value": "true",
+        }
+    ]
     mask._sql = sql  # type: ignore[attr-defined]
     mask._mirror_sql = sql  # type: ignore[attr-defined]
     container.mask_rules = mask
     container.row_filters._sql = sql  # type: ignore[attr-defined]
     container.row_filters._governed_tags = MaskRuleTags()  # type: ignore[attr-defined]
+    container.data_access._sql = sql  # type: ignore[attr-defined]
     # seed mask rules + a state dimension tag
     actor = _admin()
     mask.seed_defaults(actor)  # type: ignore[arg-type]
@@ -260,7 +268,8 @@ def test_tree_levels_and_identifier_escaping(container) -> None:  # noqa: ANN001
     service._sql = sql  # type: ignore[attr-defined]
 
     catalogs = service.list_catalogs()
-    assert [c.catalog_name for c in catalogs.catalogs] == ["demo", "sandbox"]
+    # Perimeter comes from enrollment tags on data_access SQL, not information_schema.catalogs.
+    assert [c.catalog_name for c in catalogs.catalogs] == ["demo"]
     assert catalogs.truncated is False
 
     schemas = service.list_schemas("demo")
@@ -272,6 +281,8 @@ def test_tree_levels_and_identifier_escaping(container) -> None:  # noqa: ANN001
 
     with pytest.raises(InvalidRequestError):
         service.list_schemas("   ")
+    with pytest.raises(InvalidRequestError, match="not enrolled"):
+        service.list_schemas("sandbox")
     # quotes in identifiers are escaped (string_literal uses backslashes), not injected
     service.list_tables("demo", "o'reilly")
     assert any("o\\'reilly" in s for s in sql.statements)
@@ -292,7 +303,7 @@ def test_api_tree_routes(client: TestClient, container) -> None:  # noqa: ANN001
     headers = headers_for("analyst@example.com")
     cats = client.get("/api/access-explorer/tree/catalogs", headers=headers)
     assert cats.status_code == 200
-    assert cats.json()["total"] == 2
+    assert cats.json()["total"] == 1
     schemas = client.get("/api/access-explorer/tree/schemas", params={"catalog": "demo"}, headers=headers)
     assert schemas.status_code == 200
     tables = client.get(
