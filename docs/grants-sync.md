@@ -123,6 +123,11 @@ Only **direct** grants count. `information_schema` reports `inherited_from = 'NO
 grants; anything else (`CATALOG`, `SCHEMA`) is inherited and skipped so the sync never tries to
 revoke a privilege it cannot see at that level.
 
+Privilege names are normalized before diffing: `information_schema` returns `USE_CATALOG` /
+`USE_SCHEMA` (underscores), while GRANT SQL uses `USE CATALOG` / `USE SCHEMA` (spaces). The
+planner maps both to the spaced form so already-granted traversal privileges are not endlessly
+re-added and revoked.
+
 ---
 
 ## Planner decision flow

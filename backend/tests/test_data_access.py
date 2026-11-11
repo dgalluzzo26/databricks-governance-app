@@ -9,6 +9,7 @@ from backend.app.services.data_access_planner import (
     AssignmentRow,
     TagRow,
     group_name,
+    normalize_privilege,
     plan_data_access,
 )
 from backend.tests.conftest import headers_for
@@ -85,6 +86,27 @@ def test_plan_revokes_stale_managed_grants() -> None:
     assert all(g.principal != "other_group" for g in plan.grants_to_revoke)
     assert plan.summary.groups_existing == 1
     assert plan.summary.groups_to_create == 0
+
+
+def test_normalize_privilege_maps_information_schema_underscores() -> None:
+    assert normalize_privilege("USE_CATALOG") == "USE CATALOG"
+    assert normalize_privilege("use_schema") == "USE SCHEMA"
+    assert normalize_privilege("SELECT") == "SELECT"
+    assert normalize_privilege("  USE   CATALOG ") == "USE CATALOG"
+
+
+def test_plan_treats_use_catalog_underscore_as_already_granted() -> None:
+    """information_schema returns USE_CATALOG; planner desires USE CATALOG — must match."""
+    tags = [*_reviewed("table", "sandbox", "finance", "budget", "finance.budget")]
+    actual = [
+        ActualGrant("catalog", "sandbox", "dac_finance_budget", "USE_CATALOG"),
+        ActualGrant("schema", "sandbox.finance", "dac_finance_budget", "USE_SCHEMA"),
+        ActualGrant("table", "sandbox.finance.budget", "dac_finance_budget", "SELECT"),
+    ]
+    plan = plan_data_access(DataAccessSettings(), tags, actual, {"dac_finance_budget"})
+    assert plan.grants_to_add == []
+    assert plan.grants_to_revoke == []
+    assert plan.summary.grants_unchanged == 3
 
 
 def test_plan_revokes_previous_group_after_tag_change() -> None:

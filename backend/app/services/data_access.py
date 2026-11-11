@@ -568,7 +568,7 @@ class DataAccessService:
                     "catalog",
                     str(row["catalog_name"]),
                     str(row["grantee"]),
-                    str(row["privilege_type"]).upper(),
+                    str(row["privilege_type"]),
                 )
             )
         for row in self._sql.query(
@@ -586,7 +586,7 @@ class DataAccessService:
                     "schema",
                     f"{row['catalog_name']}.{row['schema_name']}",
                     str(row["grantee"]),
-                    str(row["privilege_type"]).upper(),
+                    str(row["privilege_type"]),
                 )
             )
         for row in self._sql.query(
@@ -604,7 +604,7 @@ class DataAccessService:
                     "table",
                     f"{row['table_catalog']}.{row['table_schema']}.{row['table_name']}",
                     str(row["grantee"]),
-                    str(row["privilege_type"]).upper(),
+                    str(row["privilege_type"]),
                 )
             )
         return grants

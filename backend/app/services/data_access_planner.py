@@ -115,6 +115,16 @@ class _Object:
     table: str | None
 
 
+def normalize_privilege(privilege: str) -> str:
+    """Canonical privilege name for plan diffs.
+
+    ``information_schema`` returns multi-word privileges with underscores
+    (``USE_CATALOG``), while GRANT SQL and the planner use spaces (``USE CATALOG``).
+    Without normalizing, every traversal grant is both "add" and "revoke" forever.
+    """
+    return " ".join(privilege.strip().upper().replace("_", " ").split())
+
+
 def group_name(prefix: str, value: str) -> str | None:
     """Build a managed group name from an access-tag value.
 
@@ -269,7 +279,12 @@ def plan_data_access(
         if group is None:
             continue
         for grant in _grants_for_table(obj, group, settings.data_privileges):
-            key = (grant.securable_type, grant.full_name.lower(), grant.principal.lower(), grant.privilege)
+            key = (
+                grant.securable_type.lower(),
+                grant.full_name.lower(),
+                grant.principal.lower(),
+                normalize_privilege(grant.privilege),
+            )
             desired.add(key)
             reasons[key] = grant.reason
 
@@ -283,7 +298,7 @@ def plan_data_access(
             grant.securable_type.lower(),
             grant.full_name.lower(),
             grant.principal.lower(),
-            grant.privilege.upper(),
+            normalize_privilege(grant.privilege),
         )
         actual.add(key)
         actual_display[key] = grant
@@ -302,7 +317,7 @@ def plan_data_access(
                 securable_type=found.securable_type,
                 full_name=found.full_name,
                 principal=found.principal,
-                privilege=found.privilege,
+                privilege=normalize_privilege(found.privilege),
                 reason="managed-prefix grant is not in the desired set",
             )
         )
