@@ -53,6 +53,39 @@ from backend.app.services.identity_attributes import IdentityAttributeService
 
 logger = logging.getLogger(__name__)
 
+
+def collapse_membership_by_principal_id(
+    changes: list[tuple[str, str, MembershipChange]],
+) -> list[tuple[str, str, MembershipChange]]:
+    """Drop conflicting ADD+REMOVE pairs that resolve to the same SCIM principal.
+
+    Account SCIM lists members by display name while Identity assignments use userName.
+    A plan can therefore contain both ``add email`` and ``remove Display Name`` for the
+    same person; applying both would add then remove them. When both appear for the same
+    ``(group_id, member_id)``, keep only the ADD.
+
+    Args:
+        changes: ``(group_id, member_id, change)`` triples already resolved to SCIM ids.
+
+    Returns:
+        Deduplicated triples in first-seen order (ADD preferred over REMOVE).
+    """
+    winners: dict[tuple[str, str], tuple[str, str, MembershipChange]] = {}
+    order: list[tuple[str, str]] = []
+    for group_id, member_id, change in changes:
+        key = (group_id, member_id)
+        existing = winners.get(key)
+        if existing is None:
+            winners[key] = (group_id, member_id, change)
+            order.append(key)
+            continue
+        _, _, prior = existing
+        if prior.action == MembershipAction.REMOVE and change.action == MembershipAction.ADD:
+            winners[key] = (group_id, member_id, change)
+        # ADD then REMOVE (or duplicate same action): keep the ADD / first winner.
+    return [winners[key] for key in order]
+
+
 _SETTINGS_KEY = "data_access"
 _RUNS_KEY = "data_access_runs"
 _LOCK_KEY = "data_access_lock"
@@ -625,6 +658,7 @@ class DataAccessService:
     # Account SCIM — Unity Catalog only recognizes account groups as GRANT principals.
     # Workspace ``groups.create`` yields WorkspaceGroup (PRINCIPAL_DOES_NOT_EXIST on GRANT).
     _ACCOUNT_SCIM_GROUPS = "/api/2.0/account/scim/v2/Groups"
+    _ACCOUNT_SCIM_USERS = "/api/2.0/account/scim/v2/Users"
 
     def _account_scim_list_groups(
         self, *, filter_expr: str | None = None, attributes: str = "id,displayName"
@@ -641,6 +675,19 @@ class DataAccessService:
         payload = admin.api_client.do("GET", self._ACCOUNT_SCIM_GROUPS, query=query)
         resources = payload.get("Resources") if isinstance(payload, dict) else None
         return list(resources or [])
+
+    def _account_scim_get_user(self, user_id: str) -> dict | None:
+        """Fetch one account user by SCIM id (for canonical userName)."""
+        admin = self._factory.admin()
+        try:
+            payload = admin.api_client.do(
+                "GET",
+                f"{self._ACCOUNT_SCIM_USERS}/{user_id}",
+                query={"attributes": "id,userName,displayName"},
+            )
+        except DatabricksError:
+            return None
+        return payload if isinstance(payload, dict) else None
 
     def _account_scim_create_group(self, display_name: str) -> str:
         """Create an account group; return its SCIM id."""
@@ -708,11 +755,18 @@ class DataAccessService:
     def _load_members(
         self, settings: DataAccessSettings, existing_groups: set[str]
     ) -> list[ActualMember]:
-        """Load current members of managed account groups via Account SCIM."""
+        """Load current members of managed account groups via Account SCIM.
+
+        Group member entries often expose ``display`` as the person's display name
+        (``David Galluzzo``) while Identity assignments store ``userName``
+        (``david.galluzzo@databricks.com``). Resolve USER members by SCIM id to
+        ``userName`` so the planner does not add-by-email then remove-by-display-name.
+        """
         if not existing_groups or not self._factory.admin_configured:
             return []
         members: list[ActualMember] = []
         by_name = {name.lower(): name for name in existing_groups}
+        user_names: dict[str, str] = {}
         try:
             escaped = settings.group_prefix.replace('"', '\\"')
             listed = self._account_scim_list_groups(
@@ -729,6 +783,7 @@ class DataAccessService:
                     display = entry.get("display") or entry.get("value")
                     if not display:
                         continue
+                    member_id = str(entry.get("value") or "").strip()
                     raw_type = str(entry.get("type") or "UNKNOWN").upper()
                     if raw_type in {"USER", "GROUP", "SERVICE_PRINCIPAL"}:
                         principal_type = raw_type
@@ -742,10 +797,20 @@ class DataAccessService:
                             )
                             else "USER"
                         )
+                    principal_name = str(display)
+                    if principal_type == "USER" and member_id:
+                        if member_id not in user_names:
+                            user = self._account_scim_get_user(member_id)
+                            user_names[member_id] = (
+                                str(user.get("userName") or display)
+                                if user
+                                else str(display)
+                            )
+                        principal_name = user_names[member_id]
                     members.append(
                         ActualMember(
                             group_name=str(name),
-                            principal_name=str(display),
+                            principal_name=principal_name,
                             principal_type=principal_type,
                         )
                     )
@@ -835,7 +900,12 @@ class DataAccessService:
         group_ids: dict[str, str],
         errors: list[str],
     ) -> None:
-        """Add/remove principals on managed account groups via Account SCIM patch."""
+        """Add/remove principals on managed account groups via Account SCIM patch.
+
+        Resolves each change to a SCIM id first, then collapses ADD+REMOVE pairs that
+        refer to the same person under different names (email vs display name).
+        """
+        resolved: list[tuple[str, str, MembershipChange]] = []
         for change in changes:
             group_id = group_ids.get(change.group.lower())
             if not group_id:
@@ -846,6 +916,9 @@ class DataAccessService:
             )
             if not member_id:
                 continue
+            resolved.append((group_id, member_id, change))
+
+        for group_id, member_id, change in collapse_membership_by_principal_id(resolved):
             try:
                 if change.action == MembershipAction.ADD:
                     self._account_scim_patch_group(

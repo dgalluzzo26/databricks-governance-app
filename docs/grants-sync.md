@@ -205,6 +205,12 @@ flowchart TD
 
 Expired or revoked assignments are inactive, so the principal is removed on the next apply.
 
+Member inventory resolves USER entries to Account SCIM ``userName`` (email). Group membership
+APIs often return only the display name (``David Galluzzo``), while Identity assignments store
+the email. Without that resolution the plan would add the email and remove the display name —
+both resolve to the same SCIM id, so apply would add then remove the person. Apply also collapses
+ADD+REMOVE pairs that share a SCIM id, keeping only the ADD.
+
 ---
 
 ## Apply order and APIs

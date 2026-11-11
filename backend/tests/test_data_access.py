@@ -167,6 +167,57 @@ def test_plan_reports_drift_against_previous_fingerprint() -> None:
     assert any("changed" in note for note in third.drift_since_last_run)
 
 
+def test_plan_membership_matches_email_not_display_name_once_canonical() -> None:
+    """After member load resolves display name → userName, no add/remove churn."""
+    tags = [*_reviewed("table", "sandbox", "default", "t1", "public")]
+    assignments = [AssignmentRow("david.galluzzo@databricks.com", "USER", "public")]
+    actual_members = [
+        ActualMember("dac_public", "david.galluzzo@databricks.com", "USER"),
+    ]
+    plan = plan_data_access(
+        DataAccessSettings(),
+        tags,
+        [],
+        {"dac_public"},
+        assignments=assignments,
+        actual_members=actual_members,
+    )
+    assert plan.membership_changes == []
+
+
+def test_collapse_membership_keeps_add_when_email_and_display_name_conflict() -> None:
+    from backend.app.models.data_access import MembershipAction, MembershipChange
+    from backend.app.services.data_access import collapse_membership_by_principal_id
+
+    add = MembershipChange(
+        group="dac_public",
+        principal_name="david.galluzzo@databricks.com",
+        principal_type="USER",
+        action=MembershipAction.ADD,
+        reason="Identity assignment public",
+    )
+    remove = MembershipChange(
+        group="dac_public",
+        principal_name="David Galluzzo",
+        principal_type="USER",
+        action=MembershipAction.REMOVE,
+        reason="no active Identity assignment for this group",
+    )
+    # Same SCIM user id for both names.
+    collapsed = collapse_membership_by_principal_id(
+        [("g1", "user-1", add), ("g1", "user-1", remove)]
+    )
+    assert len(collapsed) == 1
+    assert collapsed[0][2].action == MembershipAction.ADD
+    assert collapsed[0][2].principal_name == "david.galluzzo@databricks.com"
+
+    collapsed_rev = collapse_membership_by_principal_id(
+        [("g1", "user-1", remove), ("g1", "user-1", add)]
+    )
+    assert len(collapsed_rev) == 1
+    assert collapsed_rev[0][2].action == MembershipAction.ADD
+
+
 def test_plan_membership_add_and_remove() -> None:
     tags = [*_reviewed("table", "sandbox", "finance", "budget", "finance.budget")]
     assignments = [
