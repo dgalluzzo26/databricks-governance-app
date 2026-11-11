@@ -24,6 +24,7 @@ import type {
   UpsertPolicyExceptionRequest,
   UpsertRowFilterDimensionRequest,
   DataAccessSettings,
+  PrincipalKind,
 } from "./types";
 
 /**
@@ -57,6 +58,7 @@ export const queryKeys = {
   dataAccessReadiness: ["data-access", "readiness"] as const,
   dataAccessRuns: ["data-access", "runs"] as const,
   dataAccessLatestRun: ["data-access", "runs", "latest"] as const,
+  directoryPrincipals: (q: string, kind?: string) => ["directory", "principals", q, kind ?? ""] as const,
 };
 
 /**
@@ -179,6 +181,25 @@ export function useRunDataAccessSync() {
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: ["data-access"] });
     },
+  });
+}
+
+/**
+ * Searches workspace users/groups for the principal picker (`GET /directory/principals`).
+ *
+ * @remarks Disabled until the query has at least 2 characters. Stale after 30 seconds.
+ * @param q - Search text.
+ * @param kind - Optional `USER` or `GROUP` filter.
+ * @returns The query result for {@link DirectoryPrincipalList}.
+ */
+export function usePrincipalSearch(q: string, kind?: PrincipalKind) {
+  const api = useApi();
+  const trimmed = q.trim();
+  return useQuery({
+    queryKey: queryKeys.directoryPrincipals(trimmed, kind),
+    queryFn: ({ signal }) => api.directory.searchPrincipals(trimmed, kind, signal),
+    enabled: trimmed.length >= 2,
+    staleTime: 30_000,
   });
 }
 
@@ -876,7 +897,11 @@ export function useTableSearch(q: string, enabled = true) {
 export function useAnalyzeTable() {
   const api = useApi();
   return useMutation({
-    mutationFn: (body: AnalyzeTableRequest) => api.accessExplorer.analyze(body),
+    mutationFn: (body: AnalyzeTableRequest) =>
+      api.accessExplorer.analyze({
+        fullName: body.fullName ?? body.tableFullName,
+        tableFullName: body.tableFullName ?? body.fullName,
+      }),
   });
 }
 

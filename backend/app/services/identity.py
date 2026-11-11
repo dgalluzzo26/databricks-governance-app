@@ -16,9 +16,15 @@ from databricks.sdk.errors import DatabricksError
 from backend.app.clients.auth import RequestContext
 from backend.app.clients.cache import TtlCache
 from backend.app.clients.workspace import WorkspaceClientFactory
+from backend.app.core.errors import InvalidRequestError, UpstreamError
+from backend.app.models.directory import DirectoryPrincipal, DirectoryPrincipalList
+from backend.app.models.principal import PrincipalKind
 from backend.app.models.user import CurrentUser
 
 logger = logging.getLogger(__name__)
+
+_SEARCH_LIMIT_DEFAULT = 20
+_SEARCH_LIMIT_MAX = 50
 
 
 @dataclass
@@ -54,6 +60,113 @@ class IdentityService:
         self._factory = factory
         self._cache = cache
         self._admin_group = admin_group
+
+    def search_principals(
+        self,
+        q: str,
+        *,
+        kind: PrincipalKind | None = None,
+        limit: int = _SEARCH_LIMIT_DEFAULT,
+    ) -> DirectoryPrincipalList:
+        """Search workspace users and/or groups by name substring.
+
+        Uses the Account Admin SP (falls back to the app SP). SCIM ``co`` (contains)
+        filters are applied separately to users and groups, then merged.
+
+        Args:
+            q: Search text (at least 2 characters after strip).
+            kind: When set, only search that principal kind.
+            limit: Maximum results to return (capped at 50).
+
+        Returns:
+            Matching principals, truncated when more may exist.
+
+        Raises:
+            InvalidRequestError: If ``q`` is too short or ``kind`` is a service principal.
+            UpstreamError: If the directory API fails.
+        """
+        needle = q.strip()
+        if len(needle) < 2:
+            raise InvalidRequestError("Search query must be at least 2 characters")
+        if kind == PrincipalKind.SERVICE_PRINCIPAL:
+            raise InvalidRequestError("Service principal search is not supported")
+        cap = max(1, min(limit, _SEARCH_LIMIT_MAX))
+        escaped = needle.replace("\\", "\\\\").replace('"', '\\"')
+        results: list[DirectoryPrincipal] = []
+        truncated = False
+        try:
+            client = self._factory.admin()
+            if kind in (None, PrincipalKind.USER):
+                users, user_trunc = self._search_users(client, escaped, cap)
+                results.extend(users)
+                truncated = truncated or user_trunc
+            if kind in (None, PrincipalKind.GROUP) and len(results) < cap:
+                groups, group_trunc = self._search_groups(client, escaped, cap - len(results))
+                results.extend(groups)
+                truncated = truncated or group_trunc
+        except DatabricksError as exc:
+            raise UpstreamError(f"Directory search failed: {exc}") from exc
+        return DirectoryPrincipalList(principals=results[:cap], total=len(results[:cap]), truncated=truncated)
+
+    def _search_users(
+        self, client: object, escaped: str, limit: int
+    ) -> tuple[list[DirectoryPrincipal], bool]:
+        """Return up to ``limit`` users matching the escaped SCIM contains filter."""
+        listed = client.users.list(  # type: ignore[attr-defined]
+            filter=f'userName co "{escaped}" or displayName co "{escaped}"',
+            attributes="id,userName,displayName,emails",
+            count=limit + 1,
+        )
+        items: list[DirectoryPrincipal] = []
+        for user in listed:
+            if len(items) >= limit:
+                return items, True
+            name = (getattr(user, "user_name", None) or "").strip()
+            if not name:
+                continue
+            display = (getattr(user, "display_name", None) or name).strip()
+            email = None
+            emails = getattr(user, "emails", None) or []
+            for entry in emails:
+                value = getattr(entry, "value", None)
+                if value:
+                    email = str(value)
+                    break
+            items.append(
+                DirectoryPrincipal(
+                    name=name,
+                    display_name=display,
+                    principal_type=PrincipalKind.USER,
+                    email=email,
+                )
+            )
+        return items, False
+
+    def _search_groups(
+        self, client: object, escaped: str, limit: int
+    ) -> tuple[list[DirectoryPrincipal], bool]:
+        """Return up to ``limit`` groups matching the escaped SCIM contains filter."""
+        listed = client.groups.list(  # type: ignore[attr-defined]
+            filter=f'displayName co "{escaped}"',
+            attributes="id,displayName",
+            count=limit + 1,
+        )
+        items: list[DirectoryPrincipal] = []
+        for group in listed:
+            if len(items) >= limit:
+                return items, True
+            name = (getattr(group, "display_name", None) or "").strip()
+            if not name:
+                continue
+            items.append(
+                DirectoryPrincipal(
+                    name=name,
+                    display_name=name,
+                    principal_type=PrincipalKind.GROUP,
+                    email=None,
+                )
+            )
+        return items, False
 
     def current_user(self, ctx: RequestContext) -> CurrentUser:
         """Resolve the caller to a ``CurrentUser``, using the cache when possible.

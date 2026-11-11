@@ -40,9 +40,10 @@ from backend.app.models.access_request import SENSITIVITY_ATTRIBUTE_KEY
 from backend.app.models.mask_rule import MaskRuleKind
 from backend.app.models.user import CurrentUser
 from backend.app.services.access_requests import AccessRequestService, path_prefixes
+from backend.app.services.data_access import DataAccessService
 from backend.app.services.identity_attributes import IdentityAttributeService
 from backend.app.services.mask_rules import MaskRuleService
-from backend.app.services.row_filters import RowFilterService, split_table_name
+from backend.app.services.row_filters import RowFilterService
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,8 @@ def _require_identifier(value: str, label: str) -> str:
     if not name or len(name) > _IDENT_MAX or any(ch in name for ch in "\x00\n\r"):
         raise InvalidRequestError(f"Invalid {label} name")
     return name
+
+
 _TAG_KEYS = (
     "sensitivity_category",
     "sensitivity",
@@ -113,6 +116,7 @@ class AccessExplorerService:
         row_filters: Row-filter service used as a fallback to find table attachments.
         access_requests: Optional request service used to preview approver routing; when
             omitted, every suggestion is shown as routed to app admins.
+        data_access: Optional data-access settings used for tagged-level grant suggestions.
     """
 
     def __init__(
@@ -123,6 +127,7 @@ class AccessExplorerService:
         mask_rules: MaskRuleService,
         row_filters: RowFilterService,
         access_requests: AccessRequestService | None = None,
+        data_access: DataAccessService | None = None,
     ) -> None:
         self._config = config
         self._sql = sql
@@ -130,6 +135,7 @@ class AccessExplorerService:
         self._mask_rules = mask_rules
         self._row_filters = row_filters
         self._access_requests = access_requests
+        self._data_access = data_access
 
     def search_tables(self, query: str, *, limit: int = 40) -> TableSearchResult:
         """Find tables whose ``catalog.schema.table`` name contains a substring.
@@ -216,10 +222,7 @@ class AccessExplorerService:
             """
         )
         truncated = len(rows) > _TREE_LIMIT
-        items = [
-            TreeSchema(catalog_name=name, schema_name=str(r["schema_name"]))
-            for r in rows[:_TREE_LIMIT]
-        ]
+        items = [TreeSchema(catalog_name=name, schema_name=str(r["schema_name"])) for r in rows[:_TREE_LIMIT]]
         return TreeSchemaList(schemas=items, total=len(items), truncated=truncated)
 
     def list_tables(self, catalog: str, schema: str) -> TreeTableList:
@@ -260,27 +263,33 @@ class AccessExplorerService:
         return TreeTableList(tables=items, total=len(items), truncated=truncated)
 
     def analyze_table(self, request: AnalyzeTableRequest, user: CurrentUser) -> TableAccessInsight:
-        """Explain how column masks and the row filter apply to ``user`` on one table.
+        """Explain access for a catalog, schema, or table.
 
-        Reads the table's columns and governance tags (``sensitivity_category``,
-        ``sensitivity``, ``mask_rule``, ``data_type``, ``row_filter``), evaluates them against
-        the user's active attribute assignments (direct and via groups), and builds
-        request suggestions that would unmask columns or reveal filtered rows. This is an
-        approximation of policy evaluation from app metadata, not a query as the user.
+        Catalog/schema analysis covers data-access tags only. Table analysis also covers
+        column masks and row filters.
 
         Args:
-            request: Holds the three-part table name to analyze.
+            request: Object full name (1–3 dotted parts).
             user: The signed-in user whose attributes are evaluated.
 
         Returns:
-            Per-column insights, row-filter insight, suggested attribute requests, and a
-            one-line summary.
+            Access insight and suggested attribute requests.
 
         Raises:
-            InvalidRequestError: If the table name is not a valid three-part name.
-            NotFoundError: If the table does not exist or is not visible.
+            InvalidRequestError: If the name is invalid.
+            NotFoundError: If the object does not exist or is not visible.
         """
-        catalog, schema, table = split_table_name(request.table_full_name)
+        parts = [p for p in request.resolved_name().split(".") if p]
+        if len(parts) == 1:
+            return self._analyze_catalog(parts[0], user)
+        if len(parts) == 2:
+            return self._analyze_schema(parts[0], parts[1], user)
+        if len(parts) != 3:
+            raise InvalidRequestError("Analyze a catalog, catalog.schema, or catalog.schema.table")
+        catalog, schema, table = parts[0], parts[1], parts[2]
+        _require_identifier(catalog, "catalog")
+        _require_identifier(schema, "schema")
+        _require_identifier(table, "table")
         exists = self._sql.query(
             f"""
             SELECT 1 AS ok
@@ -349,6 +358,9 @@ class AccessExplorerService:
 
         row_filter = self._row_filter_insight(catalog, schema, table, held, tags_by_col)
         suggestions = self._suggestions(insights, row_filter, sensitivity_held, held)
+        dac = self._data_access_suggestion("table", f"{catalog}.{schema}.{table}", held)
+        if dac is not None:
+            suggestions = [dac, *suggestions]
         masked = sum(
             1
             for c in insights
@@ -368,9 +380,12 @@ class AccessExplorerService:
                 summary_parts.append(f"row filter {row_filter.dimension_key} hides all rows")
         else:
             summary_parts.append("no row filter")
+        if dac is not None:
+            summary_parts.append(f"data access tag {dac.attribute_value}")
 
         return TableAccessInsight(
             table_full_name=f"{catalog}.{schema}.{table}",
+            securable_level="table",
             catalog_name=catalog,
             schema_name=schema,
             table_name=table,
@@ -379,6 +394,196 @@ class AccessExplorerService:
             suggestions=suggestions,
             summary="; ".join(summary_parts),
         )
+
+    def _analyze_catalog(self, catalog: str, user: CurrentUser) -> TableAccessInsight:
+        """Explain data-access tags on a catalog (no column/row-filter analysis)."""
+        catalog = _require_identifier(catalog, "catalog")
+        exists = self._sql.query(
+            f"""
+            SELECT 1 AS ok FROM system.information_schema.catalogs
+            WHERE catalog_name = {string_literal(catalog)} LIMIT 1
+            """
+        )
+        if not exists:
+            raise NotFoundError(f"Catalog '{catalog}' was not found")
+        held = self._held_attribute_values(user)
+        dac = self._data_access_suggestion("catalog", catalog, held)
+        suggestions = [dac] if dac else []
+        summary = (
+            f"catalog tagged {dac.attribute_value}; requestable"
+            if dac and dac.requestable
+            else (
+                f"catalog tagged {dac.attribute_value}; you already hold it"
+                if dac
+                else "catalog has no reviewed data-access tag"
+            )
+        )
+        return TableAccessInsight(
+            table_full_name=catalog,
+            securable_level="catalog",
+            catalog_name=catalog,
+            suggestions=suggestions,
+            summary=summary,
+        )
+
+    def _analyze_schema(self, catalog: str, schema: str, user: CurrentUser) -> TableAccessInsight:
+        """Explain data-access tags on a schema (no column/row-filter analysis)."""
+        catalog = _require_identifier(catalog, "catalog")
+        schema = _require_identifier(schema, "schema")
+        exists = self._sql.query(
+            f"""
+            SELECT 1 AS ok FROM system.information_schema.schemata
+            WHERE catalog_name = {string_literal(catalog)}
+              AND schema_name = {string_literal(schema)}
+            LIMIT 1
+            """
+        )
+        if not exists:
+            raise NotFoundError(f"Schema '{catalog}.{schema}' was not found")
+        held = self._held_attribute_values(user)
+        full = f"{catalog}.{schema}"
+        dac = self._data_access_suggestion("schema", full, held)
+        suggestions = [dac] if dac else []
+        summary = (
+            f"schema tagged {dac.attribute_value}; requestable"
+            if dac and dac.requestable
+            else (
+                f"schema tagged {dac.attribute_value}; you already hold it"
+                if dac
+                else "schema has no reviewed data-access tag"
+            )
+        )
+        return TableAccessInsight(
+            table_full_name=full,
+            securable_level="schema",
+            catalog_name=catalog,
+            schema_name=schema,
+            suggestions=suggestions,
+            summary=summary,
+        )
+
+    def _data_access_suggestion(
+        self, level: str, full_name: str, held: dict[str, set[str]]
+    ) -> SuggestedAttribute | None:
+        """Build a data-access suggestion when the object has both required tags.
+
+        Args:
+            level: ``catalog``, ``schema``, or ``table``.
+            full_name: Object full name.
+            held: Attribute values the user already holds, keyed by attribute.
+
+        Returns:
+            A suggestion when the object is eligible; None otherwise.
+        """
+        settings = self._data_access.get_settings().settings if self._data_access is not None else None
+        access_key = (settings.access_tag_key if settings else "data_access_control").lower()
+        review_key = (settings.review_tag_key if settings else "clr_review_status").lower()
+        review_value = (settings.review_tag_value if settings else "reviewed").strip().lower()
+        tags = self._object_tags(level, full_name, {access_key, review_key})
+        access_value = tags.get(access_key)
+        if not access_value:
+            return None
+        if (tags.get(review_key) or "").lower() != review_value:
+            return None
+        definition = self._identity.get_definition(access_key)
+        held_values = {v.lower() for v in held.get(access_key, set())}
+        already = access_value.lower() in held_values or any(
+            access_value.lower().startswith(f"{h}.") for h in held_values
+        )
+        allowed = {v.lower() for v in (definition.allowed_values if definition else [])}
+        requestable = (
+            not already and definition is not None and (not allowed or access_value.lower() in allowed)
+        )
+        routing = None
+        if self._access_requests is not None:
+            routing = self._access_requests.resolve_attribute_routing(access_key, access_value)
+        routed_to = RequestRouteKind.APP_ADMINS
+        approvers: list[ApproverPreview] = []
+        resolved = None
+        if routing is not None:
+            routed_to = (
+                RequestRouteKind.CATEGORY_APPROVERS
+                if routing["routed_to"].value == "category_approvers"
+                else RequestRouteKind.APP_ADMINS
+            )
+            resolved = routing["resolved_category"]
+            approvers = [
+                ApproverPreview(
+                    principal_name=a.principal_name,
+                    principal_type=a.principal_type.value,
+                )
+                for a in routing["approvers"]
+            ]
+        who = (
+            ", ".join(a.principal_name for a in approvers)
+            if routed_to == RequestRouteKind.CATEGORY_APPROVERS and approvers
+            else "app admins"
+        )
+        reason = (
+            f"You already hold {access_key}={access_value}"
+            if already
+            else (
+                f"Request {access_key}={access_value} for this {level}; reviewed by {who}"
+                if requestable
+                else f"{level.title()} is tagged {access_value} but that value is not requestable yet"
+            )
+        )
+        return SuggestedAttribute(
+            kind=SuggestedAttributeKind.DATA_ACCESS,
+            attribute_key=access_key,
+            attribute_value=access_value,
+            reason=reason,
+            requestable=requestable,
+            request_path=f"/identity?tab=request&key={access_key}&value={access_value}"
+            if requestable
+            else None,
+            column_names=[],
+            covers_paths=[access_value],
+            is_hierarchy_parent=False,
+            routed_to=routed_to,
+            resolved_category=resolved,
+            approvers=approvers,
+        )
+
+    def _object_tags(self, level: str, full_name: str, keys: set[str]) -> dict[str, str]:
+        """Read access/review tags for one catalog, schema, or table."""
+        key_sql = ", ".join(string_literal(k) for k in sorted(keys))
+        if level == "catalog":
+            rows = self._sql.query(
+                f"""
+                SELECT tag_name, tag_value FROM system.information_schema.catalog_tags
+                WHERE catalog_name = {string_literal(full_name)}
+                  AND lower(tag_name) IN ({key_sql})
+                """
+            )
+        elif level == "schema":
+            catalog, schema = full_name.split(".", 1)
+            rows = self._sql.query(
+                f"""
+                SELECT tag_name, tag_value FROM system.information_schema.schema_tags
+                WHERE catalog_name = {string_literal(catalog)}
+                  AND schema_name = {string_literal(schema)}
+                  AND lower(tag_name) IN ({key_sql})
+                """
+            )
+        else:
+            catalog, schema, table = full_name.split(".", 2)
+            rows = self._sql.query(
+                f"""
+                SELECT tag_name, tag_value FROM system.information_schema.table_tags
+                WHERE catalog_name = {string_literal(catalog)}
+                  AND schema_name = {string_literal(schema)}
+                  AND table_name = {string_literal(table)}
+                  AND lower(tag_name) IN ({key_sql})
+                """
+            )
+        out: dict[str, str] = {}
+        for row in rows:
+            key = str(row["tag_name"]).strip().lower()
+            value = None if row.get("tag_value") is None else str(row["tag_value"]).strip()
+            if key and value is not None:
+                out[key] = value
+        return out
 
     def _held_attribute_values(self, user: CurrentUser) -> dict[str, set[str]]:
         """Group the user's active attribute values by lower-cased attribute key."""
@@ -442,9 +647,7 @@ class AccessExplorerService:
                 column_name=column_name,
                 data_type=sql_type,
                 tags=tags,
-                access_state=ColumnAccessState.GEO_MASKED
-                if not user_has
-                else ColumnAccessState.UNMASKED,
+                access_state=ColumnAccessState.GEO_MASKED if not user_has else ColumnAccessState.UNMASKED,
                 required_sensitivity_path=required,
                 user_has_access=user_has,
                 mask_rule_key=None,
@@ -452,9 +655,7 @@ class AccessExplorerService:
                 mask_kind=None,
                 mask_description="Geometry/geography columns return NULL when denied",
                 policy_name=(
-                    "mask_sensitivity_geometry"
-                    if data_type == "geometry"
-                    else "mask_sensitivity_geography"
+                    "mask_sensitivity_geometry" if data_type == "geometry" else "mask_sensitivity_geography"
                 ),
                 notes="Authorized via has_sensitivity; denied values become NULL (geo policy).",
             )
@@ -482,11 +683,7 @@ class AccessExplorerService:
             mask_kind=kind,
             mask_description=description,
             policy_name=self._config.mask_variant_policy_name,
-            notes=(
-                None
-                if user_has
-                else f"Denied presentation via apply_mask_rule handler '{handler}'."
-            ),
+            notes=(None if user_has else f"Denied presentation via apply_mask_rule handler '{handler}'."),
         )
 
     def _row_filter_insight(
@@ -516,9 +713,7 @@ class AccessExplorerService:
             attachment lookup failed.
         """
         policy_name = self._config.row_filter_policy_name
-        function_name = (
-            f"{self._config.app_catalog}.{self._config.abac_function_schema}.has_row_access"
-        )
+        function_name = f"{self._config.app_catalog}.{self._config.abac_function_schema}.has_row_access"
         # Prefer the column tags already loaded for this table (works even if the
         # dimension is not yet registered in the app pack).
         tag_match: tuple[str, str] | None = None
@@ -624,9 +819,7 @@ class AccessExplorerService:
                     column_names=cols,
                     covers_paths=[path],
                     is_parent=False,
-                    reason=(
-                        f"Unmask {len(cols)} column(s) that require sensitivity path {path}"
-                    ),
+                    reason=(f"Unmask {len(cols)} column(s) that require sensitivity path {path}"),
                     requestable=key in allowed or not allowed,
                 )
             )
@@ -664,11 +857,7 @@ class AccessExplorerService:
                 )
             )
 
-        if (
-            row_filter.attached
-            and row_filter.dimension_key
-            and not row_filter.user_has_wildcard
-        ):
+        if row_filter.attached and row_filter.dimension_key and not row_filter.user_has_wildcard:
             dim = row_filter.dimension_key
             held_dim = held.get(dim.lower(), set())
             dim_def = None
@@ -766,9 +955,7 @@ class AccessExplorerService:
             attribute_value=value,
             reason=f"{reason}. {route_note}",
             requestable=requestable,
-            request_path=(
-                f"/identity?tab=request&key={dim}&value={value}" if requestable else None
-            ),
+            request_path=(f"/identity?tab=request&key={dim}&value={value}" if requestable else None),
             column_names=[column_name] if column_name else [],
             covers_paths=[value],
             is_hierarchy_parent=False,
@@ -874,11 +1061,7 @@ class AccessExplorerService:
             for prefix in path_prefixes(path)[1:]:  # skip the leaf itself
                 coverage[prefix].add(path)
         ranked = sorted(
-            (
-                (parent, sorted(covered))
-                for parent, covered in coverage.items()
-                if len(covered) >= 2
-            ),
+            ((parent, sorted(covered)) for parent, covered in coverage.items() if len(covered) >= 2),
             key=lambda item: (-len(item[0].split(".")), item[0].lower()),
         )
         return ranked

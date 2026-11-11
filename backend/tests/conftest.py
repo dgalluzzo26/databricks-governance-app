@@ -25,12 +25,24 @@ class FakeUsersApi:
     def __init__(self, groups_by_user: dict[str, list[str]]) -> None:
         self._groups = groups_by_user
 
-    def list(self, filter: str, attributes: str):  # noqa: A002 - mirrors the SDK signature
-        user_name = filter.split('"')[1]
-        if user_name not in self._groups:
-            return iter([])
-        groups = [SimpleNamespace(display=g) for g in self._groups[user_name]]
-        return iter([SimpleNamespace(id="123", display_name="Test User", groups=groups)])
+    def list(self, filter: str, attributes: str, count: int | None = None):  # noqa: A002
+        del count
+        # Prefer an exact userName eq "..." clause when present; otherwise substring match.
+        quoted = [part for part in filter.split('"') if part and " " not in part and "=" not in part]
+        needle = quoted[0] if quoted else ""
+        matches = []
+        for user_name, groups in self._groups.items():
+            if needle.lower() in user_name.lower() or ("eq" in filter and needle == user_name):
+                matches.append(
+                    SimpleNamespace(
+                        id="123",
+                        user_name=user_name,
+                        display_name="Test User",
+                        emails=[SimpleNamespace(value=user_name)],
+                        groups=[SimpleNamespace(display=g) for g in groups],
+                    )
+                )
+        return iter(matches)
 
 
 class FakeWorkspaceFactory:
@@ -41,7 +53,9 @@ class FakeWorkspaceFactory:
         self.admin_configured = admin_configured
         self._client = SimpleNamespace(
             users=FakeUsersApi(groups_by_user),
-            groups=SimpleNamespace(list=lambda **_kwargs: iter([])),
+            groups=SimpleNamespace(
+                list=lambda **_kwargs: iter([SimpleNamespace(id="g1", display_name="data-stewards")])
+            ),
             current_user=SimpleNamespace(me=lambda: SimpleNamespace(user_name="local@example.com")),
             config=SimpleNamespace(host=HOST),
         )

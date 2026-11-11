@@ -36,6 +36,7 @@ import {
   useUpsertCategoryApprover,
 } from "@/api/queries";
 import type { ApprovalInboxItem, PrincipalKind, ValueSource } from "@/api/types";
+import { PrincipalPicker } from "@/components/PrincipalPicker";
 import { Alert, Badge, Card, ErrorAlert, PageHeader, Spinner } from "@/components/ui";
 import styles from "./IdentityPage.module.css";
 
@@ -780,11 +781,14 @@ function CategoryApproversPanel() {
           </label>
           <label className={styles.fieldGrow}>
             <span className={styles.label}>Principal</span>
-            <input
-              className={styles.input}
+            <PrincipalPicker
               value={principalName}
-              onChange={(event) => setPrincipalName(event.target.value)}
-              placeholder="user@example.com or group name"
+              kind={principalType}
+              placeholder="Search users or groups…"
+              onChange={(name, nextKind) => {
+                setPrincipalName(name);
+                if (nextKind === "USER" || nextKind === "GROUP") setPrincipalType(nextKind);
+              }}
             />
           </label>
         </div>
@@ -934,11 +938,14 @@ function AssignmentsPanel() {
         <div className={styles.formGrid}>
           <label className={styles.field}>
             <span className={styles.label}>Principal</span>
-            <input
-              className={styles.input}
+            <PrincipalPicker
               value={formPrincipal}
-              onChange={(event) => setFormPrincipal(event.target.value)}
-              placeholder="user@example.com or group name"
+              kind={formType === "SERVICE_PRINCIPAL" ? undefined : formType}
+              placeholder="Search users or groups…"
+              onChange={(name, nextKind) => {
+                setFormPrincipal(name);
+                if (nextKind) setFormType(nextKind);
+              }}
             />
           </label>
           <label className={styles.field}>

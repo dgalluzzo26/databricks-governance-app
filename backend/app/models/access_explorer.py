@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from backend.app.models.base import ApiModel
 
@@ -32,10 +32,12 @@ class SuggestedAttributeKind(StrEnum):
     Attributes:
         SENSITIVITY: A ``sensitivity`` path that would unmask columns.
         ROW_FILTER: A row-filter dimension value that would reveal rows.
+        DATA_ACCESS: A ``data_access_control`` (or configured) value for tagged-level grants.
     """
 
     SENSITIVITY = "sensitivity"
     ROW_FILTER = "row_filter"
+    DATA_ACCESS = "data_access"
 
 
 class RequestRouteKind(StrEnum):
@@ -207,37 +209,52 @@ class SuggestedAttribute(ApiModel):
 
 
 class TableAccessInsight(ApiModel):
-    """Complete access analysis of one table for the current user.
+    """Access analysis of a catalog, schema, or table for the current user.
 
     Attributes:
-        table_full_name: Dotted ``catalog.schema.table`` name.
-        catalog_name: Catalog containing the table.
-        schema_name: Schema containing the table.
-        table_name: Table name.
-        columns: Per-column masking insight.
-        row_filter: Row-filter insight.
+        table_full_name: Object full name (1–3 parts). Kept for wire compatibility.
+        securable_level: ``catalog``, ``schema``, or ``table``.
+        catalog_name: Catalog containing the object.
+        schema_name: Schema name; empty for catalog-level analysis.
+        table_name: Table name; empty for catalog/schema analysis.
+        columns: Per-column masking insight (tables only).
+        row_filter: Row-filter insight (tables only).
         suggestions: Attribute values the user could request.
         summary: One-line human-readable summary of the analysis.
     """
 
     table_full_name: str
+    securable_level: str = "table"
     catalog_name: str
-    schema_name: str
-    table_name: str
-    columns: list[ColumnAccessInsight]
-    row_filter: RowFilterInsight
-    suggestions: list[SuggestedAttribute]
+    schema_name: str = ""
+    table_name: str = ""
+    columns: list[ColumnAccessInsight] = Field(default_factory=list)
+    row_filter: RowFilterInsight = Field(default_factory=RowFilterInsight)
+    suggestions: list[SuggestedAttribute] = Field(default_factory=list)
     summary: str
 
 
 class AnalyzeTableRequest(ApiModel):
-    """Request body to analyze a table.
+    """Request body to analyze a catalog, schema, or table.
 
     Attributes:
-        table_full_name: Dotted ``catalog.schema.table`` name (5-512 chars).
+        full_name: ``catalog``, ``catalog.schema``, or ``catalog.schema.table``.
+        table_full_name: Deprecated alias accepted for older clients.
     """
 
-    table_full_name: str = Field(min_length=5, max_length=512)
+    full_name: str | None = Field(default=None, min_length=1, max_length=512)
+    table_full_name: str | None = Field(default=None, min_length=1, max_length=512)
+
+    @model_validator(mode="after")
+    def _require_one_name(self) -> AnalyzeTableRequest:
+        """Require ``full_name`` or the legacy ``table_full_name``."""
+        if not (self.full_name or "").strip() and not (self.table_full_name or "").strip():
+            raise ValueError("full_name is required")
+        return self
+
+    def resolved_name(self) -> str:
+        """Return the object name from ``full_name`` or the legacy ``table_full_name`` field."""
+        return (self.full_name or self.table_full_name or "").strip()
 
 
 class TreeCatalog(ApiModel):

@@ -683,7 +683,22 @@ export interface MaskRulePackStatus {
  */
 export type ColumnAccessState = "unmasked" | "masked" | "not_governed" | "geo_masked";
 /** Kind of attribute the Access Explorer suggests requesting. */
-export type SuggestedAttributeKind = "sensitivity" | "row_filter";
+export type SuggestedAttributeKind = "sensitivity" | "row_filter" | "data_access";
+
+/** A user or group from the workspace directory (`GET /directory/principals`). */
+export interface DirectoryPrincipal {
+  name: string;
+  displayName: string;
+  principalType: PrincipalKind;
+  email: string | null;
+}
+
+/** Directory search results for the principal picker. */
+export interface DirectoryPrincipalList {
+  principals: DirectoryPrincipal[];
+  total: number;
+  truncated: boolean;
+}
 
 /** A table matching an Access Explorer search. */
 export interface TableSearchHit {
@@ -773,15 +788,17 @@ export interface SuggestedAttribute {
   approvers: ApproverPreview[];
 }
 
-/** Full Access Explorer analysis of one table for the current user (`POST /access-explorer/analyze`). */
+/** Full Access Explorer analysis of a catalog, schema, or table (`POST /access-explorer/analyze`). */
 export interface TableAccessInsight {
   tableFullName: string;
+  /** `catalog`, `schema`, or `table`. */
+  securableLevel?: "catalog" | "schema" | "table";
   catalogName: string;
   schemaName: string;
   tableName: string;
   columns: ColumnAccessInsight[];
   rowFilter: RowFilterInsight;
-  /** Ordered leaf sensitivity paths first, then hierarchy parents, then row-filter values. */
+  /** Ordered data-access, sensitivity, then row-filter suggestions. */
   suggestions: SuggestedAttribute[];
   /** Human-readable summary of the analysis. */
   summary: string;
@@ -789,8 +806,10 @@ export interface TableAccessInsight {
 
 /** Body for `POST /access-explorer/analyze`. */
 export interface AnalyzeTableRequest {
-  /** `catalog.schema.table` (5–512 characters). */
-  tableFullName: string;
+  /** `catalog`, `catalog.schema`, or `catalog.schema.table`. Preferred field. */
+  fullName?: string;
+  /** Legacy alias still accepted by the backend. */
+  tableFullName?: string;
 }
 
 /** Catalogs for the Access Explorer tree (`GET /access-explorer/tree/catalogs`). */

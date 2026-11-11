@@ -11,10 +11,13 @@ describe("Access explorer", () => {
     renderApp("/access-explorer", services);
 
     expect(await screen.findByRole("heading", { name: "Access explorer" })).toBeInTheDocument();
-    await user.type(screen.getByPlaceholderText("catalog.schema.table"), "demo.default.customers");
+    await user.type(screen.getByPlaceholderText("catalog / catalog.schema / catalog.schema.table"), "demo.default.customers");
     await user.click(screen.getByRole("button", { name: "Analyze" }));
 
-    expect(analyze).toHaveBeenCalledWith({ tableFullName: "demo.default.customers" });
+    expect(analyze).toHaveBeenCalledWith({
+      fullName: "demo.default.customers",
+      tableFullName: "demo.default.customers",
+    });
     expect(await screen.findByText("demo.default.customers")).toBeInTheDocument();
 
     const sensitivity = screen.getByRole("table", { name: "Sensitivity suggestions" });
@@ -24,6 +27,12 @@ describe("Access explorer", () => {
         name: "Select sensitivity=finance.budget.PII.Name",
       }),
     ).toBeChecked();
+    const requestValue = within(sensitivity).getByRole("combobox", {
+      name: "Request value for sensitivity=finance.budget.PII.Name",
+    });
+    expect(requestValue).toHaveValue("finance.budget.PII.Name");
+    await user.selectOptions(requestValue, "finance.budget.PII");
+    expect(requestValue).toHaveValue("finance.budget.PII");
 
     const wildcard = screen.getByRole("table", { name: "Row filter wildcard" });
     expect(
@@ -37,6 +46,24 @@ describe("Access explorer", () => {
     expect(screen.getByRole("link", { name: "My requests" })).toHaveAttribute(
       "href",
       "/identity?tab=my-requests",
+    );
+
+    const create = vi.spyOn(services.identityAttributes, "createAccessRequest");
+    const expiry = screen.getByLabelText("Requested expiry");
+    await user.clear(expiry);
+    await user.type(expiry, "2030-01-15T12:00");
+    await user.click(screen.getByRole("button", { name: /Request/ }));
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attributeKey: "sensitivity",
+        attributeValue: "finance.budget.PII",
+      }),
+    );
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attributeKey: "state",
+        attributeValue: "*",
+      }),
     );
 
     const columns = screen.getByRole("table", { name: "Column access" });
@@ -61,7 +88,10 @@ describe("Access explorer", () => {
     expect(search).toHaveBeenCalled();
     const results = screen.getByRole("table", { name: "Table search results" });
     await user.click(within(results).getAllByRole("button", { name: "Analyze" })[0]!);
-    expect(analyze).toHaveBeenCalledWith({ tableFullName: "demo.default.customers" });
+    expect(analyze).toHaveBeenCalledWith({
+      fullName: "demo.default.customers",
+      tableFullName: "demo.default.customers",
+    });
   });
 
   it("browses the tree lazily: catalog, then schema, then table click analyzes", async () => {
@@ -72,16 +102,18 @@ describe("Access explorer", () => {
     const analyze = vi.spyOn(services.accessExplorer, "analyze");
     renderApp("/access-explorer", services);
 
-    const demo = await screen.findByRole("treeitem", { name: /demo$/ });
     expect(schemas).not.toHaveBeenCalled();
-    await user.click(demo);
+    await user.click(await screen.findByRole("button", { name: "Expand demo" }));
     expect(schemas).toHaveBeenCalledWith("demo", expect.anything());
 
-    await user.click(await screen.findByRole("treeitem", { name: /default$/ }));
+    await user.click(await screen.findByRole("button", { name: "Expand default" }));
     expect(tables).toHaveBeenCalledWith("demo", "default", expect.anything());
 
     await user.click(await screen.findByRole("treeitem", { name: /customers/ }));
-    expect(analyze).toHaveBeenCalledWith({ tableFullName: "demo.default.customers" });
+    expect(analyze).toHaveBeenCalledWith({
+      fullName: "demo.default.customers",
+      tableFullName: "demo.default.customers",
+    });
   });
 });
 
@@ -91,7 +123,7 @@ describe("Access explorer row-filter selection", () => {
     const services = fakeServices();
     renderApp("/access-explorer", services);
 
-    await user.type(await screen.findByPlaceholderText("catalog.schema.table"), "demo.default.customers");
+    await user.type(await screen.findByPlaceholderText("catalog / catalog.schema / catalog.schema.table"), "demo.default.customers");
     await user.click(screen.getByRole("button", { name: "Analyze" }));
 
     const wildcard = await screen.findByRole("table", { name: "Row filter wildcard" });

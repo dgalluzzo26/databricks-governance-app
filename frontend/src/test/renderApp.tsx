@@ -35,6 +35,7 @@ import type {
   DataAccessRun,
   DataAccessSettings,
   DataAccessSettingsView,
+  DirectoryPrincipalList,
 } from "@/api/types";
 import { PreferencesProvider } from "@/app/preferences";
 import { routes } from "@/app/routes";
@@ -255,7 +256,14 @@ export const testDefinitions: AttributeDefinitionList = {
       governedTagKeys: ["sensitivity_category", "sensitivity"],
       valueSource: "governed_tags",
       valueSql: null,
-      allowedValues: ["public", "finance", "finance.budget", "public.PII.Name", "finance.budget.PII.Name"],
+      allowedValues: [
+        "public",
+        "finance",
+        "finance.budget",
+        "finance.budget.PII",
+        "public.PII.Name",
+        "finance.budget.PII.Name",
+      ],
       createdBy: "admin",
       createdAt: "2026-01-01T00:00:00Z",
       updatedBy: "admin",
@@ -583,6 +591,27 @@ export function fakeServices(
   return {
     identity: { me: () => (user instanceof Error ? Promise.reject(user) : Promise.resolve(user)) },
     appInfo: { get: () => Promise.resolve(overrides.appInfo ?? testAppInfo) },
+    directory: {
+      searchPrincipals: async () =>
+        ({
+          principals: [
+            {
+              name: "ana.lopez@example.com",
+              displayName: "Ana Lopez",
+              principalType: "USER",
+              email: "ana.lopez@example.com",
+            },
+            {
+              name: "data-stewards",
+              displayName: "data-stewards",
+              principalType: "GROUP",
+              email: null,
+            },
+          ],
+          total: 2,
+          truncated: false,
+        }) satisfies DirectoryPrincipalList,
+    },
     dataAccess: {
       getSettings: () =>
         overrides.dataAccessSettings instanceof Error

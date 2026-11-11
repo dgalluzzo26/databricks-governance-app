@@ -13,6 +13,8 @@ import type {
   DataAccessRun,
   DataAccessSettings,
   DataAccessSettingsView,
+  DirectoryPrincipalList,
+  PrincipalKind,
   AttachRowFilterRequest,
   ApprovalInbox,
   AssignAttributeRequest,
@@ -89,6 +91,35 @@ export class IdentityApi {
    */
   me(signal?: AbortSignal): Promise<CurrentUser> {
     return this.http.get<CurrentUser>("/me", signal);
+  }
+}
+
+/** Workspace directory search for users and groups (admin only). */
+export class DirectoryApi {
+  /** @param http - Shared HTTP client. */
+  constructor(private readonly http: HttpClient) {}
+
+  /**
+   * `GET /directory/principals` — search users and/or groups by name substring.
+   *
+   * @param q - Search text (at least 2 characters).
+   * @param kind - Optional `USER` or `GROUP` filter.
+   * @param signal - Optional abort signal.
+   * @returns Matching principals.
+   */
+  searchPrincipals(
+    q: string,
+    kind?: PrincipalKind,
+    signal?: AbortSignal,
+  ): Promise<DirectoryPrincipalList> {
+    return this.http.get<DirectoryPrincipalList>(
+      `/directory/principals${toQuery({
+        q,
+        kind,
+        limit: "20",
+      })}`,
+      signal,
+    );
   }
 }
 
@@ -860,6 +891,7 @@ export class PolicyExceptionsApi {
 /** The full set of API services exposed to components via `useApi()`. */
 export interface ApiServices {
   identity: IdentityApi;
+  directory: DirectoryApi;
   appInfo: AppInfoApi;
   dataAccess: DataAccessApi;
   policies: PoliciesApi;
@@ -880,6 +912,7 @@ export interface ApiServices {
 export function createApiServices(http: HttpClient = new HttpClient()): ApiServices {
   return {
     identity: new IdentityApi(http),
+    directory: new DirectoryApi(http),
     appInfo: new AppInfoApi(http),
     dataAccess: new DataAccessApi(http),
     policies: new PoliciesApi(http),

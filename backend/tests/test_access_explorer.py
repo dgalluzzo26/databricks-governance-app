@@ -89,6 +89,16 @@ class ExplorerSql(FakeSql):
             ]
         if "information_schema.column_tags" in text:
             return self.tags
+        if "information_schema.table_tags" in text:
+            return getattr(self, "table_tags", [])
+        if "information_schema.schema_tags" in text:
+            return getattr(self, "schema_tags", [])
+        if "information_schema.catalog_tags" in text:
+            return getattr(self, "catalog_tags", [])
+        if "information_schema.catalogs" in text:
+            return [{"ok": 1}]
+        if "information_schema.schemata" in text:
+            return [{"ok": 1}]
         return super().query(statement, parameters)
 
 
@@ -124,6 +134,7 @@ def _explorer(container):  # noqa: ANN001
         mask,
         container.row_filters,
         container.access_requests,
+        container.data_access,
     )
     container.access_explorer = service
     return service, sql
@@ -139,9 +150,7 @@ def test_analyze_suggests_sensitivity_and_row_filter(container) -> None:  # noqa
         groups=["users"],
         is_admin=False,
     )
-    insight = service.analyze_table(
-        AnalyzeTableRequest(table_full_name="demo.default.customers"), user
-    )
+    insight = service.analyze_table(AnalyzeTableRequest(table_full_name="demo.default.customers"), user)
     by_name = {c.column_name: c for c in insight.columns}
     assert by_name["s_name"].access_state.value == "masked"
     assert by_name["s_name"].mask_handler == "full"
@@ -159,7 +168,6 @@ def test_analyze_suggests_sensitivity_and_row_filter(container) -> None:  # noqa
     assert rf.attribute_key == "state"
     assert rf.attribute_value == "*"
     assert rf.requestable is True  # state definition seeded in _explorer
-
 
 
 def test_analyze_unmasks_when_user_has_prefix(container) -> None:  # noqa: ANN001
@@ -192,14 +200,8 @@ def test_analyze_unmasks_when_user_has_prefix(container) -> None:  # noqa: ANN00
         groups=["users"],
         is_admin=False,
     )
-    insight = service.analyze_table(
-        AnalyzeTableRequest(table_full_name="demo.default.customers"), user
-    )
-    assert all(
-        c.user_has_access
-        for c in insight.columns
-        if c.column_name in {"s_name", "s_open"}
-    )
+    insight = service.analyze_table(AnalyzeTableRequest(table_full_name="demo.default.customers"), user)
+    assert all(c.user_has_access for c in insight.columns if c.column_name in {"s_name", "s_open"})
     assert not any(s.kind.value == "sensitivity" for s in insight.suggestions)
 
 
@@ -291,9 +293,7 @@ def test_api_tree_routes(client: TestClient, container) -> None:  # noqa: ANN001
     cats = client.get("/api/access-explorer/tree/catalogs", headers=headers)
     assert cats.status_code == 200
     assert cats.json()["total"] == 2
-    schemas = client.get(
-        "/api/access-explorer/tree/schemas", params={"catalog": "demo"}, headers=headers
-    )
+    schemas = client.get("/api/access-explorer/tree/schemas", params={"catalog": "demo"}, headers=headers)
     assert schemas.status_code == 200
     tables = client.get(
         "/api/access-explorer/tree/tables",
@@ -365,9 +365,7 @@ def test_hierarchy_and_admin_routing(container) -> None:  # noqa: ANN001
         groups=["users"],
         is_admin=False,
     )
-    insight = service.analyze_table(
-        AnalyzeTableRequest(table_full_name="demo.default.customers"), user
-    )
+    insight = service.analyze_table(AnalyzeTableRequest(table_full_name="demo.default.customers"), user)
     sens = [s for s in insight.suggestions if s.kind.value == "sensitivity"]
     values = {s.attribute_value for s in sens}
     assert "finance.budget.PII.Name" in values
@@ -399,12 +397,58 @@ def test_row_filter_only_table_suggests_dimension(container) -> None:  # noqa: A
         groups=["users"],
         is_admin=False,
     )
-    insight = service.analyze_table(
-        AnalyzeTableRequest(table_full_name="demo.default.us_states"), user
-    )
+    insight = service.analyze_table(AnalyzeTableRequest(table_full_name="demo.default.us_states"), user)
     assert insight.row_filter.attached is True
     assert insight.row_filter.dimension_key == "state"
     assert insight.row_filter.user_can_see_rows is False
     rf = [s for s in insight.suggestions if s.kind.value == "row_filter"]
     assert rf, "expected row-filter suggestions on a filter-only table"
     assert any(s.attribute_value == "*" and s.requestable for s in rf)
+
+
+def test_analyze_catalog_suggests_data_access(container) -> None:  # noqa: ANN001
+    service, sql = _explorer(container)
+    sql.catalog_tags = [
+        {"tag_name": "data_access_control", "tag_value": "finance"},
+        {"tag_name": "clr_review_status", "tag_value": "reviewed"},
+    ]
+    actor = _admin()
+    container.identity_attributes.upsert_definition(
+        UpsertAttributeDefinitionRequest(
+            key="data_access_control",
+            description="DAC",
+            value_source=ValueSource.FREE_FORM,
+            allowed_values=["finance", "finance.budget"],
+        ),
+        actor,  # type: ignore[arg-type]
+    )
+    user = CurrentUser(
+        user_name="analyst@example.com",
+        email="analyst@example.com",
+        display_name="Analyst",
+        user_id="2",
+        groups=["users"],
+        is_admin=False,
+    )
+    insight = service.analyze_table(AnalyzeTableRequest(full_name="demo"), user)
+    assert insight.securable_level == "catalog"
+    assert insight.columns == []
+    dac = next(s for s in insight.suggestions if s.kind.value == "data_access")
+    assert dac.attribute_value == "finance"
+    assert dac.requestable is True
+
+
+def test_directory_principal_search(client: TestClient) -> None:
+    body = client.get(
+        "/api/directory/principals",
+        params={"q": "admin", "kind": "USER"},
+        headers=headers_for("admin@example.com"),
+    ).json()
+    assert body["total"] >= 1
+    assert body["principals"][0]["principalType"] == "USER"
+    forbidden = client.get(
+        "/api/directory/principals",
+        params={"q": "admin"},
+        headers=headers_for("analyst@example.com"),
+    )
+    assert forbidden.status_code == 403

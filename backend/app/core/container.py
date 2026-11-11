@@ -150,6 +150,7 @@ class ServiceContainer:
                 mask_rules,
                 row_filters,
                 access_requests,
+                data_access,
             ),
             policy_exceptions=policy_exceptions,
             data_access=data_access,
