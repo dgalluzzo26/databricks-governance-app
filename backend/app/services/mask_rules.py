@@ -1,3 +1,14 @@
+"""App-managed mask rule registry and the metastore variant column-mask pack.
+
+A mask rule is a ``mask_rule`` governed tag value describing how a governed column is
+presented to callers who lack the required sensitivity grant (full redaction, keep email
+domain, salted joinable hash, custom SQL expression, ...). The registry lives in primary
+storage and is mirrored to Unity Catalog Delta tables; every change regenerates the
+``apply_mask_rule`` UDF, and ``ensure_pack`` recreates the metastore ``COLUMN MASK`` policy.
+Custom expressions must pass a sample-based validation that issues a short-lived HMAC token
+before they can be saved, and can be drafted with a serving-endpoint LLM.
+"""
+
 from __future__ import annotations
 
 import contextlib
@@ -62,7 +73,18 @@ _JSON_BLOCK = re.compile(r"\{[\s\S]*\}")
 
 
 class MaskRuleService:
-    """App-managed mask_rule registry mirrored to UC; regenerates apply_mask_rule for customs."""
+    """App-managed mask_rule registry mirrored to UC; regenerates apply_mask_rule for customs.
+
+    Args:
+        config: App configuration (catalog/schema names, policy name, LLM endpoint, secrets).
+        sql: SQL executor used for UDF/policy DDL, grants, and validation queries.
+        storage: Primary storage for mask rules, masking config, and audit events.
+        governed_tags: Governed tag service used to keep ``mask_rule`` tag values in sync.
+        metadata_cache: Cache whose ABAC policy entries are invalidated after policy changes.
+        mirror_sql: SQL executor for UC mirror table writes; defaults to ``sql``.
+        workspace: Workspace client factory for LLM drafting and SP ids for EXCEPT/grants.
+        policy_exceptions: Optional ``PolicyExceptionService`` supplying EXCEPT principals.
+    """
 
     def __init__(
         self,
@@ -87,10 +109,12 @@ class MaskRuleService:
 
     @property
     def tag_key(self) -> str:
+        """The governed tag key whose values name mask rules."""
         return self._config.mask_rule_tag_key
 
     @property
     def definitions_table(self) -> str:
+        """Quoted FQN of the UC mirror of the mask rule registry."""
         return ".".join(
             quote_identifier(p)
             for p in (self._config.app_catalog, self._config.app_schema, "mask_rule_definitions")
@@ -98,6 +122,7 @@ class MaskRuleService:
 
     @property
     def config_table(self) -> str:
+        """Quoted FQN of the UC masking config table (holds the joinable salt)."""
         return ".".join(
             quote_identifier(p)
             for p in (self._config.app_catalog, self._config.app_schema, "masking_config")
@@ -105,6 +130,7 @@ class MaskRuleService:
 
     @property
     def function_name(self) -> str:
+        """Quoted FQN of the ``mask_variant`` UDF used by the metastore column-mask policy."""
         return ".".join(
             quote_identifier(p)
             for p in (self._config.app_catalog, self._config.abac_function_schema, "mask_variant")
@@ -112,6 +138,7 @@ class MaskRuleService:
 
     @property
     def apply_function_name(self) -> str:
+        """Quoted FQN of the generated ``apply_mask_rule`` presentation UDF."""
         return ".".join(
             quote_identifier(p)
             for p in (
@@ -123,6 +150,7 @@ class MaskRuleService:
 
     @property
     def resolve_function_name(self) -> str:
+        """Quoted FQN of the generated ``_resolve_mask_handler`` UDF."""
         return ".".join(
             quote_identifier(p)
             for p in (
@@ -133,10 +161,35 @@ class MaskRuleService:
         )
 
     def list_rules(self) -> MaskRuleList:
+        """List all mask rules from primary storage.
+
+        Returns:
+            The registered rules.
+        """
         rules = self._storage.mask_rules.list_rules()
         return MaskRuleList(rules=rules, total=len(rules))
 
     def upsert_rule(self, request: UpsertMaskRuleRequest, actor: CurrentUser) -> MaskRuleDefinition:
+        """Create or replace a mask rule and push it to Unity Catalog.
+
+        Custom rules require a validation token previously issued by ``validate_handler``
+        for the same sanitized expression and actor. Side effects: saves the rule, adds its
+        key to the ``mask_rule`` governed tag, resyncs the UC mirror, regenerates the
+        ``apply_mask_rule`` UDFs, and records a ``mask_rule.upserted`` audit event.
+
+        Args:
+            request: Rule key, description, kind, handler, params, and (for customs) the
+                expression and validation token.
+            actor: The admin making the change.
+
+        Returns:
+            The saved rule.
+
+        Raises:
+            InvalidRequestError: If a custom expression fails sanitization or its validation
+                token is missing, expired, or does not match.
+            UpstreamError: If the governed tag update or UC SQL fails.
+        """
         now = datetime.now(UTC)
         validated_at: datetime | None = None
         expression: str | None = None
@@ -174,6 +227,21 @@ class MaskRuleService:
         return saved
 
     def delete_rule(self, rule_key: str, actor: CurrentUser) -> None:
+        """Delete a mask rule and push the change to Unity Catalog.
+
+        The governed tag value is left in place; columns still tagged with the deleted rule
+        fall back to full redaction. Resyncs the UC mirror, regenerates the
+        ``apply_mask_rule`` UDFs, and records a ``mask_rule.deleted`` audit event.
+
+        Args:
+            rule_key: Rule key (case-insensitive).
+            actor: The admin making the change.
+
+        Raises:
+            InvalidRequestError: If the rule is protected (``full``).
+            NotFoundError: If the rule does not exist.
+            UpstreamError: If UC SQL fails.
+        """
         key = rule_key.strip().lower()
         if key in PROTECTED_RULE_KEYS:
             raise InvalidRequestError(f"Cannot delete protected mask rule '{key}'")
@@ -184,6 +252,21 @@ class MaskRuleService:
         self._audit("mask_rule.deleted", actor.user_name, {"rule_key": key})
 
     def seed_defaults(self, actor: CurrentUser) -> MaskRuleList:
+        """Add any missing built-in default rules and a joinable salt.
+
+        Existing rules and an existing salt are left untouched. Also adds the default keys
+        to the ``mask_rule`` governed tag, resyncs the UC mirror, regenerates the
+        ``apply_mask_rule`` UDFs, and records a ``mask_rule.seeded`` audit event.
+
+        Args:
+            actor: The admin seeding the registry.
+
+        Returns:
+            All rules after seeding.
+
+        Raises:
+            UpstreamError: If the governed tag update or UC SQL fails.
+        """
         for key, description, handler, params in DEFAULT_RULES:
             existing = self._storage.mask_rules.get_rule(key)
             if existing is not None:
@@ -211,6 +294,23 @@ class MaskRuleService:
         return self.list_rules()
 
     def ensure_salt(self, actor: CurrentUser, *, rotate: bool = False) -> MaskingConfigStatus:
+        """Create the joinable-hash salt if missing, or replace it when ``rotate`` is set.
+
+        When the salt changes it is mirrored to UC, the UDFs are regenerated, and a
+        ``mask_rule.salt_created`` or ``mask_rule.salt_rotated`` audit event is recorded.
+        Rotating changes every joinable hash, breaking joins against previously exported
+        masked values.
+
+        Args:
+            actor: The admin making the change.
+            rotate: Replace an existing salt with a new random one.
+
+        Returns:
+            The masking config portion of the pack status.
+
+        Raises:
+            UpstreamError: If UC SQL or the governed tag lookup fails.
+        """
         current = self._storage.mask_rules.get_config(JOINABLE_SALT_KEY)
         if current is None or rotate:
             self._storage.mask_rules.put_config(
@@ -228,6 +328,23 @@ class MaskRuleService:
     def validate_handler(
         self, request: MaskHandlerValidateRequest, actor: CurrentUser
     ) -> MaskHandlerValidateResult:
+        """Dry-run a custom mask expression against sample inputs on the SQL warehouse.
+
+        If the batch query fails, each sample is retried individually so the UI can show
+        which inputs error. Only a fully successful run issues a validation token, which
+        binds the sanitized expression to the actor and expires after
+        ``VALIDATION_TTL_SECONDS``; ``upsert_rule`` requires it for custom rules.
+
+        Args:
+            request: Expression and optional sample inputs (defaults are used if empty).
+            actor: The admin validating; bound into the token.
+
+        Returns:
+            Per-sample outputs or errors, ``ok``, and the token when ``ok`` is True.
+
+        Raises:
+            InvalidRequestError: If the expression fails sanitization.
+        """
         expression = sanitize_expression(request.expression)
         samples_in = [s for s in (request.sample_inputs or DEFAULT_SAMPLES) if s is not None]
         if not samples_in:
@@ -280,6 +397,24 @@ class MaskRuleService:
         )
 
     def draft_handler(self, request: MaskHandlerDraftRequest, actor: CurrentUser) -> MaskHandlerDraft:
+        """Ask the configured LLM serving endpoint to draft a custom mask expression.
+
+        The draft is sanitized but not validated or saved; callers still run
+        ``validate_handler`` before ``upsert_rule``.
+
+        Args:
+            request: Natural-language prompt plus optional current expression and prior
+                validation errors to iterate on.
+            actor: The requesting admin; currently unused.
+
+        Returns:
+            The drafted expression, an explanation, and up to 10 sample inputs.
+
+        Raises:
+            InvalidRequestError: If no workspace client is configured or the drafted
+                expression fails sanitization.
+            UpstreamError: If the endpoint call fails or does not return a JSON object.
+        """
         _ = actor
         if self._workspace is None:
             raise InvalidRequestError("Workspace client is not configured for LLM draft")
@@ -327,7 +462,18 @@ class MaskRuleService:
         )
 
     def sync_to_uc(self) -> dict[str, int]:
-        """Replace the UC registry tables from Lakebase (or memory)."""
+        """Replace the UC registry tables from Lakebase (or memory).
+
+        Ensures the mirror tables (and SP grants) exist, deletes and re-inserts every rule,
+        and merges the joinable salt into the config table. Not transactional: the
+        generated UDFs may briefly see an empty registry and fall back to full redaction.
+
+        Returns:
+            ``rules`` count and ``salt_configured`` (1 or 0).
+
+        Raises:
+            UpstreamError: If UC SQL fails.
+        """
         self._ensure_uc_tables()
         rules = self._storage.mask_rules.list_rules()
         salt = self._storage.mask_rules.get_config(JOINABLE_SALT_KEY)
@@ -376,6 +522,15 @@ class MaskRuleService:
         return {"rules": len(rules), "salt_configured": 1 if salt else 0}
 
     def regenerate_apply_mask_rule(self) -> None:
+        """Recreate the ``_resolve_mask_handler`` and ``apply_mask_rule`` UDFs from the registry.
+
+        Runs ``CREATE OR REPLACE FUNCTION`` DDL in Unity Catalog so new or changed custom
+        expressions take effect for the existing column-mask policy.
+
+        Raises:
+            InvalidRequestError: If a stored custom expression fails sanitization.
+            UpstreamError: If the DDL fails.
+        """
         rules = self._storage.mask_rules.list_rules()
         resolve_sql = build_resolve_handler_sql(
             function_fqn=self.resolve_function_name,
@@ -393,6 +548,20 @@ class MaskRuleService:
         logger.info("Regenerated %s from %s rules", self.apply_function_name, len(rules))
 
     def pack_status(self) -> MaskRulePackStatus:
+        """Report whether the registry, tag values, policy, and UDFs are in sync.
+
+        In sync means: a salt exists, every rule key is a ``mask_rule`` tag value, the
+        metastore variant policy exists, ``mask_variant`` delegates to the mask rule, and
+        ``apply_mask_rule`` contains every custom handler. Failures inspecting the UDFs are
+        logged and reported as out of sync.
+
+        Returns:
+            Masking config status and the current rules.
+
+        Raises:
+            InvalidRequestError: If the ``mask_rule`` governed tag does not exist.
+            UpstreamError: If the tag or the policy definitions cannot be read.
+        """
         rules = self._storage.mask_rules.list_rules()
         tag_values = self._governed_tags.get_tag(self.tag_key).values
         missing = [r.rule_key for r in rules if r.rule_key not in tag_values]
@@ -439,7 +608,21 @@ class MaskRuleService:
         return MaskRulePackStatus(config=config, rules=rules)
 
     def ensure_pack(self, actor: CurrentUser) -> MaskRulePackStatus:
-        """Seed defaults if empty, ensure salt/tag values, sync UC, recreate policy + UDF."""
+        """Seed defaults if empty, ensure salt/tag values, sync UC, recreate policy + UDF.
+
+        Also recreates the metastore ``COLUMN MASK`` policy with the current EXCEPT
+        principals, invalidates cached ABAC policy definitions, and records a
+        ``mask_rule.pack_ensured`` audit event. Called after policy exception changes.
+
+        Args:
+            actor: The admin applying the pack.
+
+        Returns:
+            The pack status after applying.
+
+        Raises:
+            UpstreamError: If governed tag updates or UC SQL fail.
+        """
         if not self._storage.mask_rules.list_rules():
             self.seed_defaults(actor)
         else:
@@ -456,6 +639,11 @@ class MaskRuleService:
         return self.pack_status()
 
     def _recreate_variant_policy(self) -> None:
+        """Recreate the metastore column-mask policy for non-geo sensitivity-tagged columns.
+
+        Applies ``mask_variant`` to ``account users`` (minus EXCEPT principals) on columns
+        tagged with ``sensitivity_category``, ``sensitivity``, and a non-geo ``data_type``.
+        """
         name = self._config.mask_variant_policy_name
         except_clause = ""
         principals = self._except_principals()
@@ -487,6 +675,7 @@ class MaskRuleService:
         )
 
     def _except_principals(self) -> list[str]:
+        """Return EXCEPT principals from policy exceptions, else the app and admin SP ids."""
         if self._policy_exceptions is not None:
             return self._policy_exceptions.except_principals()
         if self._workspace is None:
@@ -499,6 +688,7 @@ class MaskRuleService:
         return seen
 
     def _ensure_uc_tables(self) -> None:
+        """Create or migrate the UC mirror tables, then grant the app SPs access."""
         self._mirror_sql.execute(
             f"""
             CREATE TABLE IF NOT EXISTS {self.definitions_table} (
@@ -539,7 +729,11 @@ class MaskRuleService:
         self._ensure_mirror_grants()
 
     def _ensure_mirror_grants(self) -> None:
-        """Admin SQL regenerates UDFs that read the UC mirror; keep both SPs privileged."""
+        """Admin SQL regenerates UDFs that read the UC mirror; keep both SPs privileged.
+
+        Best-effort: grants table SELECT/MODIFY, schema MANAGE, and function MANAGE to the
+        app and admin SPs, ignoring individual grant failures.
+        """
         principals: list[str] = []
         if self._workspace is not None:
             for item in (self._workspace.app_client_id, self._workspace.admin_client_id):
@@ -562,6 +756,7 @@ class MaskRuleService:
                     self._sql.execute(f"GRANT MANAGE ON FUNCTION {fn} TO {quoted}")
 
     def _validation_secret(self) -> bytes:
+        """Return the HMAC key for validation tokens (dedicated secret, admin secret, or dev)."""
         raw = (
             self._config.mask_handler_validation_secret
             or self._config.admin_client_secret
@@ -570,12 +765,18 @@ class MaskRuleService:
         return raw.encode("utf-8")
 
     def _issue_validation_token(self, expression: str, actor: str) -> str:
+        """Return an ``<expiry>.<hmac>`` token binding the expression to the actor."""
         expires = int(time.time()) + VALIDATION_TTL_SECONDS
         payload = f"{expires}:{actor}:{expression}"
         digest = hmac.new(self._validation_secret(), payload.encode("utf-8"), hashlib.sha256).hexdigest()
         return f"{expires}.{digest}"
 
     def _require_validation_token(self, expression: str, actor: str, token: str) -> None:
+        """Verify a validation token for this expression and actor.
+
+        Raises:
+            InvalidRequestError: If the token is malformed, expired, or does not match.
+        """
         try:
             expires_s, digest = token.split(".", 1)
             expires = int(expires_s)
@@ -593,6 +794,7 @@ class MaskRuleService:
             )
 
     def _audit(self, event_type: str, actor: str, payload: dict) -> None:
+        """Record an audit event in storage."""
         self._storage.audit.record(
             AuditEvent(
                 event_id=str(uuid.uuid4()),
@@ -605,6 +807,17 @@ class MaskRuleService:
 
 
 def _parse_draft_json(content: str) -> dict:
+    """Extract the JSON object from an LLM reply, tolerating code fences and surrounding text.
+
+    Args:
+        content: Raw LLM message content.
+
+    Returns:
+        The parsed JSON object.
+
+    Raises:
+        UpstreamError: If no JSON object is found or it cannot be parsed.
+    """
     text = (content or "").strip()
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?\s*", "", text)

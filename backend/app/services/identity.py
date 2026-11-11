@@ -1,3 +1,10 @@
+"""Signed-in user resolution with workspace group memberships.
+
+Turns the request context (forwarded email and optional user token) into a ``CurrentUser``
+with display name, user id, groups, and the app-admin flag, which drive authorization and
+group-based attribute inheritance throughout the app. Results are cached per user and token.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -16,6 +23,14 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class _DirectoryEntry:
+    """Directory fields for a user as read from /Me or SCIM.
+
+    Attributes:
+        user_id: Workspace user id, if found.
+        display_name: Directory display name, if found.
+        groups: Display names of the user's workspace groups.
+    """
+
     user_id: str | None = None
     display_name: str | None = None
     groups: list[str] = field(default_factory=list)
@@ -28,6 +43,11 @@ class IdentityService:
     iam.current-user:read) the user's own /Me record is read, which includes their groups.
     Without one (local development) the service principal looks the user up through SCIM; a
     non-admin service principal cannot see other users' groups.
+
+    Args:
+        factory: Workspace client factory for user-token and service principal clients.
+        cache: TTL cache for resolved users.
+        admin_group: Workspace group whose members are app admins.
     """
 
     def __init__(self, factory: WorkspaceClientFactory, cache: TtlCache, admin_group: str) -> None:
@@ -36,11 +56,23 @@ class IdentityService:
         self._admin_group = admin_group
 
     def current_user(self, ctx: RequestContext) -> CurrentUser:
+        """Resolve the caller to a ``CurrentUser``, using the cache when possible.
+
+        Directory lookup failures are logged and degrade to a user with no groups (and so
+        no admin rights) rather than raising.
+
+        Args:
+            ctx: Request identity built from the Databricks Apps proxy headers.
+
+        Returns:
+            The user with groups and ``is_admin`` set from membership in the admin group.
+        """
         # Key on the token too, so a new grant of scopes is picked up on the next session.
         token_key = hashlib.sha256(ctx.access_token.encode()).hexdigest()[:16] if ctx.access_token else None
         return self._cache.get_or_load(("user", ctx.user_name.lower(), token_key), lambda: self._load(ctx))
 
     def _load(self, ctx: RequestContext) -> CurrentUser:
+        """Build the user from /Me (user token) or, failing that, a SCIM lookup."""
         entry = self._from_user_token(ctx) if ctx.access_token else None
         if entry is None:
             entry = self._from_scim(ctx)
@@ -56,6 +88,7 @@ class IdentityService:
         )
 
     def _from_user_token(self, ctx: RequestContext) -> _DirectoryEntry | None:
+        """Read the caller's /Me record with their token; None if the call fails."""
         try:
             me = self._factory.for_user(ctx.access_token or "").current_user.me()
         except DatabricksError as exc:
@@ -68,6 +101,7 @@ class IdentityService:
         )
 
     def _from_scim(self, ctx: RequestContext) -> _DirectoryEntry:
+        """Look up the caller by userName via SCIM as the service principal; empty entry if not found."""
         try:
             escaped = ctx.user_name.replace('"', '\\"')
             matches = self._factory.service_principal().users.list(

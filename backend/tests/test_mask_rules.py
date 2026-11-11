@@ -155,6 +155,7 @@ def test_validate_and_save_custom_regenerates_udf(container) -> None:  # noqa: A
 
 def test_draft_handler_mocked_llm(container) -> None:  # noqa: ANN001
     from types import SimpleNamespace
+
     from backend.app.models.mask_rule import MaskHandlerDraftRequest
 
     class FakeServing:

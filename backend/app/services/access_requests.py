@@ -1,4 +1,13 @@
-"""Sensitivity access requests, category approvers, and renewal inbox."""
+"""Sensitivity access requests, category approvers, and renewal inbox.
+
+Users request identity attribute values (hierarchical ``sensitivity`` paths or row-filter
+dimension values) with an expiry and justification. Sensitivity requests route to the
+approvers of the most-specific configured ``sensitivity_category`` covering the path, else to
+app admins; row-filter and other non-sensitivity requests always route to app admins. Approval
+grants the attribute through ``IdentityAttributeService`` (which mirrors it to Unity Catalog),
+and sensitivity assignments nearing expiry surface in the same inbox for renewal. Every write
+records an audit event.
+"""
 
 from __future__ import annotations
 
@@ -36,7 +45,15 @@ from backend.app.services.identity_attributes import IdentityAttributeService
 
 
 def path_prefixes(path: str) -> list[str]:
-    """Longest-first dotted prefixes of a sensitivity path."""
+    """Longest-first dotted prefixes of a sensitivity path.
+
+    Args:
+        path: Dotted sensitivity path, e.g. ``pii.contact.high``.
+
+    Returns:
+        Prefixes from the full path down to the first segment (``["pii.contact.high",
+        "pii.contact", "pii"]``); empty for a blank path. Empty segments are dropped.
+    """
     parts = [part for part in path.split(".") if part]
     if not parts:
         return []
@@ -44,7 +61,16 @@ def path_prefixes(path: str) -> list[str]:
 
 
 def resolve_category(path: str, configured_categories: list[str]) -> str | None:
-    """Most-specific configured category that prefixes ``path`` (case-insensitive)."""
+    """Most-specific configured category that prefixes ``path`` (case-insensitive).
+
+    Args:
+        path: Dotted sensitivity path being requested or renewed.
+        configured_categories: Category paths that have approvers configured.
+
+    Returns:
+        The matching category in its configured casing, or None if no category covers
+        ``path``.
+    """
     by_lower = {item.lower(): item for item in configured_categories}
     for prefix in path_prefixes(path):
         hit = by_lower.get(prefix.lower())
@@ -54,6 +80,14 @@ def resolve_category(path: str, configured_categories: list[str]) -> str | None:
 
 
 class AccessRequestService:
+    """Access request lifecycle, category approver registry, and approvals inbox.
+
+    Args:
+        storage: Storage provider for requests, approvers, assignments, and audit events.
+        identity_attributes: Service used to validate vocabularies and grant or renew
+            attribute assignments (including the Unity Catalog mirror).
+    """
+
     def __init__(
         self,
         storage: StorageProvider,
@@ -65,11 +99,28 @@ class AccessRequestService:
     # --- category approvers ---
 
     def list_approvers(self, category_path: str | None = None) -> CategoryApproverList:
+        """List configured category approvers.
+
+        Args:
+            category_path: Restrict to one category; None lists approvers for all categories.
+
+        Returns:
+            The approvers and their count.
+        """
         items = self._storage.category_approvers.list_approvers(category_path)
         return CategoryApproverList(approvers=items, total=len(items))
 
     def is_category_approver(self, actor: CurrentUser) -> bool:
-        """True when the actor is listed (or in a listed group) for any sensitivity category."""
+        """True when the actor is listed (or in a listed group) for any sensitivity category.
+
+        App admins always qualify. Used to decide whether to show the approvals inbox.
+
+        Args:
+            actor: The signed-in user.
+
+        Returns:
+            Whether the actor can approve requests for at least one category.
+        """
         if actor.is_admin:
             return True
         actor_groups = {group.lower() for group in actor.groups}
@@ -89,6 +140,23 @@ class AccessRequestService:
     def upsert_approver(
         self, request: UpsertCategoryApproverRequest, actor: CurrentUser
     ) -> CategoryApprover:
+        """Add or update an approver for a sensitivity category.
+
+        The category must be a current value of the ``sensitivity_category`` governed tag
+        and is stored in that tag's casing. Records a
+        ``sensitivity_category_approver.upserted`` audit event.
+
+        Args:
+            request: Category path and the USER or GROUP principal to register.
+            actor: The admin making the change.
+
+        Returns:
+            The saved approver.
+
+        Raises:
+            InvalidRequestError: If the principal is not a USER or GROUP, the category is not
+                a ``sensitivity_category`` value, or the tag values cannot be loaded.
+        """
         if request.principal_type not in {PrincipalKind.USER, PrincipalKind.GROUP}:
             raise InvalidRequestError("Approvers must be USER or GROUP principals")
         categories = self._sensitivity_category_values()
@@ -122,6 +190,15 @@ class AccessRequestService:
         return saved
 
     def delete_approver(self, approver_id: str, actor: CurrentUser) -> None:
+        """Remove a category approver and record a ``sensitivity_category_approver.deleted`` audit.
+
+        Args:
+            approver_id: Identifier of the approver entry.
+            actor: The admin making the change.
+
+        Raises:
+            NotFoundError: If no approver has that identifier.
+        """
         deleted = self._storage.category_approvers.delete_approver(approver_id)
         if not deleted:
             raise NotFoundError(f"Approver {approver_id} was not found")
@@ -134,6 +211,25 @@ class AccessRequestService:
     # --- requests ---
 
     def create_request(self, body: CreateAccessRequestBody, actor: CurrentUser) -> AccessRequest:
+        """Submit a pending request for an identity attribute value.
+
+        The attribute key defaults to ``sensitivity``; the value is canonicalized to the
+        definition's vocabulary casing. Sensitivity requests record the resolved category;
+        other attributes (row-filter dimensions) route to app admins. Records an
+        ``access_request.created`` audit event.
+
+        Args:
+            body: Attribute key/value, requested expiry, and justification.
+            actor: The requesting user.
+
+        Returns:
+            The created request annotated with its current routing and approvers.
+
+        Raises:
+            InvalidRequestError: If the expiry is not in the future, the attribute definition
+                is missing, the value is not in its vocabulary, or the actor already has a
+                pending request for the same key and value.
+        """
         expires = self._require_future(body.requested_expires_at, field="requested_expires_at")
         key = (body.attribute_key or SENSITIVITY_ATTRIBUTE_KEY).strip().lower()
         value = self._canonicalize_request_value(key, body.attribute_value)
@@ -182,6 +278,14 @@ class AccessRequestService:
         return self._with_routing(created)
 
     def list_mine(self, actor: CurrentUser) -> AccessRequestList:
+        """List the actor's own requests with routing resolved against current approvers.
+
+        Args:
+            actor: The signed-in user.
+
+        Returns:
+            The actor's requests in every status.
+        """
         items = [
             self._with_routing(item)
             for item in self._storage.access_requests.list_for_requester(actor.user_name)
@@ -193,6 +297,14 @@ class AccessRequestService:
 
         Most-specific configured category with at least one approver wins. If none is
         configured (or the matched category has no approvers), app admins decide.
+
+        Args:
+            path: Sensitivity path being requested.
+
+        Returns:
+            A dict with ``resolved_category`` (str or None), ``routed_to``
+            (``AccessRequestRouteKind``), and ``approvers`` (list of
+            ``AccessRequestApprover``, empty when routed to app admins).
         """
         configured = self._storage.category_approvers.list_configured_categories()
         category = resolve_category(path, configured)
@@ -218,6 +330,7 @@ class AccessRequestService:
         }
 
     def _with_routing(self, request: AccessRequest) -> AccessRequest:
+        """Return a copy of ``request`` with live routing fields (non-sensitivity -> app admins)."""
         if request.attribute_key != SENSITIVITY_ATTRIBUTE_KEY:
             routing = {
                 "resolved_category": None,
@@ -235,6 +348,20 @@ class AccessRequestService:
         )
 
     def cancel(self, request_id: str, actor: CurrentUser) -> AccessRequest:
+        """Cancel a pending request and record an ``access_request.cancelled`` audit event.
+
+        Args:
+            request_id: Identifier of the request.
+            actor: The requester or an app admin.
+
+        Returns:
+            The cancelled request.
+
+        Raises:
+            NotFoundError: If the request does not exist.
+            ForbiddenError: If the actor is neither the requester nor an app admin.
+            InvalidRequestError: If the request is no longer pending.
+        """
         current = self._storage.access_requests.get(request_id)
         if current is None:
             raise NotFoundError(f"Request {request_id} was not found")
@@ -256,6 +383,28 @@ class AccessRequestService:
     def approve_request(
         self, request_id: str, body: DecideAccessRequestBody, actor: CurrentUser
     ) -> AccessRequest:
+        """Approve a pending request and grant the attribute to the requester.
+
+        Creates (or extends) a USER assignment with source ``ACCESS_REQUEST``, which is
+        persisted and mirrored to Unity Catalog by the identity service, then records an
+        ``access_request.approved`` audit event.
+
+        Args:
+            request_id: Identifier of the request.
+            body: Optional approved expiry (defaults to the requested expiry) and note.
+            actor: The deciding approver or app admin.
+
+        Returns:
+            The approved request.
+
+        Raises:
+            NotFoundError: If the request does not exist.
+            InvalidRequestError: If the request is not pending, the expiry is not in the
+                future, or the value is no longer valid for the attribute.
+            ForbiddenError: If the actor may not decide this request (sensitivity: not an
+                approver of the resolved category nor an app admin; other attributes: not an
+                app admin).
+        """
         current = self._require_pending(request_id)
         self._require_can_decide(
             actor, current.attribute_value, attribute_key=current.attribute_key
@@ -299,6 +448,21 @@ class AccessRequestService:
     def deny_request(
         self, request_id: str, body: DecideAccessRequestBody, actor: CurrentUser
     ) -> AccessRequest:
+        """Deny a pending request and record an ``access_request.denied`` audit event.
+
+        Args:
+            request_id: Identifier of the request.
+            body: Optional decision note.
+            actor: The deciding approver or app admin.
+
+        Returns:
+            The denied request.
+
+        Raises:
+            NotFoundError: If the request does not exist.
+            InvalidRequestError: If the request is not pending.
+            ForbiddenError: If the actor may not decide this request.
+        """
         current = self._require_pending(request_id)
         self._require_can_decide(
             actor, current.attribute_value, attribute_key=current.attribute_key
@@ -322,6 +486,26 @@ class AccessRequestService:
     def approve_renewal(
         self, assignment_id: str, body: DecideAccessRequestBody, actor: CurrentUser
     ):
+        """Extend an expiring sensitivity assignment from the approvals inbox.
+
+        Updates the assignment's expiry through the identity service (persisted and
+        mirrored to Unity Catalog) and records an ``access_request.renewal_approved`` audit.
+
+        Args:
+            assignment_id: Identifier of the active sensitivity assignment.
+            body: Optional new expiry (defaults to the current expiry) and note.
+            actor: The deciding approver or app admin.
+
+        Returns:
+            The updated ``IdentityAttributeAssignment``.
+
+        Raises:
+            NotFoundError: If the assignment does not exist or is inactive.
+            InvalidRequestError: If it is not a sensitivity assignment, has no expiry, is
+                outside the renewal window, or the new expiry is not in the future.
+            ForbiddenError: If the actor is not an approver for the path's category nor an
+                app admin.
+        """
         current = self._storage.identity_attributes.get_assignment(assignment_id)
         if current is None or not current.active:
             raise NotFoundError(f"Assignment {assignment_id} was not found")
@@ -350,6 +534,21 @@ class AccessRequestService:
         return updated
 
     def dismiss_renewal(self, assignment_id: str, actor: CurrentUser) -> None:
+        """Hide an expiring assignment from the renewal inbox for its current expiry.
+
+        The dismissal is keyed on the assignment's current ``expires_at``, so the item
+        reappears if the expiry later changes. The assignment itself is untouched and still
+        expires. Records an ``access_request.renewal_dismissed`` audit event.
+
+        Args:
+            assignment_id: Identifier of the active, expiring assignment.
+            actor: The deciding approver or app admin.
+
+        Raises:
+            NotFoundError: If the assignment does not exist, is inactive, or has no expiry.
+            ForbiddenError: If the actor is not an approver for the path's category nor an
+                app admin.
+        """
         current = self._storage.identity_attributes.get_assignment(assignment_id)
         if current is None or not current.active or current.expires_at is None:
             raise NotFoundError(f"Assignment {assignment_id} was not found")
@@ -364,6 +563,19 @@ class AccessRequestService:
         )
 
     def approvals_inbox(self, actor: CurrentUser) -> ApprovalInbox:
+        """Collect pending requests and due renewals that the actor may decide.
+
+        Renewals are active sensitivity assignments expiring within the renewal window
+        that have not been dismissed for their current expiry and have no pending request
+        for the same value. App admins see everything; category approvers see items whose
+        path resolves to one of their categories.
+
+        Args:
+            actor: The signed-in approver or app admin.
+
+        Returns:
+            Inbox items sorted by soonest expiry.
+        """
         configured = self._storage.category_approvers.list_configured_categories()
         pending = self._storage.access_requests.list_by_status(AccessRequestStatus.PENDING)
         items: list[ApprovalInboxItem] = []
@@ -437,6 +649,18 @@ class AccessRequestService:
     # --- helpers ---
 
     def _canonicalize_request_value(self, attribute_key: str, attribute_value: str) -> str:
+        """Map a requested value to its vocabulary casing.
+
+        Args:
+            attribute_key: Attribute definition key.
+            attribute_value: Requested value (case-insensitive).
+
+        Returns:
+            The value as spelled in the definition's allowed values.
+
+        Raises:
+            InvalidRequestError: If the definition is missing or the value is not allowed.
+        """
         definition = self._storage.identity_attributes.get_definition(attribute_key)
         if definition is None:
             raise InvalidRequestError(
@@ -451,6 +675,11 @@ class AccessRequestService:
         return allowed[attribute_value.lower()]
 
     def _sensitivity_allowed_values(self) -> list[str]:
+        """Return the sensitivity vocabulary.
+
+        Raises:
+            InvalidRequestError: If the sensitivity attribute definition is not configured.
+        """
         definition = self._storage.identity_attributes.get_definition(SENSITIVITY_ATTRIBUTE_KEY)
         if definition is None:
             raise InvalidRequestError(
@@ -460,6 +689,11 @@ class AccessRequestService:
         return enriched.allowed_values
 
     def _sensitivity_category_values(self) -> list[str]:
+        """Return the ``sensitivity_category`` governed tag values.
+
+        Raises:
+            InvalidRequestError: If the governed tag cannot be read.
+        """
         try:
             return self._identity._governed_tags.get_tag("sensitivity_category").values  # noqa: SLF001
         except Exception as exc:  # noqa: BLE001
@@ -468,6 +702,12 @@ class AccessRequestService:
             ) from exc
 
     def _require_pending(self, request_id: str) -> AccessRequest:
+        """Load a request that must still be pending.
+
+        Raises:
+            NotFoundError: If the request does not exist.
+            InvalidRequestError: If the request is not pending.
+        """
         current = self._storage.access_requests.get(request_id)
         if current is None:
             raise NotFoundError(f"Request {request_id} was not found")
@@ -478,6 +718,11 @@ class AccessRequestService:
     def _require_can_decide(
         self, actor: CurrentUser, path: str, *, attribute_key: str = SENSITIVITY_ATTRIBUTE_KEY
     ) -> None:
+        """Ensure the actor may decide a request or renewal for ``path``.
+
+        Raises:
+            ForbiddenError: If the actor is not authorized for this attribute and path.
+        """
         if not self._can_decide_for(actor, path, attribute_key=attribute_key):
             if attribute_key == SENSITIVITY_ATTRIBUTE_KEY:
                 raise ForbiddenError("You are not an approver for this sensitivity category")
@@ -486,6 +731,7 @@ class AccessRequestService:
     def _can_decide_for(
         self, actor: CurrentUser, path: str, *, attribute_key: str = SENSITIVITY_ATTRIBUTE_KEY
     ) -> bool:
+        """Whether the actor may decide: sensitivity via category routing, others admins only."""
         if attribute_key != SENSITIVITY_ATTRIBUTE_KEY:
             return actor.is_admin
         category = resolve_category(
@@ -496,6 +742,7 @@ class AccessRequestService:
     def _can_decide(
         self, actor: CurrentUser, path: str, category: str | None
     ) -> bool:
+        """Whether the actor is an app admin or a USER/GROUP approver of ``category``."""
         # App admins always see and decide unrouted requests and can override.
         if actor.is_admin:
             return True
@@ -521,6 +768,11 @@ class AccessRequestService:
 
     @staticmethod
     def _require_future(value: datetime, *, field: str) -> datetime:
+        """Return ``value`` as an aware UTC datetime (naive treated as UTC) that is in the future.
+
+        Raises:
+            InvalidRequestError: If the value is not in the future.
+        """
         expires = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
         if expires <= datetime.now(UTC):
             raise InvalidRequestError(f"{field} must be in the future")
@@ -528,11 +780,13 @@ class AccessRequestService:
 
     @staticmethod
     def _in_renewal_window(expires_at: datetime) -> bool:
+        """Whether ``expires_at`` is in the future but within the renewal window."""
         expires = expires_at if expires_at.tzinfo is not None else expires_at.replace(tzinfo=UTC)
         now = datetime.now(UTC)
         return now < expires <= now + timedelta(days=RENEWAL_WINDOW_DAYS)
 
     def _audit(self, event_type: str, actor: str, payload: dict) -> None:
+        """Record an audit event in storage."""
         self._storage.audit.record(
             AuditEvent(
                 event_id=str(uuid.uuid4()),

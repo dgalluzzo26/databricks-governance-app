@@ -1,3 +1,11 @@
+"""SQL-seeded identity attribute vocabularies.
+
+Attribute definitions (typically row-filter dimensions) can source their allowed values from
+an admin-supplied read-only query. This module validates that the query is a single
+SELECT/WITH statement and runs it in a bounded wrapper on the SQL warehouse, returning the
+distinct first-column values.
+"""
+
 from __future__ import annotations
 
 import re
@@ -13,7 +21,21 @@ _BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
 
 
 def validate_seed_sql(statement: str) -> str:
-    """Return the seed query if it is one SELECT/WITH statement, else raise."""
+    """Return the seed query if it is one SELECT/WITH statement, else raise.
+
+    Comments and a trailing semicolon are stripped before checking. This is a structural
+    guard; the query is additionally wrapped as a subquery when executed.
+
+    Args:
+        statement: Admin-supplied seed query.
+
+    Returns:
+        The cleaned query text.
+
+    Raises:
+        InvalidRequestError: If the query is empty, has multiple statements, or does not
+            start with SELECT or WITH.
+    """
     text = _BLOCK_COMMENT.sub(" ", _LINE_COMMENT.sub(" ", statement or "")).strip()
     text = text.rstrip(";").strip()
     if not text:
@@ -26,7 +48,21 @@ def validate_seed_sql(statement: str) -> str:
 
 
 def run_seed_sql(sql: SqlExecutor | None, statement: str) -> list[str]:
-    """Run a seed query and return distinct non-empty first-column values (sorted)."""
+    """Run a seed query and return distinct non-empty first-column values (sorted).
+
+    Args:
+        sql: SQL executor; must be configured with a warehouse.
+        statement: Admin-supplied seed query.
+
+    Returns:
+        Distinct trimmed values sorted case-insensitively.
+
+    Raises:
+        NotConfiguredError: If no SQL warehouse is configured.
+        InvalidRequestError: If the query is invalid, returns more than ``MAX_SEED_VALUES``
+            rows, or returns no values (an empty result never overwrites a vocabulary).
+        UpstreamError: If the warehouse fails to execute the query.
+    """
     if sql is None or not sql.configured:
         raise NotConfiguredError("A SQL warehouse is required to run seed queries")
     query = validate_seed_sql(statement)

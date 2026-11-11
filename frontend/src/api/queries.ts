@@ -1,3 +1,11 @@
+/**
+ * @file TanStack Query hooks wrapping {@link ApiServices} calls, plus the shared query-key registry.
+ *
+ * Query hooks pass TanStack's abort signal through to the HTTP layer. Mutation hooks
+ * invalidate the queries their writes affect on success. Errors surface as {@link ApiError}.
+ * App-wide defaults (no refetch on window focus, no retry on 4xx) are set on the
+ * `QueryClient` in `app/App.tsx`; `staleTime` is 0 unless a hook says otherwise.
+ */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useApi } from "./ApiProvider";
 import type {
@@ -17,6 +25,15 @@ import type {
   UpsertRowFilterDimensionRequest,
 } from "./types";
 
+/**
+ * Query keys for cached server state.
+ *
+ * @remarks
+ * Keys are hierarchical so prefix invalidation works: e.g. `["identity-assignments"]` covers
+ * every `attributeAssignments(params)` key and `myAttributes`, and `["row-filters"]` /
+ * `["mask-rules"]` cover every key in those families. Governed-tag and Access Explorer keys
+ * are built inline in their hooks and are not listed here.
+ */
 export const queryKeys = {
   me: ["me"] as const,
   appInfo: ["app-info"] as const,
@@ -37,6 +54,12 @@ export const queryKeys = {
   policyExceptions: ["policy-exceptions"] as const,
 };
 
+/**
+ * Fetches the signed-in user (`GET /me`).
+ *
+ * @remarks Key: `queryKeys.me`. Stale after 5 minutes.
+ * @returns The query result for {@link CurrentUser}.
+ */
 export function useCurrentUser() {
   const api = useApi();
   return useQuery({
@@ -46,6 +69,13 @@ export function useCurrentUser() {
   });
 }
 
+/**
+ * Fetches deployment info (`GET /app-info`, admin only).
+ *
+ * @remarks Key: `queryKeys.appInfo`. Stale after 30 seconds.
+ * @param enabled - Set `false` to skip fetching (e.g. for non-admins). Defaults to `true`.
+ * @returns The query result for {@link AppInfo}.
+ */
 export function useAppInfo(enabled = true) {
   const api = useApi();
   return useQuery({
@@ -56,6 +86,13 @@ export function useAppInfo(enabled = true) {
   });
 }
 
+/**
+ * Fetches ABAC policies matching the given filters (`GET /policies`).
+ *
+ * @remarks Key: `queryKeys.policies(params)`, so each filter combination is cached separately. Stale after 30 seconds.
+ * @param params - Optional scope/type/catalog/search filters.
+ * @returns The query result for {@link PolicyListResponse}.
+ */
 export function usePolicies(params: PolicyListParams = {}) {
   const api = useApi();
   return useQuery({
@@ -65,6 +102,13 @@ export function usePolicies(params: PolicyListParams = {}) {
   });
 }
 
+/**
+ * Fetches one policy's detail (`GET /policies/{id}`).
+ *
+ * @remarks Key: `queryKeys.policy(policyId)`. Disabled until `policyId` is truthy. Stale after 30 seconds.
+ * @param policyId - Policy id, typically from the route; `undefined` disables the query.
+ * @returns The query result for {@link PolicyDetail}.
+ */
 export function usePolicy(policyId: string | undefined) {
   const api = useApi();
   return useQuery({
@@ -75,6 +119,13 @@ export function usePolicy(policyId: string | undefined) {
   });
 }
 
+/**
+ * Searches governed tags (`GET /identity/governed-tags`, up to 100 results).
+ *
+ * @remarks Key: `["governed-tags", q ?? ""]`. Stale after 60 seconds.
+ * @param q - Optional search text.
+ * @returns The query result for {@link GovernedTagList}.
+ */
 export function useGovernedTags(q?: string) {
   const api = useApi();
   return useQuery({
@@ -84,6 +135,12 @@ export function useGovernedTags(q?: string) {
   });
 }
 
+/**
+ * Fetches all identity attribute definitions (`GET /identity/definitions`).
+ *
+ * @remarks Key: `queryKeys.attributeDefinitions`. Stale after 30 seconds.
+ * @returns The query result for {@link AttributeDefinitionList}.
+ */
 export function useAttributeDefinitions() {
   const api = useApi();
   return useQuery({
@@ -93,6 +150,13 @@ export function useAttributeDefinitions() {
   });
 }
 
+/**
+ * Fetches attribute assignments across principals (`GET /identity/assignments`, admin only).
+ *
+ * @remarks Key: `queryKeys.attributeAssignments(params)`. Stale after 15 seconds.
+ * @param params - Optional principal/attribute filters and `includeInactive`.
+ * @returns The query result for {@link AttributeAssignmentList}.
+ */
 export function useAttributeAssignments(params: AssignmentListParams = {}) {
   const api = useApi();
   return useQuery({
@@ -102,6 +166,12 @@ export function useAttributeAssignments(params: AssignmentListParams = {}) {
   });
 }
 
+/**
+ * Fetches the signed-in user's own attribute assignments (`GET /identity/assignments/me`).
+ *
+ * @remarks Key: `queryKeys.myAttributes`. Stale after 15 seconds.
+ * @returns The query result for {@link AttributeAssignmentList}.
+ */
 export function useMyAttributes() {
   const api = useApi();
   return useQuery({
@@ -111,6 +181,12 @@ export function useMyAttributes() {
   });
 }
 
+/**
+ * Creates or replaces an attribute definition (`PUT /identity/definitions`).
+ *
+ * @remarks Invalidates `queryKeys.attributeDefinitions` on success.
+ * @returns A mutation taking an {@link UpsertAttributeDefinitionRequest}.
+ */
 export function useUpsertAttributeDefinition() {
   const api = useApi();
   const client = useQueryClient();
@@ -120,6 +196,12 @@ export function useUpsertAttributeDefinition() {
   });
 }
 
+/**
+ * Deletes an attribute definition by key (`DELETE /identity/definitions/{key}`).
+ *
+ * @remarks Invalidates `queryKeys.attributeDefinitions` on success.
+ * @returns A mutation taking the attribute key.
+ */
 export function useDeleteAttributeDefinition() {
   const api = useApi();
   const client = useQueryClient();
@@ -129,6 +211,12 @@ export function useDeleteAttributeDefinition() {
   });
 }
 
+/**
+ * Grants an attribute value to a principal (`POST /identity/assignments`).
+ *
+ * @remarks Invalidates every `["identity-assignments", ...]` query (admin lists and `myAttributes`) on success.
+ * @returns A mutation taking an {@link AssignAttributeRequest}.
+ */
 export function useAssignAttribute() {
   const api = useApi();
   const client = useQueryClient();
@@ -140,6 +228,12 @@ export function useAssignAttribute() {
   });
 }
 
+/**
+ * Revokes an attribute assignment (`POST /identity/assignments/{id}/revoke`).
+ *
+ * @remarks Invalidates every `["identity-assignments", ...]` query on success.
+ * @returns A mutation taking the assignment id.
+ */
 export function useRevokeAttribute() {
   const api = useApi();
   const client = useQueryClient();
@@ -151,6 +245,12 @@ export function useRevokeAttribute() {
   });
 }
 
+/**
+ * Fetches all category approvers (`GET /identity/category-approvers`, admin only).
+ *
+ * @remarks Key: `queryKeys.categoryApprovers`. Stale after 15 seconds.
+ * @returns The query result for {@link CategoryApproverList}.
+ */
 export function useCategoryApprovers() {
   const api = useApi();
   return useQuery({
@@ -160,6 +260,12 @@ export function useCategoryApprovers() {
   });
 }
 
+/**
+ * Adds or updates a category approver (`PUT /identity/category-approvers`).
+ *
+ * @remarks Invalidates `queryKeys.categoryApprovers` on success.
+ * @returns A mutation taking an {@link UpsertCategoryApproverRequest}.
+ */
 export function useUpsertCategoryApprover() {
   const api = useApi();
   const client = useQueryClient();
@@ -169,6 +275,12 @@ export function useUpsertCategoryApprover() {
   });
 }
 
+/**
+ * Removes a category approver (`DELETE /identity/category-approvers/{id}`).
+ *
+ * @remarks Invalidates `queryKeys.categoryApprovers` on success.
+ * @returns A mutation taking the approver id.
+ */
 export function useDeleteCategoryApprover() {
   const api = useApi();
   const client = useQueryClient();
@@ -178,6 +290,12 @@ export function useDeleteCategoryApprover() {
   });
 }
 
+/**
+ * Fetches the signed-in user's own access requests (`GET /identity/access-requests/mine`).
+ *
+ * @remarks Key: `queryKeys.myAccessRequests`. Stale after 15 seconds.
+ * @returns The query result for {@link AccessRequestList}.
+ */
 export function useMyAccessRequests() {
   const api = useApi();
   return useQuery({
@@ -187,6 +305,12 @@ export function useMyAccessRequests() {
   });
 }
 
+/**
+ * Submits an access request as the signed-in user (`POST /identity/access-requests`).
+ *
+ * @remarks Invalidates `queryKeys.myAccessRequests` and `queryKeys.approvals` on success.
+ * @returns A mutation taking a {@link CreateAccessRequestBody}.
+ */
 export function useCreateAccessRequest() {
   const api = useApi();
   const client = useQueryClient();
@@ -199,6 +323,12 @@ export function useCreateAccessRequest() {
   });
 }
 
+/**
+ * Cancels one of the caller's pending requests (`POST /identity/access-requests/{id}/cancel`).
+ *
+ * @remarks Invalidates `queryKeys.myAccessRequests` and `queryKeys.approvals` on success.
+ * @returns A mutation taking the request id.
+ */
 export function useCancelAccessRequest() {
   const api = useApi();
   const client = useQueryClient();
@@ -211,6 +341,12 @@ export function useCancelAccessRequest() {
   });
 }
 
+/**
+ * Fetches the caller's approval inbox: pending requests and due renewals (`GET /identity/approvals`).
+ *
+ * @remarks Key: `queryKeys.approvals`. Stale after 15 seconds.
+ * @returns The query result for {@link ApprovalInbox}.
+ */
 export function useApprovalsInbox() {
   const api = useApi();
   return useQuery({
@@ -220,6 +356,15 @@ export function useApprovalsInbox() {
   });
 }
 
+/**
+ * Approves an access request (`POST /identity/access-requests/{id}/approve`), which grants the attribute.
+ *
+ * @remarks
+ * Invalidates `queryKeys.approvals`, `queryKeys.myAccessRequests`, and every
+ * `["identity-assignments", ...]` query on success.
+ *
+ * @returns A mutation taking `{ requestId, body? }`, where `body` can override the expiry and add a note.
+ */
 export function useApproveAccessRequest() {
   const api = useApi();
   const client = useQueryClient();
@@ -234,6 +379,12 @@ export function useApproveAccessRequest() {
   });
 }
 
+/**
+ * Denies an access request (`POST /identity/access-requests/{id}/deny`).
+ *
+ * @remarks Invalidates `queryKeys.approvals` and `queryKeys.myAccessRequests` on success.
+ * @returns A mutation taking `{ requestId, body? }`, where `body` can carry a decision note.
+ */
 export function useDenyAccessRequest() {
   const api = useApi();
   const client = useQueryClient();
@@ -247,6 +398,12 @@ export function useDenyAccessRequest() {
   });
 }
 
+/**
+ * Extends an expiring sensitivity assignment (`POST /identity/renewals/{id}/approve`).
+ *
+ * @remarks Invalidates `queryKeys.approvals` and every `["identity-assignments", ...]` query on success.
+ * @returns A mutation taking `{ assignmentId, body? }`, where `body` can set the new expiry and a note.
+ */
 export function useApproveRenewal() {
   const api = useApi();
   const client = useQueryClient();
@@ -260,6 +417,12 @@ export function useApproveRenewal() {
   });
 }
 
+/**
+ * Dismisses a renewal from the inbox without changing the assignment (`POST /identity/renewals/{id}/dismiss`).
+ *
+ * @remarks Invalidates `queryKeys.approvals` on success.
+ * @returns A mutation taking the assignment id.
+ */
 export function useDismissRenewal() {
   const api = useApi();
   const client = useQueryClient();
@@ -269,6 +432,12 @@ export function useDismissRenewal() {
   });
 }
 
+/**
+ * Fetches all row-filter dimensions (`GET /row-filters/dimensions`).
+ *
+ * @remarks Key: `queryKeys.rowFilterDimensions`. Uses the default `staleTime` (0).
+ * @returns The query result for {@link RowFilterDimensionList}.
+ */
 export function useRowFilterDimensions() {
   const api = useApi();
   return useQuery({
@@ -277,6 +446,13 @@ export function useRowFilterDimensions() {
   });
 }
 
+/**
+ * Fetches row-filter pack sync status (`GET /row-filters/pack`, admin only).
+ *
+ * @remarks Key: `queryKeys.rowFilterPack`.
+ * @param enabled - Set `false` to skip fetching (e.g. for non-admins). Defaults to `true`.
+ * @returns The query result for {@link RowFilterPackStatus}.
+ */
 export function useRowFilterPack(enabled = true) {
   const api = useApi();
   return useQuery({
@@ -286,6 +462,12 @@ export function useRowFilterPack(enabled = true) {
   });
 }
 
+/**
+ * Fetches all row-filter column attachments (`GET /row-filters/attachments`, admin only).
+ *
+ * @remarks Key: `queryKeys.rowFilterAttachments`.
+ * @returns The query result for {@link RowFilterAttachmentList}.
+ */
 export function useRowFilterAttachments() {
   const api = useApi();
   return useQuery({
@@ -294,6 +476,12 @@ export function useRowFilterAttachments() {
   });
 }
 
+/**
+ * Returns a callback that invalidates every `["row-filters", ...]` query and `queryKeys.attributeDefinitions`.
+ *
+ * @remarks Row-filter dimensions are also identity attribute definitions, so both caches must refresh together.
+ * @returns A function resolving once both invalidations complete.
+ */
 function useInvalidateRowFilters() {
   const client = useQueryClient();
   return () =>
@@ -303,6 +491,12 @@ function useInvalidateRowFilters() {
     ]);
 }
 
+/**
+ * Creates or replaces a row-filter dimension (`PUT /row-filters/dimensions`).
+ *
+ * @remarks Invalidates all row-filter queries and attribute definitions on success.
+ * @returns A mutation taking an {@link UpsertRowFilterDimensionRequest}.
+ */
 export function useUpsertRowFilterDimension() {
   const api = useApi();
   const invalidate = useInvalidateRowFilters();
@@ -312,6 +506,12 @@ export function useUpsertRowFilterDimension() {
   });
 }
 
+/**
+ * Deletes a row-filter dimension (`DELETE /row-filters/dimensions/{key}`).
+ *
+ * @remarks Invalidates all row-filter queries and attribute definitions on success.
+ * @returns A mutation taking the dimension key.
+ */
 export function useDeleteRowFilterDimension() {
   const api = useApi();
   const invalidate = useInvalidateRowFilters();
@@ -321,6 +521,12 @@ export function useDeleteRowFilterDimension() {
   });
 }
 
+/**
+ * Re-runs a SQL-backed dimension's seed query (`POST /row-filters/dimensions/{key}/refresh`).
+ *
+ * @remarks Invalidates all row-filter queries and attribute definitions on success.
+ * @returns A mutation taking the dimension key.
+ */
 export function useRefreshRowFilterDimension() {
   const api = useApi();
   const invalidate = useInvalidateRowFilters();
@@ -330,17 +536,35 @@ export function useRefreshRowFilterDimension() {
   });
 }
 
+/**
+ * Dry-runs a seed SQL query without saving (`POST /row-filters/seed-preview`).
+ *
+ * @remarks Read-only; invalidates nothing.
+ * @returns A mutation taking the SQL text and resolving to a {@link SeedPreview}.
+ */
 export function usePreviewSeed() {
   const api = useApi();
   return useMutation({ mutationFn: (valueSql: string) => api.rowFilters.previewSeed(valueSql) });
 }
 
+/**
+ * Reconciles the row-filter tag, UDF, and policy with the current dimensions (`POST /row-filters/pack/ensure`).
+ *
+ * @remarks Invalidates all row-filter queries and attribute definitions on success.
+ * @returns A mutation with no variables.
+ */
 export function useEnsureRowFilterPack() {
   const api = useApi();
   const invalidate = useInvalidateRowFilters();
   return useMutation({ mutationFn: () => api.rowFilters.ensurePack(), onSuccess: invalidate });
 }
 
+/**
+ * Tags a column with a row-filter dimension (`POST /row-filters/attachments`).
+ *
+ * @remarks Invalidates all row-filter queries and attribute definitions on success.
+ * @returns A mutation taking an {@link AttachRowFilterRequest}.
+ */
 export function useAttachRowFilter() {
   const api = useApi();
   const invalidate = useInvalidateRowFilters();
@@ -350,6 +574,12 @@ export function useAttachRowFilter() {
   });
 }
 
+/**
+ * Removes a column's row-filter tag (`DELETE /row-filters/attachments`).
+ *
+ * @remarks Invalidates all row-filter queries and attribute definitions on success.
+ * @returns A mutation taking `{ tableFullName, columnName }`.
+ */
 export function useDetachRowFilter() {
   const api = useApi();
   const invalidate = useInvalidateRowFilters();
@@ -360,6 +590,12 @@ export function useDetachRowFilter() {
   });
 }
 
+/**
+ * Fetches all mask rules (`GET /mask-rules`, admin only).
+ *
+ * @remarks Key: `queryKeys.maskRules`.
+ * @returns The query result for {@link MaskRuleList}.
+ */
 export function useMaskRules() {
   const api = useApi();
   return useQuery({
@@ -368,6 +604,13 @@ export function useMaskRules() {
   });
 }
 
+/**
+ * Fetches mask pack sync status and rules (`GET /mask-rules/pack`, admin only).
+ *
+ * @remarks Key: `queryKeys.maskRulePack`.
+ * @param enabled - Set `false` to skip fetching (e.g. for non-admins). Defaults to `true`.
+ * @returns The query result for {@link MaskRulePackStatus}.
+ */
 export function useMaskRulePack(enabled = true) {
   const api = useApi();
   return useQuery({
@@ -377,11 +620,22 @@ export function useMaskRulePack(enabled = true) {
   });
 }
 
+/**
+ * Returns a callback that invalidates every `["mask-rules", ...]` query (rule list and pack status).
+ *
+ * @returns A function resolving once invalidation completes.
+ */
 function useInvalidateMaskRules() {
   const client = useQueryClient();
   return () => client.invalidateQueries({ queryKey: ["mask-rules"] });
 }
 
+/**
+ * Creates or replaces a mask rule (`PUT /mask-rules`).
+ *
+ * @remarks Invalidates all mask-rule queries on success.
+ * @returns A mutation taking an {@link UpsertMaskRuleRequest}.
+ */
 export function useUpsertMaskRule() {
   const api = useApi();
   const invalidate = useInvalidateMaskRules();
@@ -391,6 +645,12 @@ export function useUpsertMaskRule() {
   });
 }
 
+/**
+ * Deletes a mask rule (`DELETE /mask-rules/{ruleKey}`).
+ *
+ * @remarks Invalidates all mask-rule queries on success.
+ * @returns A mutation taking the rule key.
+ */
 export function useDeleteMaskRule() {
   const api = useApi();
   const invalidate = useInvalidateMaskRules();
@@ -400,24 +660,48 @@ export function useDeleteMaskRule() {
   });
 }
 
+/**
+ * Adds any missing default builtin mask rules (`POST /mask-rules/seed`).
+ *
+ * @remarks Invalidates all mask-rule queries on success.
+ * @returns A mutation with no variables.
+ */
 export function useSeedMaskRules() {
   const api = useApi();
   const invalidate = useInvalidateMaskRules();
   return useMutation({ mutationFn: () => api.maskRules.seed(), onSuccess: invalidate });
 }
 
+/**
+ * Reconciles the mask salt, tag, UC registry, UDF, and policy (`POST /mask-rules/pack/ensure`).
+ *
+ * @remarks Invalidates all mask-rule queries on success.
+ * @returns A mutation with no variables.
+ */
 export function useEnsureMaskRulePack() {
   const api = useApi();
   const invalidate = useInvalidateMaskRules();
   return useMutation({ mutationFn: () => api.maskRules.ensurePack(), onSuccess: invalidate });
 }
 
+/**
+ * Rotates the `joinable` mask salt (`POST /mask-rules/salt/rotate`).
+ *
+ * @remarks Invalidates all mask-rule queries on success.
+ * @returns A mutation with no variables.
+ */
 export function useRotateMaskSalt() {
   const api = useApi();
   const invalidate = useInvalidateMaskRules();
   return useMutation({ mutationFn: () => api.maskRules.rotateSalt(), onSuccess: invalidate });
 }
 
+/**
+ * Asks the LLM to draft a custom mask expression (`POST /mask-rules/handlers/draft`).
+ *
+ * @remarks Has no server-side effect; invalidates nothing.
+ * @returns A mutation taking a {@link MaskHandlerDraftRequest} and resolving to a {@link MaskHandlerDraft}.
+ */
 export function useDraftMaskHandler() {
   const api = useApi();
   return useMutation({
@@ -425,6 +709,12 @@ export function useDraftMaskHandler() {
   });
 }
 
+/**
+ * Validates a custom mask expression against sample inputs (`POST /mask-rules/handlers/validate`).
+ *
+ * @remarks Invalidates nothing; a successful result carries the token needed to save the rule.
+ * @returns A mutation taking a {@link MaskHandlerValidateRequest} and resolving to a {@link MaskHandlerValidateResult}.
+ */
 export function useValidateMaskHandler() {
   const api = useApi();
   return useMutation({
@@ -432,6 +722,17 @@ export function useValidateMaskHandler() {
   });
 }
 
+/**
+ * Searches tables by name for the Access Explorer (`GET /access-explorer/search`, limit 40).
+ *
+ * @remarks
+ * Key: `["access-explorer", "search", trimmedQuery]`. Only runs when `enabled` is `true` and the
+ * trimmed query has at least 2 characters (the backend minimum).
+ *
+ * @param q - Raw search text; leading and trailing whitespace is ignored.
+ * @param enabled - Set `false` to suspend searching. Defaults to `true`.
+ * @returns The query result for {@link TableSearchResult}.
+ */
 export function useTableSearch(q: string, enabled = true) {
   const api = useApi();
   const trimmed = q.trim();
@@ -442,6 +743,12 @@ export function useTableSearch(q: string, enabled = true) {
   });
 }
 
+/**
+ * Analyzes how masks and row filters apply to the caller for one table (`POST /access-explorer/analyze`).
+ *
+ * @remarks Exposed as a mutation so analysis runs on demand; results are not cached and nothing is invalidated.
+ * @returns A mutation taking an {@link AnalyzeTableRequest} and resolving to a {@link TableAccessInsight}.
+ */
 export function useAnalyzeTable() {
   const api = useApi();
   return useMutation({
@@ -449,6 +756,12 @@ export function useAnalyzeTable() {
   });
 }
 
+/**
+ * Fetches catalogs for the Access Explorer tree (`GET /access-explorer/tree/catalogs`).
+ *
+ * @remarks Key: `["access-explorer", "tree", "catalogs"]`.
+ * @returns The query result for {@link TreeCatalogList}.
+ */
 export function useTreeCatalogs() {
   const api = useApi();
   return useQuery({
@@ -457,6 +770,14 @@ export function useTreeCatalogs() {
   });
 }
 
+/**
+ * Fetches schemas in a catalog for the Access Explorer tree (`GET /access-explorer/tree/schemas`).
+ *
+ * @remarks Key: `["access-explorer", "tree", "schemas", catalog]`.
+ * @param catalog - Catalog name.
+ * @param enabled - Typically `true` only while the catalog node is expanded.
+ * @returns The query result for {@link TreeSchemaList}.
+ */
 export function useTreeSchemas(catalog: string, enabled: boolean) {
   const api = useApi();
   return useQuery({
@@ -466,6 +787,15 @@ export function useTreeSchemas(catalog: string, enabled: boolean) {
   });
 }
 
+/**
+ * Fetches tables in a schema for the Access Explorer tree (`GET /access-explorer/tree/tables`).
+ *
+ * @remarks Key: `["access-explorer", "tree", "tables", catalog, schema]`.
+ * @param catalog - Catalog name.
+ * @param schema - Schema name.
+ * @param enabled - Typically `true` only while the schema node is expanded.
+ * @returns The query result for {@link TreeTableList}.
+ */
 export function useTreeTables(catalog: string, schema: string, enabled: boolean) {
   const api = useApi();
   return useQuery({
@@ -475,6 +805,12 @@ export function useTreeTables(catalog: string, schema: string, enabled: boolean)
   });
 }
 
+/**
+ * Fetches the mask/row-filter developer guide as Markdown (`GET /help/flows`).
+ *
+ * @remarks Key: `queryKeys.helpFlows`. Stale after 10 minutes.
+ * @returns The query result for the Markdown string.
+ */
 export function useHelpFlows() {
   const api = useApi();
   return useQuery({
@@ -484,6 +820,13 @@ export function useHelpFlows() {
   });
 }
 
+/**
+ * Fetches built-in and configured policy exceptions (`GET /policy-exceptions`, admin only).
+ *
+ * @remarks Key: `queryKeys.policyExceptions`.
+ * @param enabled - Set `false` to skip fetching (e.g. for non-admins). Defaults to `true`.
+ * @returns The query result for {@link PolicyExceptionList}.
+ */
 export function usePolicyExceptions(enabled = true) {
   const api = useApi();
   return useQuery({
@@ -493,28 +836,62 @@ export function usePolicyExceptions(enabled = true) {
   });
 }
 
+/**
+ * Adds or updates a policy exception (`PUT /policy-exceptions`).
+ *
+ * @remarks
+ * The backend rebuilds the mask and row-filter packs after saving, so this invalidates
+ * `queryKeys.policyExceptions`, `queryKeys.maskRulePack`, and `queryKeys.rowFilterPack` on success.
+ *
+ * @returns A mutation taking an {@link UpsertPolicyExceptionRequest}.
+ */
 export function useUpsertPolicyException() {
   const api = useApi();
-  const client = useQueryClient();
+  const invalidate = useInvalidatePolicyExceptionState();
   return useMutation({
     mutationFn: (body: UpsertPolicyExceptionRequest) => api.policyExceptions.upsert(body),
-    onSuccess: () => {
-      void client.invalidateQueries({ queryKey: queryKeys.policyExceptions });
-    },
+    onSuccess: invalidate,
   });
 }
 
+/**
+ * Removes a configured policy exception (`DELETE /policy-exceptions/{id}`).
+ *
+ * @remarks
+ * The backend rebuilds the mask and row-filter packs after deleting, so this invalidates
+ * `queryKeys.policyExceptions`, `queryKeys.maskRulePack`, and `queryKeys.rowFilterPack` on success.
+ *
+ * @returns A mutation taking the exception id.
+ */
 export function useDeletePolicyException() {
   const api = useApi();
-  const client = useQueryClient();
+  const invalidate = useInvalidatePolicyExceptionState();
   return useMutation({
     mutationFn: (exceptionId: string) => api.policyExceptions.delete(exceptionId),
-    onSuccess: () => {
-      void client.invalidateQueries({ queryKey: queryKeys.policyExceptions });
-    },
+    onSuccess: invalidate,
   });
 }
 
+/**
+ * Returns a callback that invalidates the exception list and both policy pack status queries.
+ *
+ * @returns A function suitable for a mutation's `onSuccess`.
+ */
+function useInvalidatePolicyExceptionState() {
+  const client = useQueryClient();
+  return () => {
+    void client.invalidateQueries({ queryKey: queryKeys.policyExceptions });
+    void client.invalidateQueries({ queryKey: queryKeys.maskRulePack });
+    void client.invalidateQueries({ queryKey: queryKeys.rowFilterPack });
+  };
+}
+
+/**
+ * Rebuilds the mask and row-filter packs with the current exceptions (`POST /policy-exceptions/apply`).
+ *
+ * @remarks Invalidates `queryKeys.policyExceptions`, `queryKeys.maskRulePack`, and `queryKeys.rowFilterPack` on success.
+ * @returns A mutation with no variables, resolving to an {@link ApplyPolicyExceptionsResult}.
+ */
 export function useApplyPolicyExceptions() {
   const api = useApi();
   const client = useQueryClient();

@@ -1,508 +1,772 @@
+/**
+ * @file Wire types for the governance backend API.
+ *
+ * Each interface is a camelCase mirror of a backend pydantic model (`backend/app/models`).
+ * Backend `datetime` fields arrive as ISO-8601 strings; optional backend fields arrive as
+ * `null` rather than being omitted.
+ */
+
+/** The signed-in user as resolved by the backend from the Databricks Apps proxy identity (`GET /me`). */
 export interface CurrentUser {
+  /** Workspace user name (usually the email address); used as the principal name in assignments and requests. */
   userName: string;
   email: string;
   displayName: string;
+  /** Databricks SCIM user id, when the backend could resolve it. */
   userId: string | null;
+  /** Workspace group names the user belongs to. */
   groups: string[];
+  /** Member of the configured app admin group; unlocks admin-only pages and endpoints. */
   isAdmin: boolean;
+  /** Can decide access requests: always `true` for admins, otherwise `true` when the user or one of their groups is a category approver. */
   isApprover: boolean;
+  /** Databricks workspace host URL, when known. */
   workspaceHost: string | null;
 }
 
+/** Health of the app's primary storage backend. */
 export interface StorageHealth {
+  /** Storage backend kind (e.g. Lakebase, Delta, or in-memory). */
   backend: string;
   healthy: boolean;
+  /** Storage location when healthy, or the error reason when unhealthy. */
   detail: string | null;
 }
 
+/** Deployment and configuration summary (`GET /app-info`, admin only). */
 export interface AppInfo {
   appName: string;
   version: string;
   workspaceHost: string | null;
+  /** How the backend authenticates to Databricks (backend `AUTH_MODE`). */
   authMode: string;
+  /** SQL warehouse used for UC queries; `null` when not configured. */
   warehouseId: string | null;
+  /** Unity Catalog catalog holding the app's mirror tables and UDFs. */
   appCatalog: string;
+  /** Unity Catalog schema holding the app's mirror tables and UDFs. */
   appSchema: string;
+  /** Workspace group whose members are app admins. */
   adminGroup: string;
+  /** Secret scope holding the admin service principal credentials. */
   adminSecretScope: string;
+  /** Whether admin service principal credentials are available. */
   adminSpConfigured: boolean;
   storage: StorageHealth;
 }
 
+/** Where an ABAC policy is attached: the metastore itself or a specific catalog. */
 export type PolicyScopeKind = "metastore" | "catalog";
 
+/** A governed tag reference on a policy; `value` is `null` when the policy matches on tag key only. */
 export interface TagRef {
   key: string;
   value: string | null;
 }
 
+/** A `MATCH COLUMNS` entry of an ABAC policy. */
 export interface MatchColumnInfo {
+  /** Alias the policy uses to refer to the matched column. */
   alias: string;
+  /** Tag condition expression the column must satisfy; `null` when unconditional. */
   condition: string | null;
 }
 
+/** Column-mask clause of an ABAC policy. */
 export interface ColumnMaskInfo {
+  /** Fully qualified mask UDF name. */
   functionName: string;
+  /** Match-column alias the mask is applied to. */
   onColumn: string;
 }
 
+/** Row-filter clause of an ABAC policy. */
 export interface RowFilterInfo {
+  /** Fully qualified row-filter UDF name. */
   functionName: string;
+  /** Match-column aliases passed to the filter function, in order. */
   using: string[];
 }
 
+/** Privileges granted or denied by a GRANT/DENY policy. */
 export interface GrantDenyInfo {
   privileges: string[];
 }
 
+/** A securable (table or column) that a policy currently matches via its governed tags. */
 export interface AffectedAsset {
+  /** Kind of securable, e.g. `TABLE` or `COLUMN`. */
   assetType: string;
+  /** Dotted full name (`catalog.schema.table[.column]`). */
   fullName: string;
   catalogName: string | null;
   schemaName: string | null;
   tableName: string | null;
+  /** Set only for column-level assets. */
   columnName: string | null;
+  /** Tag key that caused the match, when known. */
   matchedTagKey: string | null;
+  /** Tag value that caused the match, when known. */
   matchedTagValue: string | null;
 }
 
+/** List-view projection of a Unity Catalog ABAC policy. */
 export interface PolicySummary {
   id: string;
   name: string;
+  /** Upper-case policy type with the `POLICY_TYPE_` prefix stripped (e.g. `COLUMN_MASK`, `ROW_FILTER`), or `UNKNOWN`. */
   policyType: string;
   scopeKind: PolicyScopeKind;
+  /** Upper-case securable type the policy is attached to (e.g. `METASTORE`, `CATALOG`). */
   onSecurableType: string;
+  /** Full name of the securable the policy is attached to (metastore name for metastore-level policies). */
   onSecurableFullname: string;
   catalogName: string | null;
+  /** Upper-case securable type the policy applies to (e.g. `TABLE`); `null` when unspecified. */
   forSecurableType: string | null;
+  /** Principals the policy applies to (`TO` clause). */
   toPrincipals: string[];
+  /** Principals exempt from the policy (`EXCEPT` clause). */
   exceptPrincipals: string[];
+  /** `WHEN` condition SQL, if any. */
   whenCondition: string | null;
   governedTags: TagRef[];
   privileges: string[];
   createdBy: string | null;
 }
 
+/** Full policy details, including clauses and the assets it currently matches (`GET /policies/{id}`). */
 export interface PolicyDetail extends PolicySummary {
   comment: string | null;
   matchColumns: MatchColumnInfo[];
+  /** Present only for column-mask policies. */
   columnMask: ColumnMaskInfo | null;
+  /** Present only for row-filter policies. */
   rowFilter: RowFilterInfo | null;
+  /** Present only for GRANT policies. */
   grant: GrantDenyInfo | null;
+  /** Present only for DENY policies. */
   deny: GrantDenyInfo | null;
+  /** Creation time as epoch milliseconds (from the Databricks SDK), when available. */
   createdAt: number | null;
+  /** Last-update time as epoch milliseconds (from the Databricks SDK), when available. */
   updatedAt: number | null;
   updatedBy: string | null;
   affectedAssets: AffectedAsset[];
+  /** `true` when `affectedAssets` was capped by the backend's asset limit. */
   affectedAssetsTruncated: boolean;
+  /** Explanation when the asset list is truncated or discovery is unsupported for this policy. */
   affectedAssetsNote: string | null;
 }
 
+/** Policies split into metastore-level and catalog-level buckets (`GET /policies`). */
 export interface PolicyListResponse {
   metastoreName: string | null;
   metastore: PolicySummary[];
   catalog: PolicySummary[];
+  /** Total across both buckets. */
   total: number;
 }
 
+/** Optional filters for `GET /policies`; unset or empty values are omitted from the query string. */
 export interface PolicyListParams {
   scope?: PolicyScopeKind;
+  /** Sent as `policy_type`. */
   policyType?: string;
   catalog?: string;
+  /** Free-text search. */
   q?: string;
 }
 
+/** Kind of Databricks principal an attribute, approver, or exception targets. */
 export type PrincipalKind = "USER" | "GROUP" | "SERVICE_PRINCIPAL";
 
+/** A Unity Catalog governed tag and its allowed values. */
 export interface GovernedTagSummary {
   tagKey: string;
   description: string | null;
+  /** Allowed values defined by the tag policy (may be a subset; see `valueCount`). */
   values: string[];
+  /** Total number of allowed values. */
   valueCount: number;
 }
 
+/** Governed tags matching a search (`GET /identity/governed-tags`). */
 export interface GovernedTagList {
   tags: GovernedTagSummary[];
   total: number;
+  /** `true` when the backend stopped at its result limit. */
   truncated: boolean;
 }
 
+/**
+ * Where an attribute definition gets its allowed values: live from governed tags, from an
+ * admin-maintained list, or from a seed SQL query.
+ */
 export type ValueSource = "governed_tags" | "free_form" | "sql";
 
+/** An app-managed identity attribute (Unity Catalog cannot attach attributes to identities yet). */
 export interface AttributeDefinition {
+  /** Attribute key; for governed-tag definitions it defaults to the first governed tag key. */
   key: string;
   description: string | null;
+  /** Governed tags whose values back this attribute; empty for free-form and SQL definitions. */
   governedTagKeys: string[];
   valueSource: ValueSource;
+  /** Seed query for `valueSource: "sql"`; refreshed into `allowedValues`. `null` for other sources. */
   valueSql: string | null;
   /** Governed tags: resolved live. Free-form / SQL: stored, always including "*". */
   allowedValues: string[];
   createdBy: string | null;
+  /** ISO-8601 timestamp. */
   createdAt: string | null;
   updatedBy: string | null;
+  /** ISO-8601 timestamp. */
   updatedAt: string | null;
 }
 
+/** All attribute definitions (`GET /identity/definitions`). */
 export interface AttributeDefinitionList {
   definitions: AttributeDefinition[];
   total: number;
 }
 
+/**
+ * Body for `PUT /identity/definitions` (create or replace by key).
+ *
+ * @remarks
+ * The backend requires at least one `governedTagKeys` entry for `governed_tags`, a `key` for
+ * `free_form`/`sql`, and `valueSql` for `sql`. Lists are trimmed and de-duplicated server-side.
+ */
 export interface UpsertAttributeDefinitionRequest {
+  /** Optional for governed-tag definitions (defaults to the first governed tag key). */
   key?: string | null;
   description?: string | null;
+  /** Defaults to `"governed_tags"` on the backend. */
   valueSource?: ValueSource;
   governedTagKeys: string[];
+  /** Used for `free_form` definitions. */
   allowedValues?: string[];
+  /** Required when `valueSource` is `"sql"`; ignored otherwise. */
   valueSql?: string | null;
 }
 
+/** A row-filter dimension (e.g. `state`, `region`): an identity attribute used to filter rows on tagged columns. */
 export interface RowFilterDimension {
+  /** Dimension key; also the `row_filter` tag value on columns and the identity attribute key. */
   key: string;
   description: string | null;
   valueSource: ValueSource;
   valueSql: string | null;
   allowedValueCount: number;
+  /** A few allowed values for display. */
   sampleValues: string[];
+  /** Number of table columns currently tagged with this dimension. */
   attachmentCount: number;
 }
 
+/** All row-filter dimensions (`GET /row-filters/dimensions`). */
 export interface RowFilterDimensionList {
   dimensions: RowFilterDimension[];
   total: number;
 }
 
+/** Body for `PUT /row-filters/dimensions` (create or replace by key). */
 export interface UpsertRowFilterDimensionRequest {
+  /** Must match `^[a-z][a-z0-9_]{0,62}$`; lower-cased server-side. */
   key: string;
   description?: string | null;
+  /** Row-filter dimensions cannot be backed by governed tags. */
   valueSource: "free_form" | "sql";
+  /** Used for `free_form` dimensions. */
   allowedValues?: string[];
+  /** Seed query for `sql` dimensions. */
   valueSql?: string | null;
 }
 
+/** Result of dry-running a seed SQL query (`POST /row-filters/seed-preview`). */
 export interface SeedPreview {
+  /** Distinct values the query returned (possibly a sample). */
   values: string[];
   total: number;
 }
 
+/** Sync state of the metastore row-filter "pack": the `row_filter` tag, its UDF, and the ABAC policy. */
 export interface RowFilterPackStatus {
+  /** Governed tag key used to mark filtered columns (e.g. `row_filter`). */
   tagKey: string;
+  /** Values currently allowed on the governed tag. */
   tagValues: string[];
+  /** Fully qualified row-filter UDF name. */
   functionName: string;
   policyName: string;
   policyExists: boolean;
+  /** The policy's current `MATCH COLUMNS` condition, if the policy exists. */
   policyMatchColumns: string | null;
+  /** Principals in the policy's `EXCEPT` clause. */
   policyExceptPrincipals: string[];
+  /** Dimension keys the pack should cover. */
   dimensions: string[];
+  /** Dimension keys not yet present as governed tag values. */
   missingTagValues: string[];
+  /** `true` when tag values, UDF, and policy all match the current dimensions. */
   inSync: boolean;
 }
 
+/** Body for `POST /row-filters/attachments`: tag a column so it is filtered by a dimension. */
 export interface AttachRowFilterRequest {
+  /** `catalog.schema.table`. */
   tableFullName: string;
   columnName: string;
+  /** Dimension key (same pattern as {@link UpsertRowFilterDimensionRequest.key}). */
   dimension: string;
 }
 
+/** A column tagged with a row-filter dimension. */
 export interface RowFilterAttachment {
+  /** `catalog.schema.table`. */
   tableFullName: string;
   columnName: string;
+  /** Dimension key. */
   dimension: string;
 }
 
+/** All row-filter attachments (`GET /row-filters/attachments`). */
 export interface RowFilterAttachmentList {
   attachments: RowFilterAttachment[];
   total: number;
 }
 
+/** A record that a principal holds one value of an identity attribute. */
 export interface IdentityAttributeAssignment {
   assignmentId: string;
   principalName: string;
   principalType: PrincipalKind;
   attributeKey: string;
+  /** Held value; `"*"` grants every value (e.g. all rows for a row-filter dimension). */
   attributeValue: string;
+  /** How the assignment was created: `MANUAL`, `ACCESS_REQUEST`, or `IDENTITY_POLICY`. */
   source: string;
   grantedBy: string | null;
   justification: string | null;
+  /** ISO-8601 expiry; `null` means the assignment never expires. */
   expiresAt: string | null;
+  /** ISO-8601 timestamp. */
   createdAt: string;
+  /** ISO-8601 revocation time; `null` while not revoked. */
   revokedAt: string | null;
   revokedBy: string | null;
+  /** Computed server-side: not revoked and not yet expired. */
   active: boolean;
 }
 
+/** A list of attribute assignments. */
 export interface AttributeAssignmentList {
   assignments: IdentityAttributeAssignment[];
   total: number;
 }
 
+/** Body for `POST /identity/assignments` (admin grants an attribute value to a principal). */
 export interface AssignAttributeRequest {
   principalName: string;
   principalType: PrincipalKind;
   attributeKey: string;
   attributeValue: string;
   justification?: string | null;
+  /** ISO-8601 expiry; omit or `null` for no expiry. */
   expiresAt?: string | null;
 }
 
+/** Optional filters for `GET /identity/assignments`; sent as snake_case query parameters. */
 export interface AssignmentListParams {
   principalName?: string;
   principalType?: PrincipalKind;
   attributeKey?: string;
+  /** Include revoked and expired assignments (default `false`). */
   includeInactive?: boolean;
 }
 
+/** Lifecycle state of an access request. */
 export type AccessRequestStatus = "PENDING" | "APPROVED" | "DENIED" | "CANCELLED";
+/** Approval inbox entry kind: a new access request, or an expiring assignment due for renewal. */
 export type ApprovalItemKind = "REQUEST" | "RENEWAL";
+/** Who reviews a request: the approvers of its sensitivity category, or app admins as the fallback. */
 export type RequestRouteKind = "category_approvers" | "app_admins";
 
+/** A principal who can decide a request, shown to the requester. */
 export interface ApproverPreview {
   principalName: string;
+  /** Principal kind as a string (typically a {@link PrincipalKind} value). */
   principalType: string;
 }
 
+/** A principal allowed to decide sensitivity requests under a category path. */
 export interface CategoryApprover {
   approverId: string;
+  /** Dotted sensitivity path prefix this approver covers; requests route to the most specific matching prefix (case-insensitive). */
   categoryPath: string;
   principalName: string;
   principalType: PrincipalKind;
   createdBy: string | null;
+  /** ISO-8601 timestamp. */
   createdAt: string;
 }
 
+/** Category approvers (`GET /identity/category-approvers`). */
 export interface CategoryApproverList {
   approvers: CategoryApprover[];
   total: number;
 }
 
+/** A principal exempt from every app-managed mask and row-filter policy (added to their `EXCEPT` lists). */
 export interface PolicyException {
+  /** Stable id; built-in system exceptions use `system:<principalName>`. */
   exceptionId: string;
   principalName: string;
   principalType: PrincipalKind;
   note: string | null;
   createdBy: string | null;
+  /** ISO-8601 timestamp. */
   createdAt: string;
+  /** `true` for built-in app/admin service principals, which cannot be edited or deleted. */
   system: boolean;
 }
 
+/** Built-in plus configured policy exceptions (`GET /policy-exceptions`). */
 export interface PolicyExceptionList {
+  /** System exceptions first, then configured ones (duplicates of system principals are hidden). */
   exceptions: PolicyException[];
   total: number;
+  /** Principal names of the built-in system exceptions. */
   systemPrincipals: string[];
 }
 
+/** Body for `PUT /policy-exceptions`. */
 export interface UpsertPolicyExceptionRequest {
   principalName: string;
   principalType: PrincipalKind;
   note?: string | null;
 }
 
+/** Result of rebuilding the mask and row-filter packs with the current exception list (`POST /policy-exceptions/apply`). */
 export interface ApplyPolicyExceptionsResult {
+  /** Ordered principal names now in the policies' `EXCEPT` clauses. */
   exceptPrincipals: string[];
   maskPackSynced: boolean;
   rowFilterPackSynced: boolean;
 }
 
+/** Body for `PUT /identity/category-approvers`. Values are trimmed and must be non-empty. */
 export interface UpsertCategoryApproverRequest {
   categoryPath: string;
   principalName: string;
   principalType: PrincipalKind;
 }
 
+/** A user's request to be granted an identity attribute value (typically a sensitivity path). */
 export interface AccessRequest {
   requestId: string;
   requesterName: string;
   attributeKey: string;
   attributeValue: string;
+  /** ISO-8601 expiry the requester asked for. */
   requestedExpiresAt: string;
   justification: string;
   status: AccessRequestStatus;
   decidedBy: string | null;
+  /** ISO-8601 decision time; `null` while pending. */
   decidedAt: string | null;
   decisionNote: string | null;
+  /** ISO-8601 expiry set by the approver; may differ from `requestedExpiresAt`. */
   approvedExpiresAt: string | null;
+  /** ISO-8601 timestamp. */
   createdAt: string;
+  /** Configured approver category the request routed to (sensitivity requests only). */
   resolvedCategory: string | null;
   routedTo: RequestRouteKind | null;
+  /** Principals who can decide this request. */
   approvers: ApproverPreview[];
 }
 
+/** A list of access requests. */
 export interface AccessRequestList {
   requests: AccessRequest[];
   total: number;
 }
 
+/** Body for `POST /identity/access-requests`. */
 export interface CreateAccessRequestBody {
+  /** Defaults to `"sensitivity"` on the backend; lower-cased server-side. */
   attributeKey?: string;
   attributeValue: string;
+  /** ISO-8601 expiry; must be in the future. */
   requestedExpiresAt: string;
   justification: string;
 }
 
+/** Optional body for approving/denying a request or approving a renewal. */
 export interface DecideAccessRequestBody {
+  /** ISO-8601 expiry override; omitted means keep the requested (or current) expiry. */
   expiresAt?: string | null;
+  /** Decision note, up to 2000 characters. */
   note?: string | null;
 }
 
+/**
+ * One entry in the caller's approval inbox.
+ *
+ * @remarks
+ * Exactly one of `request` (for `REQUEST`) or `assignment` (for `RENEWAL`) is set.
+ */
 export interface ApprovalInboxItem {
   kind: ApprovalItemKind;
   request: AccessRequest | null;
   assignment: IdentityAttributeAssignment | null;
   resolvedCategory: string | null;
   attributeValue: string;
+  /** Requester (for requests) or assignment holder (for renewals). */
   principalName: string;
+  /** Requested expiry (for requests) or current expiry (for renewals), ISO-8601. */
   expiresAt: string | null;
 }
 
+/** Pending requests and due renewals the caller may decide (`GET /identity/approvals`). */
 export interface ApprovalInbox {
   items: ApprovalInboxItem[];
   total: number;
 }
 
 
+/** Builtin mask algorithm ids. Custom handlers use their rule key as the handler id. */
 export type MaskHandler = "full" | "joinable" | "email" | "phone" | "keep_last_n";
+/** Whether a mask rule uses a builtin handler or an admin-authored SQL expression. */
 export type MaskRuleKind = "builtin" | "custom";
 
+/**
+ * A presentation mask rule: a `mask_rule` tag value mapped to how a denied value is shown.
+ *
+ * @remarks
+ * Authorization (masked vs unmasked) is decided by sensitivity tags; the mask rule only
+ * chooses the denied presentation.
+ */
 export interface MaskRuleDefinition {
+  /** Rule key; also the `mask_rule` tag value on columns. */
   ruleKey: string;
   description: string | null;
   kind: MaskRuleKind;
+  /** Builtin {@link MaskHandler} id, or the rule key for custom rules. */
   handler: string;
+  /** SQL expression over the input `v`, for custom rules; `null` for builtins. */
   expression: string | null;
+  /** Handler parameters, e.g. `{ n: 4 }` for `keep_last_n`; empty for other handlers. */
   params: Record<string, unknown>;
+  /** ISO-8601 time the custom expression was last validated. */
   validatedAt: string | null;
   updatedBy: string | null;
+  /** ISO-8601 timestamp. */
   updatedAt: string | null;
 }
 
+/** All mask rules. */
 export interface MaskRuleList {
   rules: MaskRuleDefinition[];
   total: number;
 }
 
+/**
+ * Body for `PUT /mask-rules` (create or replace by rule key).
+ *
+ * @remarks
+ * Custom rules require `expression` and a `validationToken` from a successful
+ * validate call. Builtin rules default `handler` to `ruleKey`.
+ */
 export interface UpsertMaskRuleRequest {
+  /** Must match `^[a-z][a-z0-9_]{0,62}$`; lower-cased server-side. */
   ruleKey: string;
   description?: string | null;
+  /** Defaults to `"builtin"`. */
   kind?: MaskRuleKind;
+  /** Builtin handler id; ignored for custom rules. */
   handler?: MaskHandler | string | null;
+  /** Custom SQL expression over `v`; required when `kind` is `"custom"`. */
   expression?: string | null;
+  /** Only `n` (1–64, default 4) for `keep_last_n` is honored. */
   params?: Record<string, unknown>;
+  /** Token from {@link MaskHandlerValidateResult}; required for custom rules. */
   validationToken?: string | null;
 }
 
+/** Body for `POST /mask-rules/handlers/draft`: ask the LLM to write or fix a custom mask expression. */
 export interface MaskHandlerDraftRequest {
+  /** Natural-language description of the desired mask (3–4000 characters). */
   prompt: string;
+  /** Current expression to revise, if any. */
   expression?: string | null;
+  /** Validation errors from a previous attempt, fed back to the LLM. */
   errors?: string[];
 }
 
+/** An LLM-drafted custom mask expression. */
 export interface MaskHandlerDraft {
   expression: string;
   explanation: string;
+  /** Suggested sample inputs for validation (at most 10). */
   sampleInputs: string[];
 }
 
+/** Body for `POST /mask-rules/handlers/validate`: run an expression against sample inputs on the warehouse. */
 export interface MaskHandlerValidateRequest {
   expression: string;
+  /** Inputs to test; the backend uses default samples when empty. */
   sampleInputs?: string[];
 }
 
+/** Output of a mask expression for one sample input; exactly one of `output`/`error` is meaningful. */
 export interface MaskHandlerSampleResult {
   input: string;
+  /** Masked value; `null` if the expression returned NULL or errored. */
   output: string | null;
+  /** SQL error for this input, if it failed. */
   error: string | null;
 }
 
+/** Result of validating a custom mask expression. */
 export interface MaskHandlerValidateResult {
+  /** `true` when every sample evaluated without error. */
   ok: boolean;
+  /** The sanitized expression that was evaluated. */
   expression: string;
   samples: MaskHandlerSampleResult[];
+  /** Issued only when `ok`; pass it to {@link UpsertMaskRuleRequest.validationToken} to save a custom rule. */
   validationToken: string | null;
 }
 
+/** Sync state of the metastore mask "pack": salt, `mask_rule` tag, `apply_mask_rule` UDF, and ABAC policy. */
 export interface MaskingConfigStatus {
+  /** Whether the salt used by the `joinable` (hash) handler exists. */
   joinableSaltConfigured: boolean;
+  /** Governed tag key used on columns to pick a mask rule (e.g. `mask_rule`). */
   tagKey: string;
+  /** Values currently allowed on the governed tag. */
   tagValues: string[];
+  /** Rule keys not yet present as governed tag values. */
   missingTagValues: string[];
   policyName: string;
   policyExists: boolean;
+  /** Whether the policy passes the column's mask rule to the UDF. */
   policyPassesMaskRule: boolean;
+  /** Fully qualified mask UDF name. */
   functionName: string;
+  /** Whether the UDF body includes every custom rule's handler. */
   udfInSync: boolean;
+  /** `true` when every component is in sync. */
   inSync: boolean;
 }
 
+/** Mask pack status plus the current rules (`GET /mask-rules/pack`). */
 export interface MaskRulePackStatus {
   config: MaskingConfigStatus;
   rules: MaskRuleDefinition[];
 }
 
 
+/**
+ * How the current user sees a column: in the clear, masked, outside any app policy, or
+ * returned as NULL by the geometry/geography policies.
+ */
 export type ColumnAccessState = "unmasked" | "masked" | "not_governed" | "geo_masked";
+/** Kind of attribute the Access Explorer suggests requesting. */
 export type SuggestedAttributeKind = "sensitivity" | "row_filter";
 
+/** A table matching an Access Explorer search. */
 export interface TableSearchHit {
   catalogName: string;
   schemaName: string;
   tableName: string;
 }
 
+/** Tables whose `catalog.schema.table` name contains the query (`GET /access-explorer/search`). */
 export interface TableSearchResult {
   tables: TableSearchHit[];
   total: number;
 }
 
+/** Governance tag values found on a column; each is `null` when the tag is absent. */
 export interface ColumnTagMap {
+  /** `sensitivity_category` tag (first segment of the required sensitivity path). */
   sensitivityCategory: string | null;
+  /** `sensitivity` tag (second segment of the required sensitivity path). */
   sensitivity: string | null;
+  /** `mask_rule` tag selecting the denied presentation; missing means `full`. */
   maskRule: string | null;
+  /** `data_type` governance tag (not the SQL type); geometry/geography route to geo policies. */
   dataType: string | null;
+  /** `row_filter` tag naming a row-filter dimension. */
   rowFilter: string | null;
 }
 
+/** Per-column explanation of how masking applies to the current user. */
 export interface ColumnAccessInsight {
   columnName: string;
+  /** SQL data type from `information_schema`, when known. */
   dataType: string | null;
   tags: ColumnTagMap;
   accessState: ColumnAccessState;
+  /** `<sensitivity_category>.<sensitivity>` the user must hold to unmask; `null` when the column lacks those tags. */
   requiredSensitivityPath: string | null;
+  /** Whether the user holds the required sensitivity path (or the column is untagged). */
   userHasAccess: boolean;
+  /** Effective mask rule key (`full` when the tag is missing); `null` for ungoverned and geo columns. */
   maskRuleKey: string | null;
   maskHandler: string | null;
+  /** {@link MaskRuleKind} as a string. */
   maskKind: string | null;
   maskDescription: string | null;
+  /** ABAC policy that governs the column. */
   policyName: string | null;
   notes: string | null;
 }
 
+/** Row-filter state of the analyzed table for the current user. */
 export interface RowFilterInsight {
+  /** Whether a column on the table carries a `row_filter` tag. */
   attached: boolean;
   dimensionKey: string | null;
   columnName: string | null;
   policyName: string | null;
   functionName: string | null;
+  /** User holds `"*"` for the dimension and sees every row. */
   userHasWildcard: boolean;
+  /** Dimension values the user holds. */
   userValues: string[];
+  /** Whether the user will see any rows at all (no assignment means no rows). */
   userCanSeeRows: boolean;
   notes: string | null;
 }
 
+/** An attribute the user could request to gain access to masked columns or filtered rows. */
 export interface SuggestedAttribute {
   kind: SuggestedAttributeKind;
   attributeKey: string;
   attributeValue: string;
+  /** Human-readable explanation of what the attribute would unlock. */
   reason: string;
+  /** Whether a request can be submitted now (e.g. `false` when the dimension has no definition yet). */
   requestable: boolean;
+  /** In-app route that pre-fills the request form, e.g. `/identity?tab=request&key=...&value=...`. */
   requestPath: string | null;
+  /** Columns that would be unmasked or unfiltered. */
   columnNames: string[];
+  /** Required sensitivity paths this value covers (`["*"]` for row-filter wildcards). */
   coversPaths: string[];
+  /** `true` for a broader parent path covering several required leaf paths. */
   isHierarchyParent: boolean;
   routedTo: RequestRouteKind | null;
   resolvedCategory: string | null;
   approvers: ApproverPreview[];
 }
 
+/** Full Access Explorer analysis of one table for the current user (`POST /access-explorer/analyze`). */
 export interface TableAccessInsight {
   tableFullName: string;
   catalogName: string;
@@ -510,28 +774,38 @@ export interface TableAccessInsight {
   tableName: string;
   columns: ColumnAccessInsight[];
   rowFilter: RowFilterInsight;
+  /** Ordered leaf sensitivity paths first, then hierarchy parents, then row-filter values. */
   suggestions: SuggestedAttribute[];
+  /** Human-readable summary of the analysis. */
   summary: string;
 }
 
+/** Body for `POST /access-explorer/analyze`. */
 export interface AnalyzeTableRequest {
+  /** `catalog.schema.table` (5–512 characters). */
   tableFullName: string;
 }
 
+/** Catalogs for the Access Explorer tree (`GET /access-explorer/tree/catalogs`). */
 export interface TreeCatalogList {
   catalogs: { catalogName: string }[];
   total: number;
+  /** `true` when the backend stopped at its result limit. */
   truncated: boolean;
 }
 
+/** Schemas in one catalog for the Access Explorer tree. */
 export interface TreeSchemaList {
   schemas: { catalogName: string; schemaName: string }[];
   total: number;
+  /** `true` when the backend stopped at its result limit. */
   truncated: boolean;
 }
 
+/** Tables in one schema for the Access Explorer tree; `tableType` is the UC table type (e.g. `MANAGED`, `VIEW`). */
 export interface TreeTableList {
   tables: { catalogName: string; schemaName: string; tableName: string; tableType: string }[];
   total: number;
+  /** `true` when the backend stopped at its result limit. */
   truncated: boolean;
 }

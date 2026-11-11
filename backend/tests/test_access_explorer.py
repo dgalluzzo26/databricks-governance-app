@@ -3,9 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-
 from fastapi.testclient import TestClient
 
+from backend.app.core.errors import InvalidRequestError
 from backend.app.models.access_explorer import AnalyzeTableRequest
 from backend.app.models.identity_attribute import (
     AssignAttributeRequest,
@@ -13,13 +13,13 @@ from backend.app.models.identity_attribute import (
     UpsertAttributeDefinitionRequest,
     ValueSource,
 )
-from backend.app.core.errors import InvalidRequestError
 from backend.app.models.principal import PrincipalKind
 from backend.app.models.user import CurrentUser
 from backend.app.services.access_explorer import AccessExplorerService, has_sensitivity_access
 from backend.tests.conftest import headers_for
 from backend.tests.test_identity_attributes import _admin
-from backend.tests.test_mask_rules import FakeSql, MaskRuleTags, _service as mask_service
+from backend.tests.test_mask_rules import FakeSql, MaskRuleTags
+from backend.tests.test_mask_rules import _service as mask_service
 
 
 def test_has_sensitivity_prefix_rules() -> None:

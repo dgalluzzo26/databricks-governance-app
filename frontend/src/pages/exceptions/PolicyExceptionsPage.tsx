@@ -1,3 +1,11 @@
+/**
+ * @file Admin page for managing global ABAC policy exceptions (EXCEPT-list principals).
+ *
+ * Lists, adds, and removes principals exempt from app-managed column masks and row filters, and
+ * can re-apply the exception list onto mask/row-filter policy packs.
+ *
+ * @remarks Admin-only UI. Non-admins see a warning; list/mutations still rely on backend auth.
+ */
 import { useState } from "react";
 import {
   useApplyPolicyExceptions,
@@ -10,8 +18,18 @@ import type { PrincipalKind } from "@/api/types";
 import { Alert, Badge, Card, ErrorAlert, PageHeader, Spinner } from "@/components/ui";
 import styles from "../identity/IdentityPage.module.css";
 
+/** Principal kinds selectable when adding a configured policy exception. */
 const PRINCIPAL_TYPES: PrincipalKind[] = ["USER", "GROUP", "SERVICE_PRINCIPAL"];
 
+/**
+ * Admin UI to add/remove policy exceptions and re-apply them to ABAC packs.
+ *
+ * Uses `useCurrentUser` for role gating, `usePolicyExceptions` (enabled only for admins),
+ * `useUpsertPolicyException`, `useDeletePolicyException`, and `useApplyPolicyExceptions`.
+ * Saving an exception regenerates mask/row-filter packs server-side; "Re-apply" forces a sync.
+ *
+ * @remarks Non-admin users get a read-only warning shell; the backend enforces authorization.
+ */
 export function PolicyExceptionsPage() {
   const { data: user } = useCurrentUser();
   const list = usePolicyExceptions(Boolean(user?.isAdmin));
@@ -36,6 +54,7 @@ export function PolicyExceptionsPage() {
     );
   }
 
+  /** Upserts the form principal as a configured exception and clears name/note fields. */
   const onAdd = async () => {
     await upsert.mutateAsync({
       principalName: principalName.trim(),

@@ -1,3 +1,8 @@
+/**
+ * @file Lists Unity Catalog ABAC policies split by metastore vs catalog scope.
+ * Search, type, and catalog filters are local state seeded from the URL; only `scope` is written
+ * back as a query parameter. The route is wrapped in `RequireAdmin`.
+ */
 import { useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { usePolicies } from "@/api/queries";
@@ -6,17 +11,25 @@ import { Badge, Card, ErrorAlert, PageHeader, Spinner } from "@/components/ui";
 import { formatPolicyType, formatTag, policyTypeTone } from "./policyLabels";
 import styles from "./PoliciesPage.module.css";
 
+/** Unity Catalog ABAC policy type values offered in the type filter. */
 const POLICY_TYPES = ["COLUMN_MASK", "ROW_FILTER", "GRANT", "DENY"];
 
+/**
+ * Table of policy summaries with links to each detail page, or an empty-state message.
+ */
 function PolicyTable({
   policies,
   emptyTitle,
   emptyBody,
   showCatalog,
 }: {
+  /** Policy summaries to render as rows. */
   policies: PolicySummary[];
+  /** Heading shown when `policies` is empty. */
   emptyTitle: string;
+  /** Supporting copy shown when `policies` is empty. */
   emptyBody: string;
+  /** When true, the scope column header reads "Catalog / scope". */
   showCatalog: boolean;
 }) {
   if (!policies.length) {
@@ -98,6 +111,15 @@ function PolicyTable({
   );
 }
 
+/**
+ * Admin catalog of metastore-wide and catalog-scoped ABAC policies.
+ *
+ * Loads grouped policies with {@link usePolicies}. The Metastore/Catalog tabs switch `scope` in the
+ * URL; type and text filters are applied as query params to that hook, while catalog name is a
+ * client-side filter of catalog-scoped rows.
+ *
+ * @remarks The route is wrapped in `RequireAdmin`. There are no create/edit controls on this page.
+ */
 export function PoliciesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const scope = (searchParams.get("scope") as PolicyScopeKind | null) ?? "metastore";
@@ -123,6 +145,7 @@ export function PoliciesPage() {
     return [...names].sort((a, b) => a.localeCompare(b));
   }, [data?.catalog]);
 
+  /** Replace the `scope` search param without adding a history entry. */
   const setScope = (next: PolicyScopeKind) => {
     const nextParams = new URLSearchParams(searchParams);
     nextParams.set("scope", next);

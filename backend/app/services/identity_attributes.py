@@ -1,3 +1,12 @@
+"""Identity attribute definitions and principal assignments.
+
+Identity attributes (e.g. hierarchical ``sensitivity`` paths or row-filter dimension values)
+are what the ABAC column-mask and row-filter UDFs evaluate. Definitions draw their vocabulary
+from governed tags, a fixed list, or a SQL seed query; assignments grant a value to a user or
+group, optionally with an expiry. Primary storage (Lakebase) is the source of truth and every
+write is mirrored to Unity Catalog Delta tables and audited.
+"""
+
 from __future__ import annotations
 
 import uuid
@@ -33,6 +42,12 @@ class IdentityAttributeService:
     Definitions are bound to governed tags; assignment values must come from those tags.
     When Lakebase is primary, writes are mirrored to Unity Catalog Delta so column-mask
     UDFs can look up attributes (UC SQL cannot query Lakebase).
+
+    Args:
+        storage: Primary storage provider for definitions, assignments, and audit events.
+        governed_tags: Governed tag reader used to resolve tag-bound vocabularies.
+        uc_sync: Unity Catalog mirror; when None, writes are not mirrored.
+        sql: SQL executor used to run SQL seed queries; required for SQL-seeded definitions.
     """
 
     def __init__(
@@ -48,23 +63,79 @@ class IdentityAttributeService:
         self._sql = sql
 
     def list_governed_tags(self, *, q: str | None = None, limit: int = 50) -> GovernedTagList:
+        """List governed tags that definitions can bind to.
+
+        Args:
+            q: Optional case-insensitive search over key, description, and values.
+            limit: Maximum tags to return.
+
+        Returns:
+            Matching governed tags.
+
+        Raises:
+            UpstreamError: If tag policies cannot be listed.
+        """
         return self._governed_tags.list_tags(q=q, limit=limit)
 
     def list_definitions(self) -> AttributeDefinitionList:
+        """List all attribute definitions with their current allowed values resolved.
+
+        Returns:
+            Definitions whose governed-tag vocabularies are resolved live.
+        """
         definitions = [self._enrich(item) for item in self._storage.identity_attributes.list_definitions()]
         return AttributeDefinitionList(definitions=definitions, total=len(definitions))
 
     def get_definition(self, key: str) -> AttributeDefinition:
+        """Return one attribute definition with its allowed values resolved.
+
+        Args:
+            key: Attribute key.
+
+        Returns:
+            The enriched definition.
+
+        Raises:
+            NotFoundError: If no definition exists for the key.
+        """
         definition = self._storage.identity_attributes.get_definition(key)
         if definition is None:
             raise NotFoundError(f"Attribute definition '{key}' was not found")
         return self._enrich(definition)
 
     def preview_seed(self, value_sql: str) -> list[str]:
+        """Run a seed query without saving anything, for previewing a SQL vocabulary.
+
+        Args:
+            value_sql: Candidate SELECT/WITH seed query.
+
+        Returns:
+            Distinct values the query would seed.
+
+        Raises:
+            NotConfiguredError: If no SQL warehouse is configured.
+            InvalidRequestError: If the query is invalid, too large, or returns nothing.
+        """
         return run_seed_sql(self._sql, value_sql)
 
     def refresh_definition(self, key: str, actor: CurrentUser) -> AttributeDefinition:
-        """Re-run a SQL definition's seed query and store the result."""
+        """Re-run a SQL definition's seed query and store the result.
+
+        Delegates to ``upsert_definition``, so the definition is mirrored to Unity Catalog
+        and audited.
+
+        Args:
+            key: Attribute key of a SQL-seeded definition.
+            actor: The admin triggering the refresh.
+
+        Returns:
+            The definition with its refreshed vocabulary.
+
+        Raises:
+            NotFoundError: If the definition does not exist.
+            InvalidRequestError: If it is not SQL-seeded or the seed query fails validation.
+            NotConfiguredError: If no SQL warehouse is configured.
+        """
         current = self.get_definition(key)
         if current.value_source != ValueSource.SQL:
             raise InvalidRequestError(f"Attribute '{key}' is not SQL-seeded")
@@ -81,6 +152,27 @@ class IdentityAttributeService:
     def upsert_definition(
         self, request: UpsertAttributeDefinitionRequest, actor: CurrentUser
     ) -> AttributeDefinition:
+        """Create or replace an attribute definition.
+
+        Governed-tag definitions store only the tag keys (values are resolved live and the
+        description defaults to the first tag description); SQL definitions store the seed
+        query's result; manual definitions store the supplied list. SQL and manual
+        vocabularies always include ``*``. Mirrors the definition to Unity Catalog (without values) and
+        records an ``identity_attribute_definition.upserted`` audit event.
+
+        Args:
+            request: Key, description, value source, and source-specific inputs.
+            actor: The admin making the change.
+
+        Returns:
+            The saved, enriched definition.
+
+        Raises:
+            InvalidRequestError: If a referenced governed tag does not exist or the seed
+                query is invalid.
+            NotConfiguredError: If a SQL seed is requested without a SQL warehouse.
+            UpstreamError: If governed tags cannot be read.
+        """
         repo = self._storage.identity_attributes
         existing = repo.get_definition(request.key)
         now = datetime.now(UTC)
@@ -127,6 +219,19 @@ class IdentityAttributeService:
         return saved
 
     def delete_definition(self, key: str, actor: CurrentUser) -> None:
+        """Delete an attribute definition that has no active assignments.
+
+        Also removes it from the Unity Catalog mirror and records an
+        ``identity_attribute_definition.deleted`` audit event.
+
+        Args:
+            key: Attribute key.
+            actor: The admin making the change.
+
+        Raises:
+            InvalidRequestError: If active assignments still reference the attribute.
+            NotFoundError: If no definition exists for the key.
+        """
         active = self._storage.identity_attributes.list_assignments(
             AttributeAssignmentFilter(attribute_key=key, include_inactive=False)
         )
@@ -148,6 +253,17 @@ class IdentityAttributeService:
         attribute_key: str | None = None,
         include_inactive: bool = False,
     ) -> AttributeAssignmentList:
+        """List assignments matching optional filters.
+
+        Args:
+            principal_name: Restrict to one principal.
+            principal_type: Restrict to USER or GROUP principals.
+            attribute_key: Restrict to one attribute.
+            include_inactive: Include revoked and expired assignments.
+
+        Returns:
+            Matching assignments.
+        """
         items = self._storage.identity_attributes.list_assignments(
             AttributeAssignmentFilter(
                 principal_name=principal_name,
@@ -159,7 +275,17 @@ class IdentityAttributeService:
         return AttributeAssignmentList(assignments=items, total=len(items))
 
     def list_for_user(self, user: CurrentUser) -> AttributeAssignmentList:
-        """Active attributes for the signed-in user and their groups."""
+        """Active attributes for the signed-in user and their groups.
+
+        Mirrors what the UDFs see: direct USER assignments plus assignments to any of the
+        user's groups, de-duplicated by (key, value) with direct grants taking precedence.
+
+        Args:
+            user: The signed-in user, including resolved group memberships.
+
+        Returns:
+            The user's effective active assignments.
+        """
         repo = self._storage.identity_attributes
         direct = repo.list_assignments(
             AttributeAssignmentFilter(
@@ -196,6 +322,27 @@ class IdentityAttributeService:
         *,
         source: AttributeSource = AttributeSource.MANUAL,
     ) -> IdentityAttributeAssignment:
+        """Grant an attribute value to a user or group.
+
+        The value is validated case-insensitively against the definition's vocabulary and
+        stored in canonical casing. Idempotent: if the principal already holds the value,
+        the existing assignment is returned, or its expiry is updated when a different one
+        is requested. New assignments are persisted, mirrored to Unity Catalog, and recorded
+        as an ``identity_attribute.assigned`` audit event.
+
+        Args:
+            request: Principal, attribute key/value, justification, and optional expiry.
+            actor: The admin or approver granting the value.
+            source: How the grant originated (manual or via an approved access request).
+
+        Returns:
+            The new, existing, or renewed assignment.
+
+        Raises:
+            InvalidRequestError: If the definition is unknown, the value is not allowed, or a
+                governed-tag definition is not linked to any tag.
+            NotFoundError: If an existing assignment disappears while updating its expiry.
+        """
         definition = self._storage.identity_attributes.get_definition(request.attribute_key)
         if definition is None:
             raise InvalidRequestError(
@@ -269,6 +416,22 @@ class IdentityAttributeService:
     def update_expiry(
         self, assignment_id: str, expires_at: datetime, actor: CurrentUser
     ) -> IdentityAttributeAssignment:
+        """Change the expiry of an active assignment.
+
+        Persists the change, mirrors it to Unity Catalog, and records an
+        ``identity_attribute.renewed`` audit event.
+
+        Args:
+            assignment_id: Identifier of the active assignment.
+            expires_at: New expiry.
+            actor: The admin or approver making the change.
+
+        Returns:
+            The updated assignment.
+
+        Raises:
+            NotFoundError: If the assignment does not exist or is inactive.
+        """
         current = self._storage.identity_attributes.get_assignment(assignment_id)
         if current is None or not current.active:
             raise NotFoundError(f"Assignment {assignment_id} was not found")
@@ -292,6 +455,22 @@ class IdentityAttributeService:
         return updated
 
     def revoke(self, assignment_id: str, actor: CurrentUser) -> IdentityAttributeAssignment:
+        """Revoke an assignment so UDFs stop honoring it.
+
+        Idempotent for already-inactive assignments (returned unchanged, no audit). Otherwise
+        marks it revoked in storage and in the Unity Catalog mirror and records an
+        ``identity_attribute.revoked`` audit event.
+
+        Args:
+            assignment_id: Identifier of the assignment.
+            actor: The admin revoking it.
+
+        Returns:
+            The revoked (or already inactive) assignment.
+
+        Raises:
+            NotFoundError: If the assignment does not exist.
+        """
         current = self._storage.identity_attributes.get_assignment(assignment_id)
         if current is None:
             raise NotFoundError(f"Assignment {assignment_id} was not found")
@@ -318,12 +497,23 @@ class IdentityAttributeService:
         return updated
 
     def sync_to_uc(self) -> dict[str, int]:
-        """Full replace of the UC Delta mirror from primary storage."""
+        """Full replace of the UC Delta mirror from primary storage.
+
+        Use to repair drift; regular writes are mirrored incrementally.
+
+        Returns:
+            Counts of mirrored ``definitions`` and ``assignments``.
+
+        Raises:
+            InvalidRequestError: If no Unity Catalog mirror is configured.
+            UpstreamError: If the mirror DDL or writes fail.
+        """
         if self._uc_sync is None:
             raise InvalidRequestError("UC identity sync is not configured for this deployment")
         return self._uc_sync.full_sync(self._storage.identity_attributes)
 
     def _mirror_definition(self, definition: AttributeDefinition) -> None:
+        """Upsert the definition into the UC mirror without allowed values, if configured."""
         if self._uc_sync is None:
             return
         self._uc_sync.repo.upsert_definition(
@@ -331,11 +521,25 @@ class IdentityAttributeService:
         )
 
     def _mirror_assignment(self, assignment: IdentityAttributeAssignment) -> None:
+        """Upsert the assignment into the UC mirror, if one is configured."""
         if self._uc_sync is None:
             return
         self._uc_sync.repo.upsert_assignment(assignment)
 
     def _enrich(self, definition: AttributeDefinition) -> AttributeDefinition:
+        """Return a copy of the definition with its effective allowed values.
+
+        Non-tag definitions get ``*`` added to their stored values. Governed-tag definitions
+        resolve values live from their tags (legacy rows without tag keys fall back to a tag
+        named after the definition key); if the lookup fails, the stored values are kept and
+        the error is surfaced in the description so the definition stays usable.
+
+        Args:
+            definition: Definition as stored.
+
+        Returns:
+            The enriched copy.
+        """
         if definition.value_source != ValueSource.GOVERNED_TAGS:
             return definition.model_copy(
                 update={"allowed_values": _with_all_values(definition.allowed_values)}
@@ -367,6 +571,16 @@ class IdentityAttributeService:
         When a definition binds both ``sensitivity_category`` and ``sensitivity``,
         allowed values are category prefixes plus composed ``category.leaf`` paths
         so one ``sensitivity`` attribute can hold hierarchical grants.
+
+        Args:
+            tag_keys: Governed tag keys bound to the definition.
+
+        Returns:
+            The allowed values, de-duplicated in tag order.
+
+        Raises:
+            InvalidRequestError: If a tag does not exist.
+            UpstreamError: If tag policies cannot be read.
         """
         key_set = set(tag_keys)
         if "sensitivity_category" in key_set and "sensitivity" in key_set:
@@ -389,6 +603,7 @@ class IdentityAttributeService:
         return self._governed_tags.values_for_keys(tag_keys)
 
     def _audit(self, event_type: str, actor: str, payload: dict) -> None:
+        """Record an audit event in storage."""
         self._storage.audit.record(
             AuditEvent(
                 event_id=str(uuid.uuid4()),
@@ -401,6 +616,13 @@ class IdentityAttributeService:
 
 
 def _with_all_values(values: list[str]) -> list[str]:
-    """Free-form / SQL vocabularies always allow ``*`` (all rows for a row-filter dimension)."""
+    """Free-form / SQL vocabularies always allow ``*`` (all rows for a row-filter dimension).
+
+    Args:
+        values: Stored vocabulary values.
+
+    Returns:
+        The values with ``*`` first and any other ``*`` occurrences removed.
+    """
     rest = [value for value in values if value != ALL_VALUES]
     return [ALL_VALUES, *rest]

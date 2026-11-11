@@ -1,3 +1,14 @@
+"""App-managed row filters driven by identity attribute dimensions.
+
+A row-filter dimension is a non-governed-tag identity attribute definition (manual or
+SQL-seeded vocabulary) whose key is also a value of the ``row_filter`` governed tag. Tagging a
+table column with ``row_filter = <dimension>`` attaches it. One metastore ``ROW FILTER`` policy
+matches every registered dimension and calls ``has_row_access``, which reads the Unity Catalog
+identity attribute mirror: a caller sees a row when they (directly or via a group) hold the
+column's value or ``*`` for that dimension, and nothing otherwise. Requests for dimension
+values are always reviewed by app admins.
+"""
+
 from __future__ import annotations
 
 import json
@@ -39,6 +50,19 @@ _MATCHED_DIMENSION = re.compile(r"has_tag_value\(\s*'[^']*'\s*,\s*'([^']*)'\s*\)
 
 
 def build_function_sql(function_name: str, mirror_table: str) -> str:
+    """Return DDL for the ``has_row_access`` row-filter UDF.
+
+    The function is default-deny: it returns true only when an active, unexpired mirror
+    assignment for the dimension matches the session user (USER) or one of their account
+    groups (GROUP) and holds ``*`` or the row's value (case-insensitive).
+
+    Args:
+        function_name: Fully qualified, quoted function name.
+        mirror_table: Fully qualified, quoted UC identity attribute assignments mirror.
+
+    Returns:
+        A ``CREATE OR REPLACE FUNCTION`` statement.
+    """
     return f"""CREATE OR REPLACE FUNCTION {function_name}(
   row_value STRING,
   dim STRING
@@ -71,6 +95,22 @@ def build_policy_sql(
     dimensions: list[str],
     except_principals: list[str],
 ) -> str:
+    """Return DDL for the metastore row-filter policy covering all dimensions.
+
+    The policy applies to ``account users`` (minus EXCEPT principals) on any table with a
+    column tagged ``<tag_key> = <dimension>`` and passes that column's value and dimension
+    to the row-filter function.
+
+    Args:
+        policy_name: Validated policy name.
+        function_name: Fully qualified, quoted ``has_row_access`` name.
+        tag_key: Row-filter governed tag key.
+        dimensions: Registered dimension keys (must be non-empty).
+        except_principals: Principals exempt from the filter.
+
+    Returns:
+        A ``CREATE OR REPLACE POLICY ... ON METASTORE`` statement.
+    """
     match = "\n  OR ".join(
         f"has_tag_value({string_literal(tag_key)}, {string_literal(dim)})" for dim in dimensions
     )
@@ -91,6 +131,18 @@ USING COLUMNS (c, get_column_tag_value(c, {string_literal(tag_key)}))"""
 
 
 def split_table_name(full_name: str) -> tuple[str, str, str]:
+    """Split and validate a ``catalog.schema.table`` name (backticks are stripped).
+
+    Args:
+        full_name: Three-part table name.
+
+    Returns:
+        The catalog, schema, and table names.
+
+    Raises:
+        InvalidRequestError: If the name is not three non-empty parts or a part is not a
+            valid identifier.
+    """
     parts = [part.strip().strip("`") for part in full_name.strip().split(".")]
     if len(parts) != 3 or not all(parts):
         raise InvalidRequestError("Table must be a three-part name: catalog.schema.table")
@@ -100,7 +152,21 @@ def split_table_name(full_name: str) -> tuple[str, str, str]:
 
 
 class RowFilterService:
-    """Row-filter dimensions: definitions + governed tag values + one metastore policy."""
+    """Row-filter dimensions: definitions + governed tag values + one metastore policy.
+
+    Args:
+        config: App configuration (tag key, policy name, catalog/schema names).
+        workspace: Workspace client factory providing SP ids for the EXCEPT clause.
+        sql: SQL executor for UDF/policy DDL, tagging, and information_schema queries.
+        storage: Primary storage for definitions and audit events.
+        governed_tags: Governed tag service used to register dimensions as tag values.
+        identity_attributes: Identity attribute service that owns dimension definitions.
+        metadata_cache: Cache whose ABAC policy entries are invalidated after policy changes.
+        policy_exceptions: Optional ``PolicyExceptionService`` supplying EXCEPT principals.
+
+    Raises:
+        ValueError: If the configured row-filter policy name is not alphanumeric/underscore.
+    """
 
     def __init__(
         self,
@@ -126,10 +192,12 @@ class RowFilterService:
 
     @property
     def tag_key(self) -> str:
+        """The governed tag key whose values name row-filter dimensions."""
         return self._config.row_filter_tag_key
 
     @property
     def function_name(self) -> str:
+        """Quoted FQN of the ``has_row_access`` UDF."""
         return ".".join(
             quote_identifier(part)
             for part in (self._config.app_catalog, self._config.abac_function_schema, "has_row_access")
@@ -137,6 +205,7 @@ class RowFilterService:
 
     @property
     def mirror_table(self) -> str:
+        """Quoted FQN of the UC identity attribute assignments mirror read by the UDF."""
         return ".".join(
             quote_identifier(part)
             for part in (self._config.app_catalog, self._config.app_schema, "identity_attributes")
@@ -145,6 +214,15 @@ class RowFilterService:
     # -- dimensions ---------------------------------------------------------------------
 
     def list_dimensions(self) -> RowFilterDimensionList:
+        """List registered dimensions with value samples and attachment counts.
+
+        Returns:
+            Dimensions; attachment counts are zero if the tag lookup fails.
+
+        Raises:
+            InvalidRequestError: If the row-filter governed tag does not exist.
+            UpstreamError: If governed tags cannot be read.
+        """
         definitions = self._dimension_definitions()
         counts = self._attachment_counts()
         dims = [self._to_dimension(d, counts.get(d.key.lower(), 0)) for d in definitions]
@@ -153,6 +231,25 @@ class RowFilterService:
     def upsert_dimension(
         self, request: UpsertRowFilterDimensionRequest, actor: CurrentUser
     ) -> RowFilterDimension:
+        """Create or update a dimension and apply it to Unity Catalog.
+
+        Upserts the identity attribute definition (mirrored to UC and audited), adds the key
+        to the row-filter governed tag, and runs ``ensure_pack`` to recreate the UDF and
+        metastore policy.
+
+        Args:
+            request: Dimension key, description, and manual or SQL value source.
+            actor: The admin making the change.
+
+        Returns:
+            The saved dimension.
+
+        Raises:
+            InvalidRequestError: If the key already exists as a governed-tag definition or
+                the seed query is invalid.
+            NotConfiguredError: If a SQL seed is requested without a SQL warehouse.
+            UpstreamError: If governed tag updates or UC SQL fail.
+        """
         existing = self._storage.identity_attributes.get_definition(request.key)
         if existing is not None and existing.value_source == ValueSource.GOVERNED_TAGS:
             raise InvalidRequestError(
@@ -173,6 +270,20 @@ class RowFilterService:
         return self._to_dimension(definition, self._attachment_counts().get(definition.key, 0))
 
     def delete_dimension(self, key: str, actor: CurrentUser) -> None:
+        """Delete an unattached dimension and reapply the policy pack.
+
+        The governed tag value is left in place. Deleting the last dimension drops the
+        metastore row-filter policy.
+
+        Args:
+            key: Dimension key (case-insensitive).
+            actor: The admin making the change.
+
+        Raises:
+            NotFoundError: If the dimension does not exist.
+            InvalidRequestError: If columns are still attached or active assignments exist.
+            UpstreamError: If UC SQL fails.
+        """
         dim = self._require_dimension(key)
         attached = self._attachment_counts().get(dim.key, 0)
         if attached:
@@ -183,10 +294,36 @@ class RowFilterService:
         self.ensure_pack(actor)
 
     def preview_seed(self, value_sql: str) -> SeedPreview:
+        """Preview the values a SQL seed query would produce, without saving.
+
+        Args:
+            value_sql: Candidate SELECT/WITH seed query.
+
+        Returns:
+            Up to 100 sample values and the total count.
+
+        Raises:
+            NotConfiguredError: If no SQL warehouse is configured.
+            InvalidRequestError: If the query is invalid, too large, or returns nothing.
+        """
         values = self._identity.preview_seed(value_sql)
         return SeedPreview(values=values[:100], total=len(values))
 
     def refresh_dimension(self, key: str, actor: CurrentUser) -> RowFilterDimension:
+        """Re-run a SQL-seeded dimension's query and store the new vocabulary.
+
+        Args:
+            key: Dimension key (case-insensitive).
+            actor: The admin triggering the refresh.
+
+        Returns:
+            The refreshed dimension.
+
+        Raises:
+            NotFoundError: If the dimension does not exist.
+            InvalidRequestError: If it is not SQL-seeded or the seed query fails validation.
+            NotConfiguredError: If no SQL warehouse is configured.
+        """
         dim = self._require_dimension(key)
         refreshed = self._identity.refresh_definition(dim.key, actor)
         return self._to_dimension(refreshed, self._attachment_counts().get(dim.key, 0))
@@ -194,6 +331,19 @@ class RowFilterService:
     # -- policy pack --------------------------------------------------------------------
 
     def pack_status(self) -> RowFilterPackStatus:
+        """Report whether tag values and the metastore policy match the dimensions.
+
+        In sync means every dimension is a tag value, the policy exists exactly when there
+        are dimensions, its MATCH clause covers exactly the registered dimensions, and its
+        EXCEPT list includes every required exempt principal.
+
+        Returns:
+            The policy's current state, the registered dimensions, and ``in_sync``.
+
+        Raises:
+            InvalidRequestError: If the row-filter governed tag does not exist.
+            UpstreamError: If governed tags or policy definitions cannot be read.
+        """
         dims = [d.key for d in self._dimension_definitions()]
         tag_values = self._governed_tags.get_tag(self.tag_key).values
         rows = self._sql.query(
@@ -225,7 +375,22 @@ class RowFilterService:
         )
 
     def ensure_pack(self, actor: CurrentUser) -> RowFilterPackStatus:
-        """Make the tag values, UDF and metastore policy match the current dimensions."""
+        """Make the tag values, UDF and metastore policy match the current dimensions.
+
+        With dimensions: ensures tag values, recreates ``has_row_access``, and recreates the
+        metastore policy with current EXCEPT principals. Without dimensions: drops the
+        policy. Either way invalidates cached ABAC policy definitions and records a
+        ``row_filter.pack_ensured`` audit event.
+
+        Args:
+            actor: The admin applying the pack.
+
+        Returns:
+            The pack status after applying.
+
+        Raises:
+            UpstreamError: If governed tag updates or UC SQL fail.
+        """
         dims = [d.key for d in self._dimension_definitions()]
         policy_name = self._config.row_filter_policy_name
         if dims:
@@ -250,6 +415,14 @@ class RowFilterService:
     # -- attachments --------------------------------------------------------------------
 
     def list_attachments(self) -> RowFilterAttachmentList:
+        """List columns tagged with a registered dimension (first 1000).
+
+        Returns:
+            Table, column, and dimension for each attachment.
+
+        Raises:
+            UpstreamError: If governed tags or column tags cannot be read.
+        """
         dims = [d.key for d in self._dimension_definitions()]
         rows = self._attachment_rows(dims)
         items = [
@@ -263,6 +436,26 @@ class RowFilterService:
         return RowFilterAttachmentList(attachments=items, total=len(items))
 
     def attach(self, request: AttachRowFilterRequest, actor: CurrentUser) -> RowFilterAttachment:
+        """Attach a dimension to a table column by setting the row-filter column tag.
+
+        Runs ``ALTER TABLE ... ALTER COLUMN ... SET TAGS`` in Unity Catalog, so the existing
+        metastore policy starts filtering the table immediately. Only one filtered column
+        per table is supported; re-tagging the same column replaces its dimension. Records a
+        ``row_filter.attached`` audit event.
+
+        Args:
+            request: Table full name, column name, and dimension key.
+            actor: The admin making the change.
+
+        Returns:
+            The new attachment.
+
+        Raises:
+            NotFoundError: If the dimension does not exist.
+            InvalidRequestError: If the table or column name is invalid or another column on
+                the table already has a dimension.
+            UpstreamError: If the tagging SQL fails.
+        """
         dim = self._require_dimension(request.dimension)
         catalog, schema, table = split_table_name(request.table_full_name)
         column = request.column_name.strip()
@@ -286,6 +479,20 @@ class RowFilterService:
         return attachment
 
     def detach(self, table_full_name: str, column_name: str, actor: CurrentUser) -> None:
+        """Remove the row-filter tag from a column so the policy no longer filters the table.
+
+        Runs ``ALTER TABLE ... ALTER COLUMN ... UNSET TAGS`` in Unity Catalog and records a
+        ``row_filter.detached`` audit event.
+
+        Args:
+            table_full_name: Three-part table name.
+            column_name: Tagged column.
+            actor: The admin making the change.
+
+        Raises:
+            InvalidRequestError: If the table or column name is invalid.
+            UpstreamError: If the SQL fails.
+        """
         catalog, schema, table = split_table_name(table_full_name)
         column = column_name.strip()
         self._sql.execute(
@@ -301,6 +508,7 @@ class RowFilterService:
     # -- helpers ------------------------------------------------------------------------
 
     def _dimension_definitions(self) -> list[AttributeDefinition]:
+        """Return non-governed-tag definitions whose key is a row-filter tag value."""
         tag_values = {value.lower() for value in self._governed_tags.get_tag(self.tag_key).values}
         return [
             d
@@ -309,6 +517,11 @@ class RowFilterService:
         ]
 
     def _require_dimension(self, key: str) -> AttributeDefinition:
+        """Return the dimension definition matching ``key`` (case-insensitive).
+
+        Raises:
+            NotFoundError: If no registered dimension matches.
+        """
         wanted = key.strip().lower()
         for definition in self._dimension_definitions():
             if definition.key.lower() == wanted:
@@ -318,6 +531,7 @@ class RowFilterService:
     def _attachment_rows(
         self, dims: list[str], *, table: tuple[str, str, str] | None = None
     ) -> list[dict]:
+        """Query column tags carrying any of ``dims``, optionally for a single table."""
         if not dims:
             return []
         values = ", ".join(string_literal(d) for d in dims)
@@ -335,6 +549,7 @@ class RowFilterService:
         )
 
     def _attachment_counts(self) -> dict[str, int]:
+        """Count attached columns per lower-cased dimension; empty if the lookup fails."""
         counts: dict[str, int] = {}
         dims = [d.key for d in self._dimension_definitions()]
         try:
@@ -359,6 +574,7 @@ class RowFilterService:
         return seen
 
     def _to_dimension(self, definition: AttributeDefinition, attachments: int) -> RowFilterDimension:
+        """Convert a definition into a dimension view, excluding ``*`` from value counts."""
         concrete = [v for v in definition.allowed_values if v != "*"]
         return RowFilterDimension(
             key=definition.key,
@@ -371,6 +587,7 @@ class RowFilterService:
         )
 
     def _audit(self, event_type: str, actor: str, payload: dict) -> None:
+        """Record an audit event in storage."""
         self._storage.audit.record(
             AuditEvent(
                 event_id=str(uuid.uuid4()),
@@ -383,10 +600,12 @@ class RowFilterService:
 
 
 def _fqn(catalog: str, schema: str, table: str) -> str:
+    """Return the backtick-quoted three-part table name."""
     return ".".join(quote_identifier(part) for part in (catalog, schema, table))
 
 
 def _parse_list(raw: object) -> list[str]:
+    """Parse a list or JSON value from information_schema into strings."""
     if raw is None:
         return []
     if isinstance(raw, list):

@@ -1,3 +1,5 @@
+"""SQL warehouse access via the Statement Execution API, plus SQL quoting helpers."""
+
 from __future__ import annotations
 
 import logging
@@ -23,18 +25,52 @@ _PENDING = {StatementState.PENDING, StatementState.RUNNING}
 
 
 def quote_identifier(name: str) -> str:
-    """Backtick-quote a Unity Catalog name segment after validating it."""
+    """Backtick-quote a Unity Catalog name segment after validating it.
+
+    Args:
+        name: Single name segment (no dots); letters, digits, ``_`` and ``-`` only.
+
+    Returns:
+        The backtick-quoted identifier.
+
+    Raises:
+        InvalidRequestError: If ``name`` contains any other character or is empty.
+    """
     if not _IDENTIFIER.match(name):
         raise InvalidRequestError(f"Invalid identifier: {name!r}")
     return f"`{name}`"
 
 
 def string_literal(value: str) -> str:
+    """Render ``value`` as a single-quoted SQL string literal with backslash escaping.
+
+    Intended for SQL that cannot use named parameters, such as DDL or dynamically built
+    predicates.
+
+    Args:
+        value: Raw string.
+
+    Returns:
+        The quoted, escaped literal.
+    """
     return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
 
 
 class SqlExecutor:
-    """Runs SQL on a warehouse through the Statement Execution API and returns dict rows."""
+    """Runs SQL on a warehouse through the Statement Execution API and returns dict rows.
+
+    Statements run as whichever identity ``client_provider`` returns (the container wires
+    one executor to the Account Admin SP and one to the app SP). Results are not cached.
+
+    Args:
+        client_provider: Callable returning the workspace client to execute with; called
+            once per statement.
+        warehouse_id: SQL warehouse ID; None makes every statement raise
+            ``NotConfiguredError``.
+        wait_timeout_seconds: Server-side synchronous wait before the API returns a
+            still-running statement.
+        max_wait_seconds: Total time to poll a running statement before cancelling it.
+    """
 
     def __init__(
         self,
@@ -51,9 +87,27 @@ class SqlExecutor:
 
     @property
     def configured(self) -> bool:
+        """Whether a warehouse ID is set."""
         return bool(self._warehouse_id)
 
     def query(self, statement: str, parameters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        """Execute a statement and return all result rows.
+
+        Waits for completion (polling once per second up to ``max_wait_seconds``) and
+        fetches every result chunk. Values are returned as the API's JSON strings.
+
+        Args:
+            statement: SQL text; reference parameters as ``:name``.
+            parameters: Named parameters; values are sent as strings, None as SQL NULL.
+
+        Returns:
+            One dict per row, keyed by column name; empty for statements without results.
+
+        Raises:
+            NotConfiguredError: If no warehouse ID is configured.
+            UpstreamError: If the statement fails, is cancelled, or times out (a timed-out
+                statement is cancelled first).
+        """
         if not self._warehouse_id:
             raise NotConfiguredError("DATABRICKS_WAREHOUSE_ID is not configured")
         client = self._client_provider()
@@ -92,4 +146,14 @@ class SqlExecutor:
         return [dict(zip(columns, row, strict=False)) for row in rows]
 
     def execute(self, statement: str, parameters: dict[str, Any] | None = None) -> None:
+        """Execute a statement for its side effects, discarding any rows.
+
+        Args:
+            statement: SQL text; reference parameters as ``:name``.
+            parameters: Named parameters; values are sent as strings, None as SQL NULL.
+
+        Raises:
+            NotConfiguredError: If no warehouse ID is configured.
+            UpstreamError: If the statement fails or times out.
+        """
         self.query(statement, parameters)

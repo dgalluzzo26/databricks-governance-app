@@ -1,6 +1,22 @@
+/**
+ * @file Minimal dependency-free Markdown renderer used by the Help developer guide.
+ *
+ * Supports a constrained subset of CommonMark-like syntax sufficient for
+ * `docs/mask-and-row-filter-flows.md`: ATX headings, fenced code, pipe tables, lists,
+ * horizontal rules, paragraphs, and inline `` `code` `` / `**bold**`.
+ */
 import type { ReactNode } from "react";
 import styles from "./HelpPage.module.css";
 
+/**
+ * Parses a single line of text into React nodes with inline code and bold spans.
+ *
+ * Matching rules: consecutive runs of `` `...` `` become `<code>`; runs of `**...**` become
+ * `<strong>`; all other text is emitted as plain strings. Nested or overlapping markup is not
+ * supported.
+ *
+ * @param text - Raw inline markdown fragment (no block structure).
+ */
 function inline(text: string): ReactNode[] {
   const parts: ReactNode[] = [];
   const pattern = /(`[^`]+`|\*\*[^*]+\*\*)/g;
@@ -21,6 +37,15 @@ function inline(text: string): ReactNode[] {
   return parts;
 }
 
+/**
+ * Converts consecutive pipe-table lines into a `<table>` element.
+ *
+ * Expects GFM-style rows: first line is the header, second is the separator (skipped), and the
+ * remainder are body rows. Leading/trailing pipes are stripped; cells are trimmed and passed
+ * through {@link inline}.
+ *
+ * @param lines - Contiguous table lines, each starting with `|`.
+ */
 function parseTable(lines: string[]): ReactNode {
   const rows = lines.map((line) =>
     line
@@ -54,7 +79,16 @@ function parseTable(lines: string[]): ReactNode {
   );
 }
 
-/** Lightweight Markdown renderer for the developer guide (no external deps). */
+/**
+ * Lightweight Markdown renderer for the developer guide (no external deps).
+ *
+ * Block parsing (top to bottom): blank lines skipped; `---` → `<hr>`; fenced ` ``` ` blocks →
+ * `<pre><code>` (optional language in `data-lang`); `|` rows → pipe tables; `#` / `##` / `###`
+ * headings get slug `id`s (`lower case`, non-`[a-z0-9]` → `-`); `- ` / `* ` → `<ul>`; numbered
+ * `N. ` → `<ol>`; otherwise adjacent non-block lines join into a `<p>`.
+ *
+ * @param props.source - Full markdown document text (CRLF normalized to LF).
+ */
 export function MarkdownDoc({ source }: { source: string }) {
   const lines = source.replace(/\r\n/g, "\n").split("\n");
   const blocks: ReactNode[] = [];

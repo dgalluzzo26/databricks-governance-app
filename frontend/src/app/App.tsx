@@ -1,3 +1,6 @@
+/**
+ * @file Root application component: wires React Query, preferences, API auth, and the router.
+ */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState } from "react";
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
@@ -6,6 +9,10 @@ import { ApiError } from "@/api/httpClient";
 import { PreferencesProvider } from "./preferences";
 import { routes } from "./routes";
 
+/**
+ * Builds a QueryClient with app-wide defaults.
+ * @remarks Retries skip client errors (HTTP status under 500) and cap at two attempts.
+ */
 function createQueryClient(): QueryClient {
   return new QueryClient({
     defaultOptions: {
@@ -18,6 +25,10 @@ function createQueryClient(): QueryClient {
   });
 }
 
+/**
+ * Top-level provider tree for the governance app.
+ * @remarks QueryClient and the browser router are created once per mount via useState initializers.
+ */
 export function App() {
   const [queryClient] = useState(createQueryClient);
   const [router] = useState(() => createBrowserRouter(routes));

@@ -1,4 +1,10 @@
-"""Global ABAC policy exceptions for principals that need unmasked / unfiltered access."""
+"""Global ABAC policy exceptions for principals that need unmasked / unfiltered access.
+
+Maintains the registry of principals placed on the EXCEPT clause of the app-managed metastore
+column-mask and row-filter policies. The app and admin service principals are always exempt
+(built-in, not deletable) so the app can read governed data, e.g. to run seed queries.
+Changes rebuild both policy packs so the EXCEPT lists take effect immediately.
+"""
 
 from __future__ import annotations
 
@@ -20,7 +26,14 @@ from backend.app.repositories.base import StorageProvider
 
 
 class PolicyExceptionService:
-    """Manage principals listed on ABAC policy EXCEPT clauses."""
+    """Manage principals listed on ABAC policy EXCEPT clauses.
+
+    Args:
+        storage: Primary storage for configured exceptions and audit events.
+        workspace: Workspace client factory providing the built-in SP ids.
+        mask_rules: Optional ``MaskRuleService`` whose pack is rebuilt on changes.
+        row_filters: Optional ``RowFilterService`` whose pack is rebuilt on changes.
+    """
 
     def __init__(
         self,
@@ -36,6 +49,13 @@ class PolicyExceptionService:
         self._row_filters = row_filters
 
     def list_exceptions(self) -> PolicyExceptionList:
+        """List built-in system exceptions followed by configured ones.
+
+        Configured entries that duplicate a system principal are hidden.
+
+        Returns:
+            All exceptions, their count, and the system principal names.
+        """
         configured = self._storage.policy_exceptions.list_exceptions()
         system = self._system_exceptions()
         # Hide configured duplicates of system SPs so the UI doesn't double-count.
@@ -51,6 +71,23 @@ class PolicyExceptionService:
         )
 
     def upsert(self, body: UpsertPolicyExceptionRequest, actor: CurrentUser) -> PolicyException:
+        """Add or update a configured exception and rebuild the policy packs.
+
+        Records a ``policy_exception.upserted`` audit event, then calls ``apply`` which
+        recreates the mask and row-filter policies in Unity Catalog.
+
+        Args:
+            body: Principal name, type, and note.
+            actor: The admin making the change.
+
+        Returns:
+            The saved exception.
+
+        Raises:
+            InvalidRequestError: If the principal type is not USER, GROUP, or
+                SERVICE_PRINCIPAL, or the principal is already a built-in exception.
+            UpstreamError: If rebuilding a policy pack fails (the exception stays saved).
+        """
         if body.principal_type not in {
             PrincipalKind.USER,
             PrincipalKind.GROUP,
@@ -88,6 +125,19 @@ class PolicyExceptionService:
         return saved
 
     def delete(self, exception_id: str, actor: CurrentUser) -> None:
+        """Remove a configured exception and rebuild the policy packs.
+
+        Records a ``policy_exception.deleted`` audit event, then calls ``apply``.
+
+        Args:
+            exception_id: Identifier of the configured exception.
+            actor: The admin making the change.
+
+        Raises:
+            InvalidRequestError: If the id refers to a built-in system exception.
+            NotFoundError: If no configured exception has that id.
+            UpstreamError: If rebuilding a policy pack fails (the deletion stays saved).
+        """
         if exception_id.startswith("system:"):
             raise InvalidRequestError("Built-in system exceptions cannot be deleted")
         deleted = self._storage.policy_exceptions.delete_exception(exception_id)
@@ -101,7 +151,11 @@ class PolicyExceptionService:
         self.apply(actor)
 
     def except_principals(self) -> list[str]:
-        """Ordered unique principal names for ABAC EXCEPT clauses."""
+        """Ordered unique principal names for ABAC EXCEPT clauses.
+
+        Returns:
+            System SP ids first, then configured principals, without duplicates.
+        """
         seen: list[str] = []
         for name in [*self.system_principal_names(), *self._configured_principal_names()]:
             if name and name not in seen:
@@ -109,6 +163,11 @@ class PolicyExceptionService:
         return seen
 
     def system_principal_names(self) -> list[str]:
+        """Return the configured app and admin SP client ids, de-duplicated.
+
+        Returns:
+            The built-in exempt principals (empty entries skipped).
+        """
         ids = [self._workspace.app_client_id, self._workspace.admin_client_id]
         seen: list[str] = []
         for item in ids:
@@ -117,7 +176,20 @@ class PolicyExceptionService:
         return seen
 
     def apply(self, actor: CurrentUser) -> ApplyPolicyExceptionsResult:
-        """Rebuild mask + row-filter packs so EXCEPT lists pick up the registry."""
+        """Rebuild mask + row-filter packs so EXCEPT lists pick up the registry.
+
+        Runs each wired service's ``ensure_pack`` (recreating the metastore policies in
+        Unity Catalog) and records a ``policy_exception.applied`` audit event.
+
+        Args:
+            actor: The admin applying the change.
+
+        Returns:
+            The EXCEPT principals and which packs were rebuilt.
+
+        Raises:
+            UpstreamError: If a pack rebuild fails.
+        """
         principals = self.except_principals()
         mask_synced = False
         row_synced = False
@@ -143,9 +215,11 @@ class PolicyExceptionService:
         )
 
     def _configured_principal_names(self) -> list[str]:
+        """Return principal names of the stored (non-system) exceptions."""
         return [item.principal_name for item in self._storage.policy_exceptions.list_exceptions()]
 
     def _system_exceptions(self) -> list[PolicyException]:
+        """Build synthetic, non-deletable exception entries for the app and admin SPs."""
         now = datetime.now(UTC)
         items: list[PolicyException] = []
         mapping = [
@@ -169,6 +243,7 @@ class PolicyExceptionService:
         return items
 
     def _audit(self, event_type: str, actor: str, payload: dict) -> None:
+        """Record an audit event in storage."""
         self._storage.audit.record(
             AuditEvent(
                 event_id=str(uuid.uuid4()),

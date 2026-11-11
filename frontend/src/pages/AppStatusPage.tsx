@@ -1,7 +1,20 @@
+/**
+ * @file App status page showing deployment configuration and storage-backend health.
+ *
+ * Surfaces storage health, Account Admin service-principal configuration, and deployment
+ * metadata (app name, version, workspace, auth mode, warehouse, schema, admin group) from
+ * `useAppInfo`.
+ */
 import { useAppInfo } from "@/api/queries";
 import { Alert, Badge, Card, DescriptionList, ErrorAlert, PageHeader, Spinner } from "@/components/ui";
 import styles from "./AppStatusPage.module.css";
 
+/**
+ * Displays live app deployment and storage health from `useAppInfo`.
+ *
+ * Warns when storage is unhealthy or the Account Admin SP credentials are missing from the
+ * configured secret scope.
+ */
 export function AppStatusPage() {
   const { data: info, isPending, error } = useAppInfo();
 

@@ -1,3 +1,11 @@
+/**
+ * @file React Router route table for the app shell.
+ *
+ * Public routes (Home, Access explorer, Identity, Help) are available to all signed-in users.
+ * Admin-only routes (Policies, Exceptions, Row filters, Mask rules, App status) are wrapped in
+ * {@link RequireAdmin}, which redirects non-admins. Category-approver Identity Approvals access
+ * is gated inside the Identity page, not here.
+ */
 import type { RouteObject } from "react-router-dom";
 import { RequireAdmin } from "@/components/auth/RequireAdmin";
 import { AppShell } from "@/components/layout/AppShell";
@@ -13,6 +21,7 @@ import { HelpPage } from "@/pages/help/HelpPage";
 import { MaskRulesPage } from "@/pages/maskRules/MaskRulesPage";
 import { RowFiltersPage } from "@/pages/rowFilters/RowFiltersPage";
 
+/** Declarative route config mounted under {@link AppShell}. */
 export const routes: RouteObject[] = [
   {
     element: <AppShell />,

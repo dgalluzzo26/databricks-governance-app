@@ -1,3 +1,9 @@
+"""Aggregate API routers under the ``/api`` prefix.
+
+Includes health, identity, policies, row filters, mask rules, access explorer,
+and related governance endpoints.
+"""
+
 from fastapi import APIRouter
 
 from backend.app.api.routes import (
@@ -5,13 +11,15 @@ from backend.app.api.routes import (
     access_requests,
     app_info,
     health,
-    help as help_routes,
     identity_attributes,
     mask_rules,
     me,
     policies,
     policy_exceptions,
     row_filters,
+)
+from backend.app.api.routes import (
+    help as help_routes,
 )
 
 api_router = APIRouter(prefix="/api")

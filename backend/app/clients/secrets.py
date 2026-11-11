@@ -27,10 +27,26 @@ _hydrated_once = False
 
 
 def admin_secret_scope() -> str:
+    """Return the secret scope to read from: ``ADMIN_SECRET_SCOPE`` or ``DEFAULT_SCOPE``.
+
+    Returns:
+        The configured scope name, or the default when unset or blank.
+    """
     return os.environ.get("ADMIN_SECRET_SCOPE", "").strip() or DEFAULT_SCOPE
 
 
 def decode_secret_value(raw: object) -> str:
+    """Normalize a secret value returned by the Secrets API to plain text.
+
+    The API returns values base64-encoded; text that decodes to printable UTF-8 is decoded,
+    anything else is kept as-is. A lone ``-`` is treated as a placeholder for "unset".
+
+    Args:
+        raw: Value from the API (str, bytes, None or any object convertible to str).
+
+    Returns:
+        The stripped plain-text secret, or an empty string when missing or a placeholder.
+    """
     if raw is None:
         return ""
     text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
@@ -51,6 +67,18 @@ def hydrate_admin_secrets(*, force: bool = False) -> list[str]:
 
     Skips keys that are already set (e.g. injected by app resources) unless ``force`` is True.
     Uses the Apps / job identity to read the scope.
+
+    Side effects: makes Secrets API calls with a default-auth ``WorkspaceClient`` and writes
+    ``ADMIN_CLIENT_ID`` / ``ADMIN_CLIENT_SECRET`` into the process environment. Runs at most
+    once per process (thread-safe) once a client ID is present, unless forced. Failures are
+    logged, never raised.
+
+    Args:
+        force: Re-read every key from the scope and overwrite existing env values.
+
+    Returns:
+        Secret keys (``client_id`` / ``client_secret``) newly loaded into the environment;
+        empty when nothing was loaded.
     """
     global _hydrated_once
     with _lock:
@@ -99,6 +127,11 @@ def hydrate_admin_secrets(*, force: bool = False) -> list[str]:
 
 
 def admin_credentials_configured() -> bool:
+    """Whether both Account Admin SP env vars are set to non-blank values.
+
+    Returns:
+        True when ``ADMIN_CLIENT_ID`` and ``ADMIN_CLIENT_SECRET`` are both present.
+    """
     client_id = os.environ.get("ADMIN_CLIENT_ID", "").strip()
     client_secret = os.environ.get("ADMIN_CLIENT_SECRET", "").strip()
     return bool(client_id and client_secret)

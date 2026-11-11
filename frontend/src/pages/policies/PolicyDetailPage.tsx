@@ -1,3 +1,8 @@
+/**
+ * @file Read-only detail view for a single Unity Catalog ABAC policy.
+ * Shows scope, principals, WHEN condition, governed tags, mask/filter actions, and tagged assets.
+ * The route is wrapped in `RequireAdmin`.
+ */
 import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { usePolicy } from "@/api/queries";
@@ -6,8 +11,17 @@ import { Alert, Badge, Card, DescriptionList, ErrorAlert, PageHeader, Spinner } 
 import { formatPolicyType, formatTag, policyTypeTone } from "./policyLabels";
 import styles from "./PolicyDetailPage.module.css";
 
+/** Allowed page sizes for the affected-assets table. */
 const PAGE_SIZES = [25, 50, 100] as const;
 
+/**
+ * Loads one ABAC policy via {@link usePolicy} from the `policyId` route param and renders its
+ * definition plus affected assets.
+ *
+ * The back link restores `/policies?scope=` using the policy's `scopeKind` (default `metastore`).
+ *
+ * @remarks The route is wrapped in `RequireAdmin`. This page has no edit or mutation controls.
+ */
 export function PolicyDetailPage() {
   const { policyId } = useParams();
   const { data: policy, isPending, error } = usePolicy(policyId);
@@ -179,17 +193,30 @@ export function PolicyDetailPage() {
   );
 }
 
+/**
+ * Formats a nullable table cell as an em dash when empty.
+ *
+ * @param value - Cell contents, or null/undefined when missing.
+ */
 function cell(value: string | null | undefined): string {
   return value ? value : "—";
 }
 
+/**
+ * Paginated table of assets that match the policy's governed tags.
+ *
+ * Warns when the server truncated the list. Page size resets to the first page when changed.
+ */
 function AffectedAssetsCard({
   assets,
   truncated,
   note,
 }: {
+  /** Resolved assets from the policy payload. */
   assets: AffectedAsset[];
+  /** When true, the API capped the result set and more matches may exist. */
   truncated: boolean;
+  /** Optional informational note from the API, shown above the table. */
   note: string | null;
 }) {
   const [page, setPage] = useState(0);

@@ -1,3 +1,6 @@
+/**
+ * @file Collapsible main side navigation driven by {@link navigation} and admin visibility.
+ */
 import { NavLink } from "react-router-dom";
 import { navigation } from "@/app/navigation";
 import { usePreferences } from "@/app/preferences";
@@ -6,6 +9,11 @@ import { IconButton } from "@/components/ui/IconButton";
 import { Tooltip } from "@/components/ui/Tooltip";
 import styles from "./SideNav.module.css";
 
+/**
+ * Primary app navigation, filtering out `adminOnly` items when the user is not an admin.
+ * @param props.isAdmin - Whether the current user is an app admin.
+ * @remarks When collapsed, labels hide and each link shows a right-side tooltip; section titles are omitted.
+ */
 export function SideNav({ isAdmin }: { isAdmin: boolean }) {
   const { navCollapsed, toggleNavCollapsed } = usePreferences();
 

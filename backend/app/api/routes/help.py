@@ -1,4 +1,7 @@
-"""In-app developer help documents."""
+"""In-app developer help documents under ``/api/help``.
+
+Unauthenticated plain-text Markdown guides for operators and developers.
+"""
 
 from __future__ import annotations
 
@@ -17,7 +20,14 @@ _FLOWS_DOC = _REPO_ROOT / "docs" / "mask-and-row-filter-flows.md"
 
 @router.get("/help/flows", response_class=PlainTextResponse)
 def mask_and_row_filter_flows() -> str:
-    """Return the mask / row-filter developer guide as Markdown."""
+    """Return the mask / row-filter developer guide as Markdown.
+
+    Returns:
+        Full Markdown contents of the flows help document.
+
+    Raises:
+        NotFoundError: If the help file is missing on disk (HTTP 404).
+    """
     if not _FLOWS_DOC.is_file():
         raise NotFoundError(f"Help document not found at {_FLOWS_DOC}")
     return _FLOWS_DOC.read_text(encoding="utf-8")

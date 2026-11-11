@@ -1,8 +1,21 @@
+/**
+ * @file Signed-in home / welcome page with identity summary and role-specific next steps.
+ *
+ * Shows the current user's profile, groups, and attribute assignments. Admins also see a compact
+ * app-storage health card; non-admins get Get started links (Access Explorer, request access,
+ * and approvals when they are category approvers).
+ */
 import { Link } from "react-router-dom";
 import { useAppInfo, useCurrentUser, useMyAttributes } from "@/api/queries";
 import { Alert, Avatar, Badge, Card, DescriptionList, PageHeader, Spinner } from "@/components/ui";
 import styles from "./HomePage.module.css";
 
+/**
+ * Landing page after authentication: identity card plus admin status or non-admin get-started links.
+ *
+ * Uses `useCurrentUser`, `useMyAttributes`, and (admins only) `useAppInfo`. Renders nothing until
+ * the current user is available.
+ */
 export function HomePage() {
   const { data: user } = useCurrentUser();
   const appInfo = useAppInfo(Boolean(user?.isAdmin));

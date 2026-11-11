@@ -1,3 +1,9 @@
+"""App metadata and storage health for the about/status page.
+
+Reports the deployed version, workspace, auth mode, configured catalog/schema and admin
+settings, and the health of the primary storage backend so operators can verify a deployment.
+"""
+
 from __future__ import annotations
 
 from backend.app import __version__
@@ -8,15 +14,33 @@ from backend.app.repositories.base import StorageProvider
 
 
 class AppInfoService:
+    """Read-only summary of the app's configuration and runtime dependencies.
+
+    Args:
+        config: App configuration.
+        factory: Workspace client factory (host and admin SP availability).
+        storage: Primary storage provider whose health is reported.
+    """
+
     def __init__(self, config: AppConfig, factory: WorkspaceClientFactory, storage: StorageProvider) -> None:
         self._config = config
         self._factory = factory
         self._storage = storage
 
     def storage_health(self) -> StorageHealth:
+        """Return the primary storage backend's health check result.
+
+        Returns:
+            The storage provider's own health report.
+        """
         return self._storage.health()
 
     def info(self) -> AppInfo:
+        """Return app version, workspace, configuration summary, and storage health.
+
+        Returns:
+            Non-secret deployment metadata for display in the UI.
+        """
         return AppInfo(
             app_name=self._config.app_name,
             version=__version__,

@@ -1,3 +1,8 @@
+/**
+ * @file Admin UI for row-filter dimensions, column attachments, and the metastore policy pack.
+ * Tagging a column `row_filter=<dimension>` restricts rows to the viewer's matching attribute
+ * values (`*` sees all; missing attribute sees none). The route is wrapped in `RequireAdmin`.
+ */
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import {
@@ -18,8 +23,14 @@ import type { RowFilterDimension } from "@/api/types";
 import { Alert, Badge, Card, ErrorAlert, PageHeader, Spinner } from "@/components/ui";
 import styles from "../identity/IdentityPage.module.css";
 
+/** How a dimension's allowed values are sourced: a typed list or a seed SQL query. */
 type ValueMode = "free_form" | "sql";
 
+/**
+ * Splits a free-form value list on commas and newlines, trimming empty entries.
+ *
+ * @param text - Raw textarea contents.
+ */
 function parseValues(text: string): string[] {
   return text
     .split(/[\n,]/)
@@ -27,6 +38,15 @@ function parseValues(text: string): string[] {
     .filter(Boolean);
 }
 
+/**
+ * Row-filter administration: policy pack (admins), dimensions, and attached columns.
+ *
+ * Uses {@link useCurrentUser} to derive `isAdmin`. Assignments of dimension values (or `*`) live
+ * on Identity → Assignments.
+ *
+ * @remarks The route is wrapped in `RequireAdmin`. Pack sync and attach/detach/edit still hide
+ * when `isAdmin` is false.
+ */
 export function RowFiltersPage() {
   const { data: user } = useCurrentUser();
   const isAdmin = Boolean(user?.isAdmin);
@@ -54,6 +74,12 @@ export function RowFiltersPage() {
   );
 }
 
+/**
+ * Metastore row-filter pack status and sync action.
+ *
+ * Loads pack state with {@link useRowFilterPack}. {@link useEnsureRowFilterPack} creates or
+ * updates the governed tag, filter UDF, and ABAC policy for current dimensions.
+ */
 function PolicyPackCard() {
   const { data, error, isPending } = useRowFilterPack();
   const ensure = useEnsureRowFilterPack();
@@ -99,6 +125,14 @@ function PolicyPackCard() {
   );
 }
 
+/**
+ * Dimension catalog: allowed values, attachment counts, and admin edit/refresh/delete.
+ *
+ * Lists dimensions via {@link useRowFilterDimensions}. SQL-backed dimensions can refresh values
+ * with {@link useRefreshRowFilterDimension}. Deletes use {@link useDeleteRowFilterDimension}.
+ *
+ * @param props.isAdmin - When false, hides New/Edit/Refresh/Delete and shows a count badge.
+ */
 function DimensionsCard({ isAdmin }: { isAdmin: boolean }) {
   const { data, error, isPending } = useRowFilterDimensions();
   const remove = useDeleteRowFilterDimension();
@@ -222,6 +256,15 @@ function DimensionsCard({ isAdmin }: { isAdmin: boolean }) {
   );
 }
 
+/**
+ * Loads stored allowed values from {@link useAttributeDefinitions} before rendering the form.
+ *
+ * While editing, waits for definitions so the free-form textarea is seeded from the identity
+ * attribute (minus `*`), falling back to the dimension's sample values.
+ *
+ * @param props.initial - Dimension being edited, or `null` when creating.
+ * @param props.onDone - Closes the form after save or cancel.
+ */
 function DimensionForm({ initial, onDone }: { initial: RowFilterDimension | null; onDone: () => void }) {
   const definitions = useAttributeDefinitions();
   const storedValues =
@@ -235,13 +278,22 @@ function DimensionForm({ initial, onDone }: { initial: RowFilterDimension | null
   );
 }
 
+/**
+ * Create/edit form for a dimension's key, description, and value source.
+ *
+ * Saves with {@link useUpsertRowFilterDimension}. SQL mode can preview distinct values via
+ * {@link usePreviewSeed} before save. `*` is always an additional allowed value.
+ */
 function DimensionFormFields({
   initial,
   storedValues,
   onDone,
 }: {
+  /** Existing dimension when editing; `null` starts a new key (then editable). */
   initial: RowFilterDimension | null;
+  /** Seed for the free-form list when editing a free-form dimension. */
   storedValues: string[];
+  /** Closes the form after a successful save or cancel. */
   onDone: () => void;
 }) {
   const upsert = useUpsertRowFilterDimension();
@@ -258,6 +310,7 @@ function DimensionFormFields({
     /^[a-z][a-z0-9_]{0,62}$/.test(key.trim().toLowerCase()) &&
     (mode === "sql" ? valueSql.trim().length > 0 : parseValues(valuesText).length > 0);
 
+  /** Upserts the dimension with either parsed free-form values or a seed SQL query. */
   const onSave = async () => {
     await upsert.mutateAsync({
       key: key.trim().toLowerCase(),
@@ -364,6 +417,15 @@ function DimensionFormFields({
   );
 }
 
+/**
+ * Columns tagged with a row-filter dimension, plus admin attach/detach controls.
+ *
+ * Lists attachments via {@link useRowFilterAttachments} and dimension options via
+ * {@link useRowFilterDimensions}. {@link useAttachRowFilter} tags a fully-qualified table column;
+ * {@link useDetachRowFilter} removes the tag. One dimension per table.
+ *
+ * @param props.isAdmin - When false, hides the attach form and detach buttons.
+ */
 function AttachmentsCard({ isAdmin }: { isAdmin: boolean }) {
   const { data, error, isPending } = useRowFilterAttachments();
   const dimensions = useRowFilterDimensions();
@@ -376,6 +438,7 @@ function AttachmentsCard({ isAdmin }: { isAdmin: boolean }) {
   const dimensionOptions = dimensions.data?.dimensions ?? [];
   const chosenDimension = dimension || dimensionOptions[0]?.key || "";
 
+  /** Attaches `chosenDimension` to the table.column and clears the form fields. */
   const onAttach = async () => {
     await attach.mutateAsync({
       tableFullName: tableFullName.trim(),

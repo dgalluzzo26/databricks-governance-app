@@ -1,4 +1,12 @@
-"""Per-table access insights: column masks, row filters, and attribute suggestions."""
+"""Per-table access insights: column masks, row filters, and attribute suggestions.
+
+Lets a signed-in user browse Unity Catalog (search or a lazy catalog/schema/table tree) and
+explain, for one table, which columns the metastore ABAC mask policies will mask for them,
+whether the app-managed row filter hides rows, and which identity attributes they could
+request to gain access. The analysis is read-only: it mirrors the ``has_sensitivity`` and
+``has_row_access`` UDF semantics in Python over information_schema metadata and the caller's
+app-managed attribute assignments, and previews who would review each suggested request.
+"""
 
 from __future__ import annotations
 
@@ -44,6 +52,18 @@ _IDENT_MAX = 255
 
 
 def _require_identifier(value: str, label: str) -> str:
+    """Validate a raw catalog/schema name used as a SQL string literal filter.
+
+    Args:
+        value: Name supplied by the caller.
+        label: Kind of securable, used in the error message.
+
+    Returns:
+        The stripped name.
+
+    Raises:
+        InvalidRequestError: If the name is empty, too long, or contains control characters.
+    """
     name = (value or "").strip()
     if not name or len(name) > _IDENT_MAX or any(ch in name for ch in "\x00\n\r"):
         raise InvalidRequestError(f"Invalid {label} name")
@@ -58,7 +78,18 @@ _TAG_KEYS = (
 
 
 def has_sensitivity_access(held_paths: set[str], required_path: str) -> bool:
-    """Mirror has_sensitivity(): exact match or held path is a prefix of the required path."""
+    """Mirror has_sensitivity(): exact match or held path is a prefix of the required path.
+
+    Comparison is case-insensitive and prefix matching respects dotted segments, so holding
+    ``pii`` grants ``pii.high`` but holding ``pi`` does not.
+
+    Args:
+        held_paths: Sensitivity paths the user holds (e.g. ``pii`` or ``pii.high``).
+        required_path: The column's ``sensitivity_category.sensitivity`` path.
+
+    Returns:
+        True if any held path grants the required path; False for an empty required path.
+    """
     required = required_path.strip().lower()
     if not required:
         return False
@@ -72,6 +103,18 @@ def has_sensitivity_access(held_paths: set[str], required_path: str) -> bool:
 
 
 class AccessExplorerService:
+    """Read-only explorer that explains a user's effective access to Unity Catalog tables.
+
+    Args:
+        config: App configuration (policy names, ABAC function schema).
+        sql: SQL executor used for information_schema lookups.
+        identity_attributes: Source of the caller's attribute assignments and definitions.
+        mask_rules: Mask rule registry used to describe denied-column presentation.
+        row_filters: Row-filter service used as a fallback to find table attachments.
+        access_requests: Optional request service used to preview approver routing; when
+            omitted, every suggestion is shown as routed to app admins.
+    """
+
     def __init__(
         self,
         config: AppConfig,
@@ -89,6 +132,21 @@ class AccessExplorerService:
         self._access_requests = access_requests
 
     def search_tables(self, query: str, *, limit: int = 40) -> TableSearchResult:
+        """Find tables whose ``catalog.schema.table`` name contains a substring.
+
+        Matching is a case-insensitive literal substring (``_`` and ``%`` are not wildcards)
+        over tables visible to the SQL executor's identity.
+
+        Args:
+            query: Search text; must be at least 2 characters after trimming.
+            limit: Maximum hits to return, clamped to 1-100.
+
+        Returns:
+            Matching tables ordered by full name.
+
+        Raises:
+            InvalidRequestError: If the query is shorter than 2 characters.
+        """
         q = (query or "").strip()
         if len(q) < 2:
             raise InvalidRequestError("Search query must be at least 2 characters")
@@ -117,6 +175,11 @@ class AccessExplorerService:
     # --- tree browser (lazy: one level per request) ---------------------------------
 
     def list_catalogs(self) -> TreeCatalogList:
+        """List catalogs for the top level of the tree browser.
+
+        Returns:
+            Up to the tree limit of catalogs, with ``truncated`` set when more exist.
+        """
         rows = self._sql.query(
             f"""
             SELECT catalog_name
@@ -130,6 +193,17 @@ class AccessExplorerService:
         return TreeCatalogList(catalogs=items, total=len(items), truncated=truncated)
 
     def list_schemas(self, catalog: str) -> TreeSchemaList:
+        """List schemas in a catalog for the tree browser, excluding ``information_schema``.
+
+        Args:
+            catalog: Catalog name.
+
+        Returns:
+            Up to the tree limit of schemas, with ``truncated`` set when more exist.
+
+        Raises:
+            InvalidRequestError: If the catalog name is invalid.
+        """
         name = _require_identifier(catalog, "catalog")
         rows = self._sql.query(
             f"""
@@ -149,6 +223,18 @@ class AccessExplorerService:
         return TreeSchemaList(schemas=items, total=len(items), truncated=truncated)
 
     def list_tables(self, catalog: str, schema: str) -> TreeTableList:
+        """List tables and views in a schema for the tree browser.
+
+        Args:
+            catalog: Catalog name.
+            schema: Schema name.
+
+        Returns:
+            Up to the tree limit of tables, with ``truncated`` set when more exist.
+
+        Raises:
+            InvalidRequestError: If the catalog or schema name is invalid.
+        """
         cat = _require_identifier(catalog, "catalog")
         sch = _require_identifier(schema, "schema")
         rows = self._sql.query(
@@ -174,6 +260,26 @@ class AccessExplorerService:
         return TreeTableList(tables=items, total=len(items), truncated=truncated)
 
     def analyze_table(self, request: AnalyzeTableRequest, user: CurrentUser) -> TableAccessInsight:
+        """Explain how column masks and the row filter apply to ``user`` on one table.
+
+        Reads the table's columns and governance tags (``sensitivity_category``,
+        ``sensitivity``, ``mask_rule``, ``data_type``, ``row_filter``), evaluates them against
+        the user's active attribute assignments (direct and via groups), and builds
+        request suggestions that would unmask columns or reveal filtered rows. This is an
+        approximation of policy evaluation from app metadata, not a query as the user.
+
+        Args:
+            request: Holds the three-part table name to analyze.
+            user: The signed-in user whose attributes are evaluated.
+
+        Returns:
+            Per-column insights, row-filter insight, suggested attribute requests, and a
+            one-line summary.
+
+        Raises:
+            InvalidRequestError: If the table name is not a valid three-part name.
+            NotFoundError: If the table does not exist or is not visible.
+        """
         catalog, schema, table = split_table_name(request.table_full_name)
         exists = self._sql.query(
             f"""
@@ -275,6 +381,7 @@ class AccessExplorerService:
         )
 
     def _held_attribute_values(self, user: CurrentUser) -> dict[str, set[str]]:
+        """Group the user's active attribute values by lower-cased attribute key."""
         held: dict[str, set[str]] = defaultdict(set)
         for item in self._identity.list_for_user(user).assignments:
             held[item.attribute_key.lower()].add(item.attribute_value)
@@ -289,6 +396,24 @@ class AccessExplorerService:
         sensitivity_held: set[str],
         rules_by_key: dict,
     ) -> ColumnAccessInsight:
+        """Classify one column against the metastore mask policies.
+
+        A column is governed only when it carries ``sensitivity_category``, ``sensitivity``,
+        and ``data_type`` tags. Geometry/geography columns fall under the geo policies (denied
+        values become NULL); all other governed columns use the variant mask policy, whose
+        denied presentation comes from the ``mask_rule`` tag (unknown or missing rules fall
+        back to ``full``).
+
+        Args:
+            column_name: Column name.
+            sql_type: Full SQL data type from information_schema, if known.
+            tags: Governance tags on the column.
+            sensitivity_held: Sensitivity paths the user holds.
+            rules_by_key: Mask rule definitions keyed by lower-cased rule key.
+
+        Returns:
+            The column's access state, required sensitivity path, and mask details.
+        """
         category = (tags.sensitivity_category or "").strip()
         sensitivity = (tags.sensitivity or "").strip()
         data_type = (tags.data_type or "").strip().lower()
@@ -372,6 +497,24 @@ class AccessExplorerService:
         held: dict[str, set[str]],
         tags_by_col: dict[str, dict[str, str]],
     ) -> RowFilterInsight:
+        """Describe whether the app row filter applies to the table and what the user sees.
+
+        The dimension is taken from a ``row_filter`` column tag on the table, falling back to
+        the row-filter service's attachment index. Mirrors ``has_row_access``: holding ``*``
+        passes every row, holding specific values passes matching rows, and holding nothing
+        for the dimension denies every row.
+
+        Args:
+            catalog: Catalog name.
+            schema: Schema name.
+            table: Table name.
+            held: The user's held attribute values keyed by lower-cased attribute key.
+            tags_by_col: Governance tags already loaded for the table's columns.
+
+        Returns:
+            Row-filter insight; ``attached`` is False when no dimension applies or the
+            attachment lookup failed.
+        """
         policy_name = self._config.row_filter_policy_name
         function_name = (
             f"{self._config.app_catalog}.{self._config.abac_function_schema}.has_row_access"
@@ -439,6 +582,24 @@ class AccessExplorerService:
         sensitivity_held: set[str],
         held: dict[str, set[str]],
     ) -> list[SuggestedAttribute]:
+        """Build attribute requests that would widen the user's access to the table.
+
+        Produces one sensitivity suggestion per distinct missing leaf path, then broader
+        hierarchy parents that cover two or more missing leaves (skipped if already held or
+        not in the sensitivity vocabulary). For a row-filtered table without ``*``, also
+        suggests ``*`` and each concrete dimension value the user lacks; row-filter requests
+        always route to app admins and are only requestable once the dimension's attribute
+        definition exists.
+
+        Args:
+            columns: Column insights for the table.
+            row_filter: Row-filter insight for the table.
+            sensitivity_held: Sensitivity paths the user holds.
+            held: All held attribute values keyed by lower-cased attribute key.
+
+        Returns:
+            Suggestions ordered leaf paths first, then parents, then row-filter values.
+        """
         path_to_cols: dict[str, list[str]] = defaultdict(list)
         path_canonical: dict[str, str] = {}
         for col in columns:
@@ -587,6 +748,22 @@ class AccessExplorerService:
         reason: str,
         requestable: bool,
     ) -> SuggestedAttribute:
+        """Build a sensitivity suggestion annotated with its approval routing preview.
+
+        Routing goes to the approvers of the most-specific configured category covering
+        ``path``, else to app admins (always app admins when no request service is wired).
+
+        Args:
+            path: Sensitivity path to request.
+            column_names: Columns the grant would unmask.
+            covers_paths: Required leaf paths the grant satisfies.
+            is_parent: Whether ``path`` is a broader hierarchy parent of the leaves.
+            reason: Human-readable reason; the routing note is appended.
+            requestable: Whether the UI should allow submitting the request.
+
+        Returns:
+            The suggestion with routing kind, resolved category, and approver preview.
+        """
         routing = (
             self._access_requests.resolve_routing(path)
             if self._access_requests is not None
@@ -597,10 +774,7 @@ class AccessExplorerService:
             }
         )
         routed = routing["routed_to"]
-        if isinstance(routed, RequestRouteKind):
-            route_kind = routed
-        else:
-            route_kind = RequestRouteKind(str(routed))
+        route_kind = routed if isinstance(routed, RequestRouteKind) else RequestRouteKind(str(routed))
         approvers = [
             ApproverPreview(
                 principal_name=a.principal_name,
@@ -634,6 +808,7 @@ class AccessExplorerService:
         )
 
     def _sensitivity_allowed_values(self) -> list[str]:
+        """Return the sensitivity attribute vocabulary, or an empty list if unavailable."""
         try:
             definition = self._identity.get_definition(SENSITIVITY_ATTRIBUTE_KEY)
         except Exception:  # noqa: BLE001
@@ -645,6 +820,13 @@ class AccessExplorerService:
         """Return (parent_path, covered_leaf_paths) for parents that cover 2+ leaves.
 
         Most-specific parents first.
+
+        Args:
+            paths: Distinct required leaf sensitivity paths.
+
+        Returns:
+            Parent paths with the sorted leaves they cover, deepest parents first and then
+            alphabetical.
         """
         if len(paths) < 2:
             return []

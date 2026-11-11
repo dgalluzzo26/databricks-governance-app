@@ -1,3 +1,11 @@
+"""Read-only explorer for Unity Catalog ABAC policies.
+
+Lists metastore- and catalog-scoped ABAC policies from
+``system.information_schema.abac_policy_definitions`` (cached), enriches a single policy with
+details from the Policies API, and approximates which tables and columns it affects by
+matching the governed tags the policy references against information_schema tag tables.
+"""
+
 from __future__ import annotations
 
 import json
@@ -58,6 +66,7 @@ _ASSET_LIMIT = 2000
 
 
 def _parse_json_list(raw: Any) -> list[Any]:
+    """Parse a list or JSON-array string from information_schema; anything else is empty."""
     if raw is None:
         return []
     if isinstance(raw, list):
@@ -73,10 +82,12 @@ def _parse_json_list(raw: Any) -> list[Any]:
 
 
 def _parse_string_list(raw: Any) -> list[str]:
+    """Parse a JSON list into non-blank strings."""
     return [str(item) for item in _parse_json_list(raw) if item is not None and str(item).strip()]
 
 
 def _parse_tags(raw: Any) -> list[TagRef]:
+    """Parse governed tag references given as objects (key/value) or bare key strings."""
     tags: list[TagRef] = []
     for item in _parse_json_list(raw):
         if isinstance(item, dict):
@@ -90,6 +101,7 @@ def _parse_tags(raw: Any) -> list[TagRef]:
 
 
 def _normalize_policy_type(raw: str | None) -> str:
+    """Upper-case a policy type and strip the ``POLICY_TYPE_`` prefix (``UNKNOWN`` if blank)."""
     text = (raw or "").strip().upper()
     if text.startswith("POLICY_TYPE_"):
         text = text[len("POLICY_TYPE_") :]
@@ -97,15 +109,23 @@ def _normalize_policy_type(raw: str | None) -> str:
 
 
 def _normalize_securable_type(raw: str | None) -> str:
+    """Upper-case a securable type (``UNKNOWN`` if blank)."""
     return (raw or "").strip().upper() or "UNKNOWN"
 
 
 def _scope_kind(on_securable_type: str) -> str:
+    """Map a securable type to the UI scope: ``metastore`` or ``catalog`` (everything else)."""
     return "metastore" if on_securable_type == "METASTORE" else "catalog"
 
 
 class PolicyService:
-    """Read-only explorer for Unity Catalog ABAC policies (metastore and catalog scopes)."""
+    """Read-only explorer for Unity Catalog ABAC policies (metastore and catalog scopes).
+
+    Args:
+        factory: Workspace client factory; the admin client reads policies and metastores.
+        sql: SQL executor for information_schema queries.
+        cache: TTL cache for policy definitions and the metastore name.
+    """
 
     def __init__(
         self,
@@ -125,6 +145,22 @@ class PolicyService:
         catalog: str | None = None,
         q: str | None = None,
     ) -> PolicyListResponse:
+        """List ABAC policies grouped into metastore and catalog scopes.
+
+        Args:
+            scope: ``metastore`` or ``catalog`` to restrict scope; other values are ignored.
+            policy_type: Policy type filter (e.g. ``COLUMN_MASK``), with or without the
+                ``POLICY_TYPE_`` prefix.
+            catalog: Catalog name filter (case-insensitive); excludes metastore policies.
+            q: Case-insensitive text search over name, securable, condition, principals, and
+                governed tags.
+
+        Returns:
+            Filtered policies split by scope, with the metastore name and total count.
+
+        Raises:
+            UpstreamError: If the policy definitions cannot be queried.
+        """
         rows = self._cached_rows()
         metastore_name = self._metastore_name()
         summaries = [self._to_summary(row, metastore_name) for row in rows]
@@ -135,6 +171,7 @@ class PolicyService:
         query = (q or "").strip().lower()
 
         def matches(item: PolicySummary) -> bool:
+            """Whether a policy passes every active filter."""
             if scope_filter in {"metastore", "catalog"} and item.scope_kind != scope_filter:
                 return False
             if type_filter and item.policy_type != type_filter:
@@ -169,6 +206,24 @@ class PolicyService:
         )
 
     def get_policy(self, policy_id: str) -> PolicyDetail:
+        """Return one policy with API details and approximate affected assets.
+
+        Starts from the cached information_schema row and overlays comment, timestamps,
+        principals, match columns, mask/row-filter functions, and grant/deny privileges from
+        the Policies API. If the API call fails for reasons other than not-found, the
+        information_schema data is returned alone.
+
+        Args:
+            policy_id: Policy identifier from the list view.
+
+        Returns:
+            The policy detail including tagged assets in scope (capped and approximate).
+
+        Raises:
+            NotFoundError: If the policy is not in information_schema or the Policies API
+                reports it missing.
+            UpstreamError: If the policy definitions cannot be queried.
+        """
         row = next((r for r in self._cached_rows() if str(r.get("policy_id")) == policy_id), None)
         if row is None:
             raise NotFoundError(f"Policy {policy_id} was not found")
@@ -244,16 +299,25 @@ class PolicyService:
         return detail
 
     def _cached_rows(self) -> list[dict[str, Any]]:
+        """Return policy definition rows from the cache, loading them on a miss."""
         return self._cache.get_or_load(("abac-policy-definitions",), self._load_rows)
 
     def _load_rows(self) -> list[dict[str, Any]]:
+        """Query all ABAC policy definitions.
+
+        Raises:
+            UpstreamError: If the query fails.
+        """
         try:
             return self._sql.query(_LIST_SQL)
         except Exception as exc:  # noqa: BLE001
             raise UpstreamError(f"Could not list ABAC policies: {exc}") from exc
 
     def _metastore_name(self) -> str | None:
+        """Return the current metastore's name (cached), or None if it cannot be resolved."""
+
         def load() -> str | None:
+            """Resolve the metastore name via the admin client; None on failure."""
             try:
                 assignment = self._factory.admin().metastores.current()
                 metastore = self._factory.admin().metastores.get(assignment.metastore_id)
@@ -265,6 +329,7 @@ class PolicyService:
         return self._cache.get_or_load(("metastore-name",), load)
 
     def _to_summary(self, row: dict[str, Any], metastore_name: str | None) -> PolicySummary:
+        """Convert an information_schema row into a normalized policy summary."""
         on_type = _normalize_securable_type(row.get("on_securable_type"))
         on_name = self._on_securable_fullname(row, on_type, metastore_name)
         catalog_name = row.get("catalog_name")
@@ -291,6 +356,7 @@ class PolicyService:
 
     @staticmethod
     def _on_securable_fullname(row: dict[str, Any], on_type: str, metastore_name: str | None) -> str:
+        """Build the dotted full name of the securable the policy is attached to."""
         if on_type == "METASTORE":
             return metastore_name or "metastore"
         catalog = row.get("catalog_name")
@@ -306,6 +372,18 @@ class PolicyService:
         return ".".join(str(p) for p in parts)
 
     def _affected_assets(self, policy: PolicyDetail) -> tuple[list[AffectedAsset], bool, str | None]:
+        """Find tagged columns and tables in the policy's scope that carry its governed tags.
+
+        This is an approximation: WHEN and MATCH conditions are not evaluated. Lookup
+        failures are logged and reported in the note rather than raised.
+
+        Args:
+            policy: Policy detail with scope and governed tags.
+
+        Returns:
+            De-duplicated assets (capped at the asset limit), a truncated flag, and an
+            explanatory note.
+        """
         if policy.for_securable_type and policy.for_securable_type not in {"TABLE", "SCHEMA", "CATALOG"}:
             return (
                 [],
@@ -396,6 +474,7 @@ class PolicyService:
 
     @staticmethod
     def _scope_filter_sql(policy: PolicyDetail) -> str:
+        """Return an ``AND ...`` SQL fragment restricting tag lookups to the policy's scope."""
         if policy.on_securable_type == "METASTORE":
             return ""
         if policy.on_securable_type == "CATALOG" and policy.catalog_name:

@@ -1,3 +1,9 @@
+"""FastAPI application factory and local process entrypoint.
+
+Builds the app with config hydration, service container lifecycle, API routes,
+exception handlers, and optional SPA static serving from the frontend dist.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -24,6 +30,12 @@ logger = logging.getLogger(__name__)
 
 
 def _mount_frontend(app: FastAPI, dist: Path) -> None:
+    """Mount built frontend assets and a SPA catch-all when ``dist`` exists.
+
+    Args:
+        app: FastAPI application to attach static mounts and routes to.
+        dist: Path to the frontend build output directory.
+    """
     index = dist / "index.html"
     if not index.is_file():
         logger.warning("Frontend build not found at %s; serving API only", dist)
@@ -33,6 +45,17 @@ def _mount_frontend(app: FastAPI, dist: Path) -> None:
 
     @app.get("/{path:path}", include_in_schema=False)
     def spa(path: str) -> FileResponse:
+        """Serve a static file or the SPA index for non-API paths.
+
+        Args:
+            path: Request path relative to the frontend dist root.
+
+        Returns:
+            The matching static file, or ``index.html`` for client-side routes.
+
+        Raises:
+            NotFoundError: If the path looks like a missing API route (``api/...``).
+        """
         if path.startswith("api/"):
             raise NotFoundError(f"No API route /{path}")
         candidate = (dist / path).resolve()
@@ -42,6 +65,20 @@ def _mount_frontend(app: FastAPI, dist: Path) -> None:
 
 
 def create_app(config: AppConfig | None = None, container: ServiceContainer | None = None) -> FastAPI:
+    """Create and configure the FastAPI application.
+
+    Prefer secrets injected by app resources; otherwise hydrate from the secret
+    scope when ``config`` is not supplied.
+
+    Args:
+        config: Optional pre-built config. When omitted, secrets are hydrated and
+            config is loaded via ``get_config``.
+        container: Optional service container. When omitted, one is built from
+            ``config``.
+
+    Returns:
+        A fully wired FastAPI app with lifespan, routes, and frontend mount.
+    """
     # Prefer secrets injected by app resources; otherwise hydrate from the secret scope.
     if config is None:
         hydrate_admin_secrets()
@@ -52,6 +89,14 @@ def create_app(config: AppConfig | None = None, container: ServiceContainer | No
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        """Start and shut down the service container around request handling.
+
+        Args:
+            app: FastAPI application instance (unused beyond container access).
+
+        Yields:
+            Control to the running application between startup and shutdown.
+        """
         await run_in_threadpool(container.startup)
         logger.info(
             "%s %s started (storage=%s, auth=%s, admin_sp=%s)",

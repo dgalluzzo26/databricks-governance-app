@@ -1,3 +1,11 @@
+"""Unity Catalog Delta mirror of identity attributes for ABAC UDFs.
+
+Column-mask and row-filter UDFs run inside Unity Catalog and cannot query Lakebase, so the
+app mirrors identity attribute definitions and assignments into Delta tables in the app
+schema. This module owns the mirror tables' DDL, exposes a Delta-backed repository for
+incremental writes, and supports a full resync from primary storage.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -48,6 +56,13 @@ class IdentityUcSync:
 
     Lakebase remains the OLTP source of truth for the app UI. Column-mask and row-filter
     UDFs can only read UC tables, so this mirror is what those UDFs look up.
+
+    Args:
+        sql: SQL executor used for mirror DDL and writes.
+        config: App configuration providing the app catalog and schema.
+
+    Attributes:
+        repo: Delta-backed repository for incremental mirror writes.
     """
 
     def __init__(self, sql: SqlExecutor, config: AppConfig) -> None:
@@ -60,15 +75,40 @@ class IdentityUcSync:
 
     @property
     def location(self) -> str:
+        """The ``catalog.schema`` holding the mirror tables."""
         return f"{self._catalog}.{self._schema}"
 
     def ensure_tables(self) -> None:
+        """Create the mirror definition and assignment tables if they do not exist.
+
+        Runs ``CREATE TABLE IF NOT EXISTS`` DDL against Unity Catalog.
+
+        Raises:
+            UpstreamError: If the DDL fails.
+            NotConfiguredError: If no SQL warehouse is configured.
+        """
         self._sql.execute(_DEFINITIONS_DDL.format(fqn=self._definitions.fqn))
         self._sql.execute(_ASSIGNMENTS_DDL.format(fqn=self._assignments.fqn))
         logger.info("UC identity mirror tables ready in %s", self.location)
 
     def full_sync(self, source: IdentityAttributeRepository) -> dict[str, int]:
-        """Replace the UC mirror with the current Lakebase (or other primary) contents."""
+        """Replace the UC mirror with the current Lakebase (or other primary) contents.
+
+        Ensures the tables exist, deletes all mirror rows, then re-inserts every definition
+        (with empty allowed values) and every assignment, including inactive ones so
+        revocation history is preserved. Not transactional: UDFs may briefly see an empty
+        mirror while the resync runs.
+
+        Args:
+            source: Primary identity attribute repository to copy from.
+
+        Returns:
+            Counts of mirrored ``definitions`` and ``assignments``.
+
+        Raises:
+            UpstreamError: If any mirror statement fails.
+            NotConfiguredError: If no SQL warehouse is configured.
+        """
         self.ensure_tables()
         definitions = source.list_definitions()
         assignments = source.list_assignments(AttributeAssignmentFilter(include_inactive=True))

@@ -1,4 +1,11 @@
-"""Static checks and SQL generation for apply_mask_rule presentation handlers."""
+"""Static checks and SQL generation for apply_mask_rule presentation handlers.
+
+When a caller lacks the sensitivity grant for a column, the metastore variant mask policy
+delegates presentation to ``apply_mask_rule``, which dispatches on the column's ``mask_rule``
+tag. This module allow-lists admin-authored custom expressions (a single scalar expression
+over ``v`` using a fixed function set) and generates the ``CREATE OR REPLACE FUNCTION`` DDL
+for ``apply_mask_rule`` and its ``_resolve_mask_handler`` helper from the rule registry.
+"""
 
 from __future__ import annotations
 
@@ -114,7 +121,22 @@ _STRING = re.compile(r"'(?:''|[^'])*'")
 
 
 def sanitize_expression(expression: str) -> str:
-    """Return a cleaned single SQL expression or raise InvalidRequestError."""
+    """Return a cleaned single SQL expression or raise InvalidRequestError.
+
+    Strips comments and a trailing semicolon, rejects multiple statements and DML/DDL
+    keywords, and allows only the column identifier ``v``, a small keyword/type set, and
+    allow-listed functions (string literals are ignored for these checks).
+
+    Args:
+        expression: Admin-authored mask expression.
+
+    Returns:
+        The cleaned expression text.
+
+    Raises:
+        InvalidRequestError: If the expression is empty, has multiple statements, contains a
+            banned keyword, or uses a non-allow-listed function or identifier.
+    """
     text = _BLOCK_COMMENT.sub(" ", _LINE_COMMENT.sub(" ", expression or "")).strip()
     text = text.rstrip(";").strip()
     if not text:
@@ -153,7 +175,16 @@ def sanitize_expression(expression: str) -> str:
 
 
 def substitute_v(expression: str, replacement: str) -> str:
-    """Replace standalone identifier v with replacement (not inside strings)."""
+    """Replace standalone identifier v with replacement (not inside strings).
+
+    Args:
+        expression: Sanitized mask expression.
+        replacement: SQL to substitute for ``v`` (e.g. a cast of the column value or a
+            sample literal).
+
+    Returns:
+        The expression with every whole-word ``v`` outside string literals replaced.
+    """
     parts: list[str] = []
     last = 0
     for match in _STRING.finditer(expression):
@@ -165,10 +196,25 @@ def substitute_v(expression: str, replacement: str) -> str:
 
 
 def _replace_idents(chunk: str, replacement: str) -> str:
+    """Replace whole-word ``v`` in a chunk that contains no string literals."""
     return re.sub(r"\bv\b", replacement, chunk)
 
 
 def builtin_branch_sql(handler: str, *, params_json_expr: str, salt_expr: str) -> str:
+    """Return the VARIANT-valued SQL for a built-in handler's denied presentation.
+
+    ``joinable`` is a salted SHA-256 of the normalized value (stable for joins), ``email``
+    keeps the domain, ``phone`` keeps the last four digits, ``keep_last_n`` keeps the last
+    ``n`` characters (default 4), and anything else (including ``full``) is ``'***'``.
+
+    Args:
+        handler: Built-in handler name.
+        params_json_expr: SQL expression yielding the rule's params JSON string.
+        salt_expr: SQL expression yielding the joinable salt.
+
+    Returns:
+        A SQL expression over ``value`` for use in a CASE branch.
+    """
     cast_v = "cast(value AS STRING)"
     if handler == "joinable":
         return f"sha2(concat({salt_expr}, lower(trim({cast_v}))), 256)::VARIANT"
@@ -197,6 +243,18 @@ def builtin_branch_sql(handler: str, *, params_json_expr: str, salt_expr: str) -
 
 
 def build_resolve_handler_sql(*, function_fqn: str, definitions_table: str) -> str:
+    """Return DDL for the UDF that maps a ``mask_rule`` tag value to a handler key.
+
+    The generated function looks the rule up in the UC mirror: custom rules resolve to
+    their rule key, built-ins to their handler; blank or unknown rules resolve to ``full``.
+
+    Args:
+        function_fqn: Fully qualified, quoted name of the resolver function.
+        definitions_table: Fully qualified, quoted UC mirror of the mask rule registry.
+
+    Returns:
+        A ``CREATE OR REPLACE FUNCTION`` statement.
+    """
     return f"""CREATE OR REPLACE FUNCTION {function_fqn}(mask_rule STRING)
 RETURNS STRING
 LANGUAGE SQL
@@ -224,7 +282,26 @@ def build_apply_mask_rule_sql(
     config_table: str,
     rules: list[MaskRuleDefinition],
 ) -> str:
-    """Emit CREATE OR REPLACE FUNCTION for apply_mask_rule from the current registry."""
+    """Emit CREATE OR REPLACE FUNCTION for apply_mask_rule from the current registry.
+
+    Builds one CASE branch per distinct handler: custom rules inline their sanitized
+    expression, built-in rules use their params, and any built-in not covered by the
+    registry gets a default branch. NULL and non-string VARIANT values return NULL;
+    unmatched handlers fall back to ``'***'``.
+
+    Args:
+        function_fqn: Fully qualified, quoted name of ``apply_mask_rule``.
+        resolve_function_fqn: Fully qualified, quoted name of the handler resolver UDF.
+        definitions_table: Fully qualified, quoted UC mirror of the mask rule registry.
+        config_table: Fully qualified, quoted UC masking config table (joinable salt).
+        rules: Current mask rule definitions.
+
+    Returns:
+        A ``CREATE OR REPLACE FUNCTION`` statement.
+
+    Raises:
+        InvalidRequestError: If a stored custom expression fails sanitization.
+    """
     salt_expr = f"""coalesce(
       (SELECT config_value FROM {config_table} WHERE config_key = 'joinable_salt' LIMIT 1),
       'unset'
@@ -277,6 +354,16 @@ END"""
 
 
 def expected_custom_keys(rules: list[MaskRuleDefinition]) -> list[str]:
+    """Return the handler keys of custom rules that should appear in ``apply_mask_rule``.
+
+    Used to detect a deployed UDF that is out of sync with the registry.
+
+    Args:
+        rules: Current mask rule definitions.
+
+    Returns:
+        Handler (or rule) keys of custom rules with a non-empty expression.
+    """
     return [
         (r.handler or r.rule_key)
         for r in rules
@@ -285,4 +372,5 @@ def expected_custom_keys(rules: list[MaskRuleDefinition]) -> list[str]:
 
 
 def _sql_str(value: str) -> str:
+    """Quote a value as a SQL string literal, escaping backslashes and single quotes."""
     return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"

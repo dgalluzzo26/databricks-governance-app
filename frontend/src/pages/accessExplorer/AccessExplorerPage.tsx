@@ -1,3 +1,11 @@
+/**
+ * @file Access Explorer page: browse or search Unity Catalog tables and inspect column-mask /
+ * row-filter access for the signed-in user.
+ *
+ * Loads table insights via `useAnalyzeTable`, table search via `useTableSearch`, and can submit
+ * attribute access requests via `useCreateAccessRequest`. The selected table is mirrored in the
+ * `?table=` search parameter; a URL value bootstraps analysis once on mount.
+ */
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useAnalyzeTable, useCreateAccessRequest, useTableSearch } from "@/api/queries";
@@ -7,6 +15,11 @@ import styles from "../identity/IdentityPage.module.css";
 import { AccessExplorerTree } from "./AccessExplorerTree";
 import layout from "./AccessExplorerPage.module.css";
 
+/**
+ * Maps a column access state to a Badge visual tone.
+ *
+ * @param state - Column access state from the analyze insight.
+ */
 function stateTone(state: ColumnAccessInsight["accessState"]): "success" | "warning" | "danger" | "neutral" | "info" {
   switch (state) {
     case "unmasked":
@@ -21,6 +34,11 @@ function stateTone(state: ColumnAccessInsight["accessState"]): "success" | "warn
   }
 }
 
+/**
+ * Human-readable label for a column access state shown in the columns table.
+ *
+ * @param state - Column access state from the analyze insight.
+ */
 function stateLabel(state: ColumnAccessInsight["accessState"]): string {
   switch (state) {
     case "unmasked":
@@ -36,6 +54,13 @@ function stateLabel(state: ColumnAccessInsight["accessState"]): string {
   }
 }
 
+/**
+ * Page for discovering table access: catalog tree browse, table search/analyze, insight cards,
+ * and suggested-attribute request submission.
+ *
+ * Side effects: syncs `?table=` into the URL on analyze; bootstraps `useAnalyzeTable` from the
+ * initial URL once; search uses `useTableSearch` when the query is long enough (hook-gated).
+ */
 export function AccessExplorerPage() {
   const [params, setParams] = useSearchParams();
   const initial = params.get("table") ?? "";
@@ -52,6 +77,7 @@ export function AccessExplorerPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only bootstrap from URL once
   }, []);
 
+  /** Analyzes `fullName`, updates the input, and writes `?table=` into the URL. */
   const runAnalyze = async (fullName: string) => {
     const name = fullName.trim();
     if (!name) return;
@@ -163,6 +189,12 @@ export function AccessExplorerPage() {
   );
 }
 
+/**
+ * Renders the analyze insight: summary, suggested attributes, row-filter status, and per-column
+ * mask/access details.
+ *
+ * @param props.insight - Full table access insight returned by `useAnalyzeTable`.
+ */
 function InsightView({ insight }: { insight: TableAccessInsight }) {
   return (
     <>
@@ -266,10 +298,20 @@ function InsightView({ insight }: { insight: TableAccessInsight }) {
 }
 
 
+/**
+ * Stable selection key for a suggested attribute (`key:value`).
+ *
+ * @param item - Suggested attribute from the analyze response.
+ */
 function suggestionKey(item: SuggestedAttribute): string {
   return `${item.attributeKey}:${item.attributeValue}`;
 }
 
+/**
+ * Reviewer label for a suggested attribute: category approver names, app admins, or not requestable.
+ *
+ * @param item - Suggested attribute from the analyze response.
+ */
 function routeLabel(item: SuggestedAttribute): string {
   if (!item.requestable) return "Not requestable yet";
   if (item.routedTo === "category_approvers" && item.approvers.length) {
@@ -278,6 +320,16 @@ function routeLabel(item: SuggestedAttribute): string {
   return "App admins";
 }
 
+/**
+ * Interactive card listing sensitivity and row-filter attribute suggestions with multi-select,
+ * value search, and batch access-request submission.
+ *
+ * Uses `useCreateAccessRequest` for each selected requestable attribute. Selecting a row-filter
+ * `*` clears concrete values for that dimension, and selecting a concrete value clears `*`.
+ *
+ * @param props.suggestions - Suggested attributes from the table insight.
+ * @param props.tableFullName - Three-part table name used to seed the justification text.
+ */
 function SuggestionsCard({
   suggestions,
   tableFullName,
@@ -322,6 +374,10 @@ function SuggestionsCard({
       })
     : [];
 
+  /**
+   * Toggles selection for `item`, enforcing mutual exclusion between a dimension's `*` and
+   * concrete values.
+   */
   const toggle = (item: SuggestedAttribute) => {
     const key = suggestionKey(item);
     setSelected((current) => {
@@ -341,10 +397,12 @@ function SuggestionsCard({
     });
   };
 
+  /** Clears every selected row-filter suggestion key. */
   const clearRowFilterValues = () => {
     setSelected((current) => current.filter((key) => !rowFilterKeys.includes(key)));
   };
 
+  /** Selects all currently filtered concrete row-filter values and drops their `*` keys. */
   const selectMatchedValues = () => {
     if (!matchedValues.length) return;
     setSelected((current) => {
@@ -357,6 +415,7 @@ function SuggestionsCard({
     });
   };
 
+  /** Deselects only the currently filtered concrete row-filter values. */
   const clearMatchedValues = () => {
     const matchedKeys = new Set(matchedValues.map((item) => suggestionKey(item)));
     setSelected((current) => current.filter((key) => !matchedKeys.has(key)));
@@ -366,6 +425,7 @@ function SuggestionsCard({
     selected.includes(suggestionKey(item)),
   );
 
+  /** Submits one access request per selected suggestion, then clears the selection. */
   const onSubmit = async () => {
     const notes: string[] = [];
     const chosen = suggestions.filter((item) => selected.includes(suggestionKey(item)));
@@ -559,6 +619,14 @@ function SuggestionsCard({
   );
 }
 
+/**
+ * Checkbox table of suggested attributes with covers paths, related columns, and reviewer routing.
+ *
+ * @param props.label - Accessible name for the table.
+ * @param props.items - Rows to render (already filtered by the parent).
+ * @param props.selected - Currently selected `key:value` suggestion keys.
+ * @param props.onToggle - Called when a requestable row's checkbox is toggled.
+ */
 function SuggestionTable({
   label,
   items,
@@ -637,6 +705,12 @@ function SuggestionTable({
   );
 }
 
+/**
+ * Simple label/value row used in the row-filter insight card.
+ *
+ * @param props.label - Fixed-width field label.
+ * @param props.value - Field value content.
+ */
 function DescriptionRow({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div style={{ display: "flex", gap: "var(--space-3)", alignItems: "baseline" }}>

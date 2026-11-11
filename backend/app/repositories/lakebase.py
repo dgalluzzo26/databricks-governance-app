@@ -1,3 +1,10 @@
+"""Lakebase (Postgres) persistence for app-managed governance state.
+
+Stores settings, audit events, identity attributes, access requests, mask rules, and
+policy exceptions in a Databricks Lakebase database. Unity Catalog objects and ABAC
+policies remain in the metastore; this backend only holds the app's own tables.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -45,6 +52,16 @@ _TOKEN_REFRESH_SECONDS = 45 * 60
 
 
 class LakebaseTokenProvider:
+    """Thread-safe cache of Lakebase Postgres OAuth tokens.
+
+    Tokens are issued by the Apps service principal (CAN_CONNECT_AND_CREATE), not the
+    Account Admin SP used for Unity Catalog operations.
+
+    Args:
+        factory: Workspace client factory used to mint database credentials.
+        endpoint: Lakebase endpoint identifier passed to ``generate_database_credential``.
+    """
+
     def __init__(self, factory: WorkspaceClientFactory, endpoint: str) -> None:
         self._factory = factory
         self._endpoint = endpoint
@@ -53,6 +70,11 @@ class LakebaseTokenProvider:
         self._issued_at = 0.0
 
     def token(self) -> str:
+        """Return a cached OAuth token, refreshing when older than the refresh window.
+
+        Returns:
+            A non-empty Postgres password (OAuth token) for Lakebase connections.
+        """
         with self._lock:
             if self._token is None or time.monotonic() - self._issued_at > _TOKEN_REFRESH_SECONDS:
                 # Lakebase credentials must come from the Apps SP (CAN_CONNECT_AND_CREATE),
@@ -66,11 +88,30 @@ class LakebaseTokenProvider:
 
 
 def _connection_class(tokens: LakebaseTokenProvider) -> type[psycopg.Connection]:
-    """A Connection subclass that injects a fresh OAuth token on every new connection."""
+    """Return a Connection subclass that injects a fresh OAuth token on connect.
+
+    Args:
+        tokens: Provider that supplies the current Lakebase OAuth password.
+
+    Returns:
+        A ``psycopg.Connection`` subclass whose ``connect`` sets ``password`` from
+        ``tokens`` before opening the socket.
+    """
 
     class LakebaseConnection(psycopg.Connection):
+        """psycopg Connection that always authenticates with a live Lakebase token."""
+
         @classmethod
         def connect(cls, conninfo: str = "", **kwargs: Any):  # type: ignore[override]
+            """Open a connection after injecting the current OAuth token as password.
+
+            Args:
+                conninfo: libpq connection string (may be empty when using kwargs).
+                **kwargs: Extra connect kwargs; ``password`` is overwritten.
+
+            Returns:
+                An open ``psycopg.Connection`` instance.
+            """
             kwargs["password"] = tokens.token()
             return super().connect(conninfo, **kwargs)
 
@@ -208,29 +249,71 @@ CREATE INDEX IF NOT EXISTS policy_exceptions_principal_idx
 
 
 class _Pg:
+    """Thin helper around a psycopg connection pool for schema-scoped SQL.
+
+    SQL templates must use ``{schema}``; it is interpolated with this helper's schema
+    before execution. Connections use autocommit as configured on the pool.
+
+    Args:
+        pool: Open (or openable) psycopg connection pool.
+        schema: Postgres schema name for app tables.
+    """
+
     def __init__(self, pool: ConnectionPool, schema: str) -> None:
         self.pool = pool
         self.schema = schema
 
     def fetch(self, sql: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        """Execute a query and return all rows as dicts.
+
+        Args:
+            sql: SQL with optional ``{schema}`` placeholder and ``%(name)s`` params.
+            params: Named bind parameters; defaults to an empty mapping.
+
+        Returns:
+            Row dicts when the statement has a result set; otherwise an empty list.
+        """
         with self.pool.connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(sql.format(schema=self.schema), params or {})
             return cur.fetchall() if cur.description else []
 
     def run(self, sql: str, params: dict[str, Any] | None = None) -> None:
+        """Execute a statement that does not return rows (DDL/DML).
+
+        Args:
+            sql: SQL with optional ``{schema}`` placeholder and ``%(name)s`` params.
+            params: Named bind parameters; defaults to an empty mapping.
+        """
         with self.pool.connection() as conn, conn.cursor() as cur:
             cur.execute(sql.format(schema=self.schema), params or {})
 
 
 class LakebaseSettingsRepository(SettingsRepository):
+    """Postgres-backed key/value JSON settings store.
+
+    Args:
+        pg: Schema-scoped query helper.
+    """
+
     def __init__(self, pg: _Pg) -> None:
         self._pg = pg
 
     def get_all(self) -> dict[str, Any]:
+        """Return every setting key mapped to its JSON value.
+
+        Returns:
+            Mapping of setting key to decoded JSON value.
+        """
         rows = self._pg.fetch("SELECT setting_key, setting_value FROM {schema}.app_settings")
         return {r["setting_key"]: r["setting_value"] for r in rows}
 
     def put_many(self, values: dict[str, Any], actor: str) -> None:
+        """Upsert multiple settings and record the actor on each row.
+
+        Args:
+            values: Setting keys to JSON-serializable values.
+            actor: Principal name recorded in ``updated_by``.
+        """
         for key, value in values.items():
             self._pg.run(
                 """
@@ -246,10 +329,21 @@ class LakebaseSettingsRepository(SettingsRepository):
 
 
 class LakebaseAuditRepository(AuditRepository):
+    """Append-only audit event store in Lakebase.
+
+    Args:
+        pg: Schema-scoped query helper.
+    """
+
     def __init__(self, pg: _Pg) -> None:
         self._pg = pg
 
     def record(self, event: AuditEvent) -> None:
+        """Persist a single audit event.
+
+        Args:
+            event: Event to insert; ``event_id`` must be unique.
+        """
         self._pg.run(
             "INSERT INTO {schema}.audit_events (event_id, event_type, actor, payload, created_at) "
             "VALUES (%(id)s, %(type)s, %(actor)s, %(payload)s, %(created_at)s)",
@@ -263,6 +357,14 @@ class LakebaseAuditRepository(AuditRepository):
         )
 
     def list_recent(self, limit: int = 100) -> list[AuditEvent]:
+        """Return the newest audit events.
+
+        Args:
+            limit: Maximum number of events to return.
+
+        Returns:
+            Events ordered by ``created_at`` descending.
+        """
         rows = self._pg.fetch(
             "SELECT * FROM {schema}.audit_events ORDER BY created_at DESC LIMIT %(limit)s",
             {"limit": limit},
@@ -271,16 +373,38 @@ class LakebaseAuditRepository(AuditRepository):
 
 
 class LakebaseIdentityAttributeRepository(IdentityAttributeRepository):
+    """Lakebase store for attribute definitions and principal assignments.
+
+    Definitions describe which sensitivity values the app manages; assignments are the
+    grants that later sync into Unity Catalog identity attributes / tags.
+
+    Args:
+        pg: Schema-scoped query helper.
+    """
+
     def __init__(self, pg: _Pg) -> None:
         self._pg = pg
 
     def list_definitions(self) -> list[AttributeDefinition]:
+        """Return all attribute definitions ordered by key.
+
+        Returns:
+            Definitions sorted by ``attribute_key``.
+        """
         rows = self._pg.fetch(
             "SELECT * FROM {schema}.identity_attribute_definitions ORDER BY attribute_key"
         )
         return [self._definition_from_row(r) for r in rows]
 
     def get_definition(self, key: str) -> AttributeDefinition | None:
+        """Return one attribute definition by key.
+
+        Args:
+            key: Attribute key (primary key).
+
+        Returns:
+            The definition, or ``None`` if missing.
+        """
         rows = self._pg.fetch(
             "SELECT * FROM {schema}.identity_attribute_definitions "
             "WHERE attribute_key = %(key)s",
@@ -289,6 +413,17 @@ class LakebaseIdentityAttributeRepository(IdentityAttributeRepository):
         return self._definition_from_row(rows[0]) if rows else None
 
     def upsert_definition(self, definition: AttributeDefinition) -> AttributeDefinition:
+        """Insert or update an attribute definition and return the stored row.
+
+        On conflict, metadata and value-source fields are updated; ``created_*`` is kept
+        from the insert payload only on first write.
+
+        Args:
+            definition: Definition to persist.
+
+        Returns:
+            The row as stored after upsert (falls back to ``definition`` if reload fails).
+        """
         self._pg.run(
             """
             INSERT INTO {schema}.identity_attribute_definitions (
@@ -324,6 +459,14 @@ class LakebaseIdentityAttributeRepository(IdentityAttributeRepository):
         return self.get_definition(definition.key) or definition
 
     def delete_definition(self, key: str) -> bool:
+        """Delete an attribute definition if it exists.
+
+        Args:
+            key: Attribute key to remove.
+
+        Returns:
+            ``True`` if a row was present and deleted; ``False`` if missing.
+        """
         before = self.get_definition(key)
         if before is None:
             return False
@@ -334,6 +477,16 @@ class LakebaseIdentityAttributeRepository(IdentityAttributeRepository):
         return True
 
     def list_assignments(self, criteria: AttributeAssignmentFilter) -> list[IdentityAttributeAssignment]:
+        """Return assignments matching the filter, newest first.
+
+        Unless ``include_inactive`` is set, revoked and expired rows are excluded.
+
+        Args:
+            criteria: Optional principal, type, key, and active-only filters.
+
+        Returns:
+            Matching assignments ordered by ``created_at`` descending.
+        """
         clauses = ["1=1"]
         params: dict[str, Any] = {}
         if criteria.principal_name:
@@ -357,6 +510,14 @@ class LakebaseIdentityAttributeRepository(IdentityAttributeRepository):
         return [self._assignment_from_row(r) for r in rows]
 
     def get_assignment(self, assignment_id: str) -> IdentityAttributeAssignment | None:
+        """Return one assignment by id.
+
+        Args:
+            assignment_id: Primary key of the assignment.
+
+        Returns:
+            The assignment, or ``None`` if missing.
+        """
         rows = self._pg.fetch(
             "SELECT * FROM {schema}.identity_attributes WHERE assignment_id = %(id)s",
             {"id": assignment_id},
@@ -364,6 +525,14 @@ class LakebaseIdentityAttributeRepository(IdentityAttributeRepository):
         return self._assignment_from_row(rows[0]) if rows else None
 
     def add_assignment(self, assignment: IdentityAttributeAssignment) -> IdentityAttributeAssignment:
+        """Insert a new identity attribute assignment.
+
+        Args:
+            assignment: Fully populated assignment to insert.
+
+        Returns:
+            The same ``assignment`` instance after a successful insert.
+        """
         self._pg.run(
             """
             INSERT INTO {schema}.identity_attributes (
@@ -395,6 +564,16 @@ class LakebaseIdentityAttributeRepository(IdentityAttributeRepository):
     def revoke_assignment(
         self, assignment_id: str, actor: str, at: datetime
     ) -> IdentityAttributeAssignment | None:
+        """Soft-revoke an assignment by setting ``revoked_at`` / ``revoked_by``.
+
+        Args:
+            assignment_id: Assignment to revoke.
+            actor: Principal recorded as ``revoked_by``.
+            at: Revocation timestamp.
+
+        Returns:
+            The updated assignment, or ``None`` if the id was not found.
+        """
         current = self.get_assignment(assignment_id)
         if current is None:
             return None
@@ -411,6 +590,16 @@ class LakebaseIdentityAttributeRepository(IdentityAttributeRepository):
     def update_assignment_expiry(
         self, assignment_id: str, expires_at: datetime, actor: str
     ) -> IdentityAttributeAssignment | None:
+        """Update an assignment's expiry and record the renewing actor as ``granted_by``.
+
+        Args:
+            assignment_id: Assignment to renew.
+            expires_at: New expiry timestamp.
+            actor: Principal recorded as ``granted_by``.
+
+        Returns:
+            The updated assignment, or ``None`` if the id was not found.
+        """
         current = self.get_assignment(assignment_id)
         if current is None:
             return None
@@ -426,6 +615,14 @@ class LakebaseIdentityAttributeRepository(IdentityAttributeRepository):
 
     @staticmethod
     def _definition_from_row(row: dict[str, Any]) -> AttributeDefinition:
+        """Map a definition table row to an ``AttributeDefinition``.
+
+        Args:
+            row: Dict row from ``identity_attribute_definitions``.
+
+        Returns:
+            Typed definition with safe defaults for malformed JSON list columns.
+        """
         values = row.get("allowed_values") or []
         if not isinstance(values, list):
             values = []
@@ -447,6 +644,14 @@ class LakebaseIdentityAttributeRepository(IdentityAttributeRepository):
 
     @staticmethod
     def _assignment_from_row(row: dict[str, Any]) -> IdentityAttributeAssignment:
+        """Map an assignment table row to an ``IdentityAttributeAssignment``.
+
+        Args:
+            row: Dict row from ``identity_attributes``.
+
+        Returns:
+            Typed assignment model.
+        """
         return IdentityAttributeAssignment(
             assignment_id=row["assignment_id"],
             principal_name=row["principal_name"],
@@ -464,10 +669,27 @@ class LakebaseIdentityAttributeRepository(IdentityAttributeRepository):
 
 
 class LakebaseCategoryApproverRepository(CategoryApproverRepository):
+    """Lakebase store for sensitivity-category approvers.
+
+    Approvers decide access requests for a category path; uniqueness is case-insensitive
+    on path and principal name within a principal type.
+
+    Args:
+        pg: Schema-scoped query helper.
+    """
+
     def __init__(self, pg: _Pg) -> None:
         self._pg = pg
 
     def list_approvers(self, category_path: str | None = None) -> list[CategoryApprover]:
+        """List approvers, optionally filtered by category path.
+
+        Args:
+            category_path: When set, match path case-insensitively; otherwise return all.
+
+        Returns:
+            Approvers ordered by path, principal type, and name.
+        """
         if category_path:
             rows = self._pg.fetch(
                 "SELECT * FROM {schema}.sensitivity_category_approvers "
@@ -483,6 +705,11 @@ class LakebaseCategoryApproverRepository(CategoryApproverRepository):
         return [self._from_row(r) for r in rows]
 
     def list_configured_categories(self) -> list[str]:
+        """Return distinct category paths that have at least one approver.
+
+        Returns:
+            Sorted category path strings.
+        """
         rows = self._pg.fetch(
             "SELECT DISTINCT category_path FROM {schema}.sensitivity_category_approvers "
             "ORDER BY category_path"
@@ -490,6 +717,14 @@ class LakebaseCategoryApproverRepository(CategoryApproverRepository):
         return [str(r["category_path"]) for r in rows]
 
     def get_approver(self, approver_id: str) -> CategoryApprover | None:
+        """Return one approver by id.
+
+        Args:
+            approver_id: Primary key.
+
+        Returns:
+            The approver, or ``None`` if missing.
+        """
         rows = self._pg.fetch(
             "SELECT * FROM {schema}.sensitivity_category_approvers WHERE approver_id = %(id)s",
             {"id": approver_id},
@@ -497,6 +732,17 @@ class LakebaseCategoryApproverRepository(CategoryApproverRepository):
         return self._from_row(rows[0]) if rows else None
 
     def upsert_approver(self, approver: CategoryApprover) -> CategoryApprover:
+        """Insert an approver, or return the existing row for the same unique triple.
+
+        Unique key is (category_path, principal_name, principal_type) case-insensitive
+        on path and name. Existing rows are not updated.
+
+        Args:
+            approver: Approver to insert when no duplicate exists.
+
+        Returns:
+            The existing or newly inserted approver.
+        """
         existing = self._pg.fetch(
             """
             SELECT approver_id FROM {schema}.sensitivity_category_approvers
@@ -533,6 +779,14 @@ class LakebaseCategoryApproverRepository(CategoryApproverRepository):
         return approver
 
     def delete_approver(self, approver_id: str) -> bool:
+        """Delete an approver if it exists.
+
+        Args:
+            approver_id: Primary key to remove.
+
+        Returns:
+            ``True`` if a row was present and deleted; ``False`` if missing.
+        """
         before = self.get_approver(approver_id)
         if before is None:
             return False
@@ -544,6 +798,7 @@ class LakebaseCategoryApproverRepository(CategoryApproverRepository):
 
     @staticmethod
     def _from_row(row: dict[str, Any]) -> CategoryApprover:
+        """Map an approver table row to a ``CategoryApprover``."""
         return CategoryApprover(
             approver_id=row["approver_id"],
             category_path=row["category_path"],
@@ -555,10 +810,24 @@ class LakebaseCategoryApproverRepository(CategoryApproverRepository):
 
 
 class LakebasePolicyExceptionRepository(PolicyExceptionRepository):
+    """Lakebase store for global ABAC policy exceptions.
+
+    Exceptions mark principals that should bypass masks/row filters; uniqueness is
+    case-insensitive on principal name within a principal type.
+
+    Args:
+        pg: Schema-scoped query helper.
+    """
+
     def __init__(self, pg: _Pg) -> None:
         self._pg = pg
 
     def list_exceptions(self) -> list[PolicyException]:
+        """Return all stored policy exceptions.
+
+        Returns:
+            Exceptions ordered by principal type and name.
+        """
         rows = self._pg.fetch(
             "SELECT * FROM {schema}.policy_exceptions "
             "ORDER BY principal_type, principal_name"
@@ -566,6 +835,14 @@ class LakebasePolicyExceptionRepository(PolicyExceptionRepository):
         return [self._from_row(r) for r in rows]
 
     def get_exception(self, exception_id: str) -> PolicyException | None:
+        """Return one exception by id.
+
+        Args:
+            exception_id: Primary key.
+
+        Returns:
+            The exception, or ``None`` if missing.
+        """
         rows = self._pg.fetch(
             "SELECT * FROM {schema}.policy_exceptions WHERE exception_id = %(id)s",
             {"id": exception_id},
@@ -573,6 +850,14 @@ class LakebasePolicyExceptionRepository(PolicyExceptionRepository):
         return self._from_row(rows[0]) if rows else None
 
     def upsert_exception(self, exception: PolicyException) -> PolicyException:
+        """Insert a new exception or update note on the existing principal.
+
+        Args:
+            exception: Exception to insert, or note/created_by to apply on conflict.
+
+        Returns:
+            The stored exception after insert or update.
+        """
         existing = self._pg.fetch(
             """
             SELECT exception_id FROM {schema}.policy_exceptions
@@ -621,6 +906,14 @@ class LakebasePolicyExceptionRepository(PolicyExceptionRepository):
         return exception
 
     def delete_exception(self, exception_id: str) -> bool:
+        """Delete a policy exception if it exists.
+
+        Args:
+            exception_id: Primary key to remove.
+
+        Returns:
+            ``True`` if a row was present and deleted; ``False`` if missing.
+        """
         before = self.get_exception(exception_id)
         if before is None:
             return False
@@ -632,6 +925,7 @@ class LakebasePolicyExceptionRepository(PolicyExceptionRepository):
 
     @staticmethod
     def _from_row(row: dict[str, Any]) -> PolicyException:
+        """Map an exception table row to a ``PolicyException`` (``system`` always false)."""
         return PolicyException(
             exception_id=row["exception_id"],
             principal_name=row["principal_name"],
@@ -644,10 +938,24 @@ class LakebasePolicyExceptionRepository(PolicyExceptionRepository):
 
 
 class LakebaseAccessRequestRepository(AccessRequestRepository):
+    """Lakebase store for sensitivity access requests and renewal dismissals.
+
+    Args:
+        pg: Schema-scoped query helper.
+    """
+
     def __init__(self, pg: _Pg) -> None:
         self._pg = pg
 
     def create(self, request: AccessRequest) -> AccessRequest:
+        """Insert a new access request.
+
+        Args:
+            request: Fully populated request to insert.
+
+        Returns:
+            The same ``request`` instance after a successful insert.
+        """
         self._pg.run(
             """
             INSERT INTO {schema}.access_requests (
@@ -665,6 +973,14 @@ class LakebaseAccessRequestRepository(AccessRequestRepository):
         return request
 
     def get(self, request_id: str) -> AccessRequest | None:
+        """Return one access request by id.
+
+        Args:
+            request_id: Primary key.
+
+        Returns:
+            The request, or ``None`` if missing.
+        """
         rows = self._pg.fetch(
             "SELECT * FROM {schema}.access_requests WHERE request_id = %(id)s",
             {"id": request_id},
@@ -672,6 +988,14 @@ class LakebaseAccessRequestRepository(AccessRequestRepository):
         return self._from_row(rows[0]) if rows else None
 
     def list_for_requester(self, requester_name: str) -> list[AccessRequest]:
+        """Return all requests for a requester, newest first.
+
+        Args:
+            requester_name: Requester principal; matched case-insensitively.
+
+        Returns:
+            Requests ordered by ``created_at`` descending.
+        """
         rows = self._pg.fetch(
             "SELECT * FROM {schema}.access_requests "
             "WHERE lower(requester_name) = lower(%(name)s) "
@@ -681,6 +1005,14 @@ class LakebaseAccessRequestRepository(AccessRequestRepository):
         return [self._from_row(r) for r in rows]
 
     def list_by_status(self, status: AccessRequestStatus) -> list[AccessRequest]:
+        """Return requests with the given status, newest first.
+
+        Args:
+            status: Status filter.
+
+        Returns:
+            Matching requests ordered by ``created_at`` descending.
+        """
         rows = self._pg.fetch(
             "SELECT * FROM {schema}.access_requests WHERE status = %(status)s "
             "ORDER BY created_at DESC",
@@ -689,6 +1021,17 @@ class LakebaseAccessRequestRepository(AccessRequestRepository):
         return [self._from_row(r) for r in rows]
 
     def save(self, request: AccessRequest) -> AccessRequest:
+        """Persist decision fields for an existing access request.
+
+        Updates status, decision metadata, and approved expiry; other columns are left
+        unchanged.
+
+        Args:
+            request: Request whose decision fields should be written.
+
+        Returns:
+            The same ``request`` instance after update.
+        """
         self._pg.run(
             """
             UPDATE {schema}.access_requests SET
@@ -706,6 +1049,16 @@ class LakebaseAccessRequestRepository(AccessRequestRepository):
     def has_pending_for(
         self, *, requester_name: str, attribute_key: str, attribute_value: str
     ) -> bool:
+        """Return whether a PENDING request already exists for this triple.
+
+        Args:
+            requester_name: Requester principal; matched case-insensitively.
+            attribute_key: Attribute key being requested.
+            attribute_value: Attribute value; matched case-insensitively.
+
+        Returns:
+            ``True`` if at least one PENDING row matches.
+        """
         rows = self._pg.fetch(
             """
             SELECT 1 AS ok FROM {schema}.access_requests
@@ -722,6 +1075,14 @@ class LakebaseAccessRequestRepository(AccessRequestRepository):
     def dismiss_renewal(
         self, assignment_id: str, expires_at: datetime, actor: str, at: datetime
     ) -> None:
+        """Record that a renewal reminder for an assignment expiry was dismissed.
+
+        Args:
+            assignment_id: Assignment whose expiry reminder is dismissed.
+            expires_at: Expiry timestamp that identifies the dismissal key.
+            actor: Principal who dismissed the reminder.
+            at: Dismissal timestamp.
+        """
         self._pg.run(
             """
             INSERT INTO {schema}.renewal_dismissals (
@@ -735,6 +1096,15 @@ class LakebaseAccessRequestRepository(AccessRequestRepository):
         )
 
     def is_renewal_dismissed(self, assignment_id: str, expires_at: datetime) -> bool:
+        """Return whether a renewal dismissal exists for the assignment expiry.
+
+        Args:
+            assignment_id: Assignment id.
+            expires_at: Expiry timestamp that forms the dismissal primary key.
+
+        Returns:
+            ``True`` if a dismissal row exists.
+        """
         rows = self._pg.fetch(
             """
             SELECT 1 AS ok FROM {schema}.renewal_dismissals
@@ -747,6 +1117,7 @@ class LakebaseAccessRequestRepository(AccessRequestRepository):
 
     @staticmethod
     def _params(request: AccessRequest) -> dict[str, Any]:
+        """Build named SQL parameters for create/save from an ``AccessRequest``."""
         return {
             "request_id": request.request_id,
             "requester_name": request.requester_name,
@@ -764,6 +1135,7 @@ class LakebaseAccessRequestRepository(AccessRequestRepository):
 
     @staticmethod
     def _from_row(row: dict[str, Any]) -> AccessRequest:
+        """Map an access_requests table row to an ``AccessRequest``."""
         return AccessRequest(
             request_id=row["request_id"],
             requester_name=row["requester_name"],
@@ -781,16 +1153,35 @@ class LakebaseAccessRequestRepository(AccessRequestRepository):
 
 
 class LakebaseMaskRuleRepository(MaskRuleRepository):
+    """Lakebase store for presentation mask rule definitions and masking config.
+
+    Args:
+        pg: Schema-scoped query helper.
+    """
+
     def __init__(self, pg: _Pg) -> None:
         self._pg = pg
 
     def list_rules(self) -> list[MaskRuleDefinition]:
+        """Return all mask rule definitions ordered by key.
+
+        Returns:
+            Rules sorted by ``rule_key``.
+        """
         rows = self._pg.fetch(
             "SELECT * FROM {schema}.mask_rule_definitions ORDER BY rule_key"
         )
         return [self._from_row(r) for r in rows]
 
     def get_rule(self, rule_key: str) -> MaskRuleDefinition | None:
+        """Return one mask rule by key (case-insensitive).
+
+        Args:
+            rule_key: Rule key to look up.
+
+        Returns:
+            The rule, or ``None`` if missing.
+        """
         rows = self._pg.fetch(
             "SELECT * FROM {schema}.mask_rule_definitions WHERE lower(rule_key) = lower(%(key)s)",
             {"key": rule_key},
@@ -798,6 +1189,14 @@ class LakebaseMaskRuleRepository(MaskRuleRepository):
         return self._from_row(rows[0]) if rows else None
 
     def upsert_rule(self, rule: MaskRuleDefinition) -> MaskRuleDefinition:
+        """Insert or update a mask rule definition and return the stored row.
+
+        Args:
+            rule: Rule to persist.
+
+        Returns:
+            The row as stored after upsert (falls back to ``rule`` if reload fails).
+        """
         self._pg.run(
             """
             INSERT INTO {schema}.mask_rule_definitions (
@@ -832,6 +1231,14 @@ class LakebaseMaskRuleRepository(MaskRuleRepository):
         return self.get_rule(rule.rule_key) or rule
 
     def delete_rule(self, rule_key: str) -> bool:
+        """Delete a mask rule if it exists (key matched case-insensitively).
+
+        Args:
+            rule_key: Rule key to remove.
+
+        Returns:
+            ``True`` if a row was present and deleted; ``False`` if missing.
+        """
         before = self.get_rule(rule_key)
         if before is None:
             return False
@@ -842,6 +1249,14 @@ class LakebaseMaskRuleRepository(MaskRuleRepository):
         return True
 
     def get_config(self, key: str) -> str | None:
+        """Return a masking config value by key.
+
+        Args:
+            key: Config key.
+
+        Returns:
+            Config string, or ``None`` if missing.
+        """
         rows = self._pg.fetch(
             "SELECT config_value FROM {schema}.masking_config WHERE config_key = %(key)s",
             {"key": key},
@@ -849,6 +1264,13 @@ class LakebaseMaskRuleRepository(MaskRuleRepository):
         return None if not rows else str(rows[0]["config_value"])
 
     def put_config(self, key: str, value: str, actor: str) -> None:
+        """Upsert a masking config entry.
+
+        Args:
+            key: Config key.
+            value: Config value string.
+            actor: Principal recorded in ``updated_by``.
+        """
         self._pg.run(
             """
             INSERT INTO {schema}.masking_config (config_key, config_value, updated_by, updated_at)
@@ -863,6 +1285,7 @@ class LakebaseMaskRuleRepository(MaskRuleRepository):
 
     @staticmethod
     def _from_row(row: dict[str, Any]) -> MaskRuleDefinition:
+        """Map a mask_rule_definitions row to a ``MaskRuleDefinition``."""
         params = row.get("params") or {}
         if not isinstance(params, dict):
             params = {}
@@ -879,11 +1302,20 @@ class LakebaseMaskRuleRepository(MaskRuleRepository):
             updated_at=row.get("updated_at"),
         )
 
+
 class LakebaseStorageProvider(StorageProvider):
     """Stores app state in a Lakebase Postgres database.
 
     The app service principal creates and owns the schema on first start, which is why the
     app must be deployed once before running locally against the same database.
+
+    Args:
+        config: App config with Postgres host/db/user, Lakebase endpoint, and schema.
+        factory: Workspace client factory used to mint Lakebase OAuth credentials.
+
+    Raises:
+        NotConfiguredError: When required Postgres/Lakebase settings are missing or the
+            schema name is not alphanumeric (underscores allowed).
     """
 
     kind = "lakebase"
@@ -928,33 +1360,45 @@ class LakebaseStorageProvider(StorageProvider):
 
     @property
     def settings(self) -> SettingsRepository:
+        """Return the settings repository for this provider."""
         return self._settings
 
     @property
     def audit(self) -> AuditRepository:
+        """Return the audit repository for this provider."""
         return self._audit
 
     @property
     def identity_attributes(self) -> IdentityAttributeRepository:
+        """Return the identity-attribute repository for this provider."""
         return self._attributes
 
     @property
     def category_approvers(self) -> CategoryApproverRepository:
+        """Return the category-approver repository for this provider."""
         return self._category_approvers
 
     @property
     def access_requests(self) -> AccessRequestRepository:
+        """Return the access-request repository for this provider."""
         return self._access_requests
 
     @property
     def mask_rules(self) -> MaskRuleRepository:
+        """Return the mask-rule repository for this provider."""
         return self._mask_rules
 
     @property
     def policy_exceptions(self) -> PolicyExceptionRepository:
+        """Return the policy-exception repository for this provider."""
         return self._policy_exceptions
 
     def initialize(self) -> None:
+        """Open the pool, apply DDL, and backfill columns for older workspaces.
+
+        Idempotent: safe to call on every process start. Adds columns that older
+        deployments may lack (governed tag keys, value source/SQL, mask kind/expression).
+        """
         self._pool.open(wait=True, timeout=30)
         self._pg.run(_DDL)
         # Existing workspaces created the table before governed_tag_keys existed.
@@ -985,6 +1429,11 @@ class LakebaseStorageProvider(StorageProvider):
         logger.info("Lakebase schema %s ready", self._location)
 
     def health(self) -> StorageHealth:
+        """Probe connectivity with ``SELECT 1``.
+
+        Returns:
+            Healthy status with database.schema detail, or unhealthy with the error text.
+        """
         try:
             self._pg.fetch("SELECT 1 AS ok")
             return StorageHealth(backend=self.kind, healthy=True, detail=self._location)
@@ -992,4 +1441,5 @@ class LakebaseStorageProvider(StorageProvider):
             return StorageHealth(backend=self.kind, healthy=False, detail=str(exc))
 
     def close(self) -> None:
+        """Close the connection pool and release resources."""
         self._pool.close()

@@ -1,9 +1,17 @@
+/**
+ * @file Top-bar user menu: identity summary, role badge, and workspace link.
+ */
 import { useEffect, useRef, useState } from "react";
 import type { CurrentUser } from "@/api/types";
 import { ChevronDownIcon, ExternalIcon } from "@/components/icons";
 import { Avatar, Badge } from "@/components/ui";
 import styles from "./UserMenu.module.css";
 
+/**
+ * Dropdown for the signed-in user in the top bar.
+ * @param props.user - Current user identity from the API.
+ * @remarks Badge priority is Admin, then Approver, then User. Closes on outside click or Escape.
+ */
 export function UserMenu({ user }: { user: CurrentUser }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);

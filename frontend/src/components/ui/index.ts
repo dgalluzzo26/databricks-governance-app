@@ -1,3 +1,6 @@
+/**
+ * @file Barrel re-exports for shared UI primitives used across pages and layout.
+ */
 export { Alert, ErrorAlert } from "./Alert";
 export { Avatar, initials } from "./Avatar";
 export { Badge } from "./Badge";

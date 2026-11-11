@@ -1,3 +1,10 @@
+"""Unity Catalog Delta-table storage via a SQL warehouse.
+
+Implements settings, audit, and identity-attribute repositories against Delta tables
+in a configured catalog/schema. Access-request workflow state stays in-memory on this
+backend (Lakebase is the durable path for that workflow).
+"""
+
 from __future__ import annotations
 
 import json
@@ -22,6 +29,7 @@ from backend.app.repositories.base import (
     CategoryApproverRepository,
     IdentityAttributeRepository,
     MaskRuleRepository,
+    PolicyExceptionRepository,
     SettingsRepository,
     StorageProvider,
 )
@@ -34,30 +42,59 @@ from backend.app.repositories.memory import (
 
 
 def _ts(value: Any) -> datetime | None:
+    """Parse a SQL timestamp-like value into a timezone-aware datetime, or None."""
     if value in (None, ""):
         return None
     return datetime.fromisoformat(str(value).replace(" ", "T"))
 
 
 def _iso(value: datetime | None) -> str | None:
+    """Format a datetime as ISO-8601, or None when ``value`` is None."""
     return value.isoformat() if value else None
 
 
 class _DeltaTable:
+    """Quoted three-part Delta table reference bound to a SQL executor.
+
+    Args:
+        sql: Warehouse SQL executor used for queries and statements.
+        catalog: Unity Catalog catalog name.
+        schema: Schema (database) name within the catalog.
+        table: Unqualified table name.
+    """
+
     def __init__(self, sql: SqlExecutor, catalog: str, schema: str, table: str) -> None:
         self.sql = sql
         self.fqn = ".".join(quote_identifier(p) for p in (catalog, schema, table))
 
 
 class DeltaSettingsRepository(SettingsRepository):
+    """Settings repository backed by a Delta ``app_settings`` table.
+
+    Args:
+        table: Bound Delta table used for MERGE and SELECT.
+    """
+
     def __init__(self, table: _DeltaTable) -> None:
         self._t = table
 
     def get_all(self) -> dict[str, Any]:
+        """Load every setting row and JSON-decode each value.
+
+        Returns:
+            Mapping of setting keys to deserialized values. Keys with empty stored
+            values are omitted. Empty when the table has no usable rows.
+        """
         rows = self._t.sql.query(f"SELECT setting_key, setting_value FROM {self._t.fqn}")
         return {r["setting_key"]: json.loads(r["setting_value"]) for r in rows if r["setting_value"]}
 
     def put_many(self, values: dict[str, Any], actor: str) -> None:
+        """MERGE each setting into Delta, recording ``actor`` and ``updated_at``.
+
+        Args:
+            values: Setting keys mapped to JSON-serializable values.
+            actor: Identity written to ``updated_by``.
+        """
         for key, value in values.items():
             self._t.sql.execute(
                 f"""
@@ -74,10 +111,21 @@ class DeltaSettingsRepository(SettingsRepository):
 
 
 class DeltaAuditRepository(AuditRepository):
+    """Audit repository backed by a Delta ``audit_events`` table.
+
+    Args:
+        table: Bound Delta table used for INSERT and SELECT.
+    """
+
     def __init__(self, table: _DeltaTable) -> None:
         self._t = table
 
     def record(self, event: AuditEvent) -> None:
+        """INSERT one audit event row.
+
+        Args:
+            event: Event whose fields are written as parameterized columns.
+        """
         self._t.sql.execute(
             f"INSERT INTO {self._t.fqn} (event_id, event_type, actor, payload, created_at) "
             "VALUES (:id, :type, :actor, :payload, CAST(:created_at AS TIMESTAMP))",
@@ -91,6 +139,14 @@ class DeltaAuditRepository(AuditRepository):
         )
 
     def list_recent(self, limit: int = 100) -> list[AuditEvent]:
+        """SELECT the newest audit rows ordered by ``created_at``.
+
+        Args:
+            limit: Maximum rows to return (cast to int for the SQL LIMIT). Defaults to 100.
+
+        Returns:
+            Events newest-first. Empty when the table has no rows.
+        """
         rows = self._t.sql.query(f"SELECT * FROM {self._t.fqn} ORDER BY created_at DESC LIMIT {int(limit)}")
         return [
             AuditEvent(
@@ -105,17 +161,40 @@ class DeltaAuditRepository(AuditRepository):
 
 
 class DeltaIdentityAttributeRepository(IdentityAttributeRepository):
+    """Identity-attribute definitions and assignments on Delta tables.
+
+    Definitions live in ``identity_attribute_definitions``; assignments in
+    ``identity_attributes``. Assignment mutations use DELETE+INSERT rather than MERGE.
+
+    Args:
+        definitions: Bound table for attribute definitions.
+        assignments: Bound table for principal assignments.
+    """
+
     def __init__(self, definitions: _DeltaTable, assignments: _DeltaTable) -> None:
         self._definitions = definitions
         self._assignments = assignments
 
     def list_definitions(self) -> list[AttributeDefinition]:
+        """SELECT all definitions ordered by ``attribute_key``.
+
+        Returns:
+            Parsed definitions. Empty when the table has no rows.
+        """
         rows = self._definitions.sql.query(
             f"SELECT * FROM {self._definitions.fqn} ORDER BY attribute_key"
         )
         return [self._definition_from_row(r) for r in rows]
 
     def get_definition(self, key: str) -> AttributeDefinition | None:
+        """SELECT one definition by ``attribute_key``.
+
+        Args:
+            key: Attribute definition key.
+
+        Returns:
+            The matching definition, or None when no row exists for ``key``.
+        """
         rows = self._definitions.sql.query(
             f"SELECT * FROM {self._definitions.fqn} WHERE attribute_key = :key",
             {"key": key},
@@ -123,6 +202,14 @@ class DeltaIdentityAttributeRepository(IdentityAttributeRepository):
         return self._definition_from_row(rows[0]) if rows else None
 
     def upsert_definition(self, definition: AttributeDefinition) -> AttributeDefinition:
+        """MERGE a definition by ``attribute_key``, then re-read it.
+
+        Args:
+            definition: Definition to persist. Missing timestamps default to now.
+
+        Returns:
+            The definition as stored, or the input ``definition`` if the re-read misses.
+        """
         self._definitions.sql.execute(
             f"""
             MERGE INTO {self._definitions.fqn} t
@@ -166,6 +253,14 @@ class DeltaIdentityAttributeRepository(IdentityAttributeRepository):
         return self.get_definition(definition.key) or definition
 
     def delete_definition(self, key: str) -> bool:
+        """DELETE a definition after confirming it exists.
+
+        Args:
+            key: Attribute definition key to delete.
+
+        Returns:
+            True when a row was deleted; False when none existed for ``key``.
+        """
         before = self.get_definition(key)
         if before is None:
             return False
@@ -176,6 +271,17 @@ class DeltaIdentityAttributeRepository(IdentityAttributeRepository):
         return True
 
     def list_assignments(self, criteria: AttributeAssignmentFilter) -> list[IdentityAttributeAssignment]:
+        """SELECT assignments filtered in SQL, newest-first by ``created_at``.
+
+        When ``include_inactive`` is False, rows with ``revoked_at`` set or ``expires_at``
+        in the past (warehouse ``current_timestamp()``) are excluded.
+
+        Args:
+            criteria: Optional principal, type, attribute-key, and active-only filters.
+
+        Returns:
+            Matching assignments. Empty when none match.
+        """
         clauses = ["1=1"]
         params: dict[str, Any] = {}
         if criteria.principal_name:
@@ -198,6 +304,14 @@ class DeltaIdentityAttributeRepository(IdentityAttributeRepository):
         return [self._assignment_from_row(r) for r in rows]
 
     def get_assignment(self, assignment_id: str) -> IdentityAttributeAssignment | None:
+        """SELECT one assignment by ``assignment_id``.
+
+        Args:
+            assignment_id: Stable assignment identifier.
+
+        Returns:
+            The matching assignment, or None when no row exists.
+        """
         rows = self._assignments.sql.query(
             f"SELECT * FROM {self._assignments.fqn} WHERE assignment_id = :id",
             {"id": assignment_id},
@@ -205,10 +319,28 @@ class DeltaIdentityAttributeRepository(IdentityAttributeRepository):
         return self._assignment_from_row(rows[0]) if rows else None
 
     def add_assignment(self, assignment: IdentityAttributeAssignment) -> IdentityAttributeAssignment:
+        """Persist an assignment via delete-then-insert upsert.
+
+        Args:
+            assignment: Assignment to store.
+
+        Returns:
+            The same ``assignment`` object after a successful write.
+        """
         return self.upsert_assignment(assignment)
 
     def upsert_assignment(self, assignment: IdentityAttributeAssignment) -> IdentityAttributeAssignment:
-        """Insert or replace by assignment_id (used by UC mirror sync)."""
+        """Insert or replace by assignment_id (used by UC mirror sync).
+
+        Deletes any existing row for ``assignment.assignment_id``, then INSERTs the
+        full assignment payload.
+
+        Args:
+            assignment: Assignment to persist.
+
+        Returns:
+            The same ``assignment`` object after a successful write.
+        """
         self._assignments.sql.execute(
             f"DELETE FROM {self._assignments.fqn} WHERE assignment_id = :id",
             {"id": assignment.assignment_id},
@@ -244,6 +376,16 @@ class DeltaIdentityAttributeRepository(IdentityAttributeRepository):
     def revoke_assignment(
         self, assignment_id: str, actor: str, at: datetime
     ) -> IdentityAttributeAssignment | None:
+        """Soft-revoke by rewriting the assignment row with revoke metadata.
+
+        Args:
+            assignment_id: Assignment to revoke.
+            actor: Identity recorded as ``revoked_by``.
+            at: Value written to ``revoked_at``.
+
+        Returns:
+            The updated assignment, or None when ``assignment_id`` does not exist.
+        """
         current = self.get_assignment(assignment_id)
         if current is None:
             return None
@@ -258,6 +400,16 @@ class DeltaIdentityAttributeRepository(IdentityAttributeRepository):
     def update_assignment_expiry(
         self, assignment_id: str, expires_at: datetime, actor: str
     ) -> IdentityAttributeAssignment | None:
+        """Rewrite an assignment row with a new ``expires_at`` and ``granted_by``.
+
+        Args:
+            assignment_id: Assignment to update.
+            expires_at: New expiry timestamp.
+            actor: Identity written to ``granted_by``.
+
+        Returns:
+            The updated assignment, or None when ``assignment_id`` does not exist.
+        """
         current = self.get_assignment(assignment_id)
         if current is None:
             return None
@@ -270,6 +422,7 @@ class DeltaIdentityAttributeRepository(IdentityAttributeRepository):
 
     @staticmethod
     def _definition_from_row(row: dict[str, Any]) -> AttributeDefinition:
+        """Map a definitions-table row to an ``AttributeDefinition``."""
         raw_values = row.get("allowed_values") or "[]"
         values = json.loads(raw_values) if isinstance(raw_values, str) else raw_values
         if not isinstance(values, list):
@@ -295,6 +448,7 @@ class DeltaIdentityAttributeRepository(IdentityAttributeRepository):
 
     @staticmethod
     def _assignment_from_row(row: dict[str, Any]) -> IdentityAttributeAssignment:
+        """Map an assignments-table row to an ``IdentityAttributeAssignment``."""
         return IdentityAttributeAssignment(
             assignment_id=row["assignment_id"],
             principal_name=row["principal_name"],
@@ -315,7 +469,16 @@ class DeltaStorageProvider(StorageProvider):
     """Stores app state in Unity Catalog Delta tables through a SQL warehouse.
 
     The setup job creates the tables (provisioning/steps/app_storage.py); the app service
-    principal only needs SELECT and MODIFY on them.
+    principal only needs SELECT and MODIFY on them. Access-request workflow repositories
+    are in-memory stubs on this backend (Lakebase is preferred for that workflow).
+
+    Args:
+        sql: SQL warehouse executor.
+        catalog: Unity Catalog catalog holding the app tables.
+        schema: Schema within ``catalog`` holding the app tables.
+
+    Attributes:
+        kind: Always ``delta``.
     """
 
     kind = "delta"
@@ -339,33 +502,74 @@ class DeltaStorageProvider(StorageProvider):
 
     @property
     def settings(self) -> SettingsRepository:
+        """Delta-backed settings repository.
+
+        Returns:
+            Repository over the ``app_settings`` table.
+        """
         return self._settings
 
     @property
     def audit(self) -> AuditRepository:
+        """Delta-backed audit repository.
+
+        Returns:
+            Repository over the ``audit_events`` table.
+        """
         return self._audit
 
     @property
     def identity_attributes(self) -> IdentityAttributeRepository:
+        """Delta-backed identity-attribute repository.
+
+        Returns:
+            Repository over definition and assignment Delta tables.
+        """
         return self._attributes
 
     @property
     def category_approvers(self) -> CategoryApproverRepository:
+        """In-memory category-approver stub used when Delta is the storage backend.
+
+        Returns:
+            Process-local category-approver repository (not durable on Delta).
+        """
         return self._category_approvers
 
     @property
     def access_requests(self) -> AccessRequestRepository:
+        """In-memory access-request stub used when Delta is the storage backend.
+
+        Returns:
+            Process-local access-request repository (not durable on Delta).
+        """
         return self._access_requests
 
     @property
     def mask_rules(self) -> MaskRuleRepository:
+        """In-memory mask-rule stub used when Delta is the storage backend.
+
+        Returns:
+            Process-local mask-rule repository (not durable on Delta).
+        """
         return self._mask_rules
 
     @property
-    def policy_exceptions(self):
+    def policy_exceptions(self) -> PolicyExceptionRepository:
+        """In-memory policy-exception stub used when Delta is the storage backend.
+
+        Returns:
+            Process-local policy-exception repository (not durable on Delta).
+        """
         return self._policy_exceptions
 
     def health(self) -> StorageHealth:
+        """Probe Delta connectivity with ``SELECT 1`` against ``app_settings``.
+
+        Returns:
+            Healthy snapshot with ``catalog.schema`` detail on success; unhealthy with
+            the ``AppError`` message when the probe fails.
+        """
         try:
             self._sql.query(f"SELECT 1 FROM {self._probe_table} LIMIT 1")
             return StorageHealth(backend=self.kind, healthy=True, detail=self._location)

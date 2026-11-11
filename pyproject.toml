@@ -9,13 +9,20 @@ line-length = 110
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP", "SIM"]
+select = ["E", "F", "I", "B", "UP", "SIM", "D"]
 # B027: optional lifecycle hooks on abstract base classes are intentionally no-ops.
-ignore = ["B027"]
+# D107: constructor arguments are documented in the class docstring (Google style).
+ignore = ["B027", "D107"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
 # Seed data and ABAC condition strings read better unwrapped.
-"provisioning/steps/*" = ["E501"]
+"provisioning/steps/*" = ["E501", "D"]
+"provisioning/*" = ["D"]
+"scripts/*" = ["D"]
+"backend/tests/*" = ["D"]
 
 [tool.pytest.ini_options]
 testpaths = ["backend/tests"]

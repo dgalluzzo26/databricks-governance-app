@@ -1,3 +1,10 @@
+/**
+ * @file Side-nav model for the app shell.
+ *
+ * Items with `adminOnly: true` are hidden from non-admins in {@link SideNav}; route-level
+ * enforcement for those destinations lives in {@link routes} via {@link RequireAdmin}.
+ * Keep this list in sync with `routes.tsx` when adding features.
+ */
 import type { ComponentType, SVGProps } from "react";
 import {
   ExceptionIcon,
@@ -11,15 +18,23 @@ import {
   StatusIcon,
 } from "@/components/icons";
 
+/** A single navigable destination in the side nav. */
 export interface NavItem {
+  /** Visible label (also used as tooltip when the nav is collapsed). */
   label: string;
+  /** Absolute path for the NavLink. */
   to: string;
+  /** Icon component rendered beside the label. */
   icon: ComponentType<SVGProps<SVGSVGElement>>;
+  /** When true, the item is shown only to app admins. */
   adminOnly?: boolean;
 }
 
+/** Grouped nav items, optionally under a section title. */
 export interface NavSection {
+  /** Optional section heading omitted when the nav is collapsed. */
   title?: string;
+  /** Links in this section. */
   items: NavItem[];
 }
 

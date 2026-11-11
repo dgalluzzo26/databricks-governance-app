@@ -1,3 +1,15 @@
+/**
+ * @file Identity attributes page: self-service attribute viewing and access requests, the
+ * approvals inbox, and admin management of category approvers, attribute assignments, and
+ * attribute definitions.
+ *
+ * The active tab is stored in the `?tab=` search parameter. Every signed-in user sees
+ * "My attributes", "Request access", and "My requests". "Approvals" is shown only to app admins
+ * or users who are configured as category approvers (`isApprover`). "Category approvers",
+ * "Assignments", and "Definitions" are shown only to app admins. Requesting a tab the current
+ * user may not see falls back to "My attributes". This gating is a UI convenience only; the
+ * backend enforces authorization on every endpoint.
+ */
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
@@ -27,6 +39,14 @@ import type { ApprovalInboxItem, PrincipalKind, ValueSource } from "@/api/types"
 import { Alert, Badge, Card, ErrorAlert, PageHeader, Spinner } from "@/components/ui";
 import styles from "./IdentityPage.module.css";
 
+/**
+ * Identifier of a top-level tab on the identity page, as stored in the `?tab=` search parameter.
+ *
+ * @remarks
+ * `"approvals"` requires admin or category-approver status; `"approvers"`, `"assignments"`, and
+ * `"definitions"` require admin status. See {@link USER_TABS}, {@link APPROVER_TABS}, and
+ * {@link ADMIN_TABS}.
+ */
 type IdentityTab =
   | "mine"
   | "request"
@@ -36,25 +56,46 @@ type IdentityTab =
   | "assignments"
   | "definitions";
 
+/** Maximum number of allowed-value chips rendered per definition row before collapsing into "+N more". */
 const MAX_VALUE_CHIPS = 20;
+/** Human-readable labels for each attribute definition value source, shown in the definitions table. */
 const VALUE_SOURCE_LABELS: Record<ValueSource, string> = {
   governed_tags: "Governed tags",
   free_form: "Free-form list",
   sql: "SQL seed query",
 };
 
+/** Principal kinds that can receive attribute assignments and be used as assignment filters. */
 const PRINCIPAL_TYPES: PrincipalKind[] = ["USER", "GROUP", "SERVICE_PRINCIPAL"];
+/** Principal kinds that can be configured as category approvers (service principals are excluded). */
 const APPROVER_TYPES: PrincipalKind[] = ["USER", "GROUP"];
+/** Tabs available to every signed-in user. */
 const USER_TABS: IdentityTab[] = ["mine", "request", "my-requests"];
+/** Tabs available to app admins and category approvers. */
 const APPROVER_TABS: IdentityTab[] = ["approvals"];
+/** Tabs available only to app admins. */
 const ADMIN_TABS: IdentityTab[] = ["assignments", "definitions", "approvers"];
 
+/**
+ * Formats an ISO timestamp for display using the browser locale.
+ *
+ * @param value - ISO-8601 timestamp, or `null`/`undefined` when absent.
+ * @returns An em dash for missing values, the raw input if it cannot be parsed, otherwise a
+ * locale-formatted date and time.
+ */
 function formatWhen(value: string | null | undefined): string {
   if (!value) return "—";
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
+/**
+ * Converts an ISO timestamp into the `YYYY-MM-DDTHH:mm` local-time format expected by
+ * `<input type="datetime-local">`.
+ *
+ * @param value - ISO-8601 timestamp, or `null`/`undefined` when absent.
+ * @returns The local-time input string, or an empty string when the value is missing or invalid.
+ */
 function toLocalInput(value: string | null | undefined): string {
   if (!value) return "";
   const date = new Date(value);
@@ -63,6 +104,18 @@ function toLocalInput(value: string | null | undefined): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+/**
+ * Identity attributes page with a role-gated tab bar and one panel per tab.
+ *
+ * Reads the current user via `useCurrentUser` and the active tab from the `?tab=` search
+ * parameter (default `"mine"`).
+ *
+ * @remarks
+ * Tabs are filtered by role: everyone gets {@link USER_TABS}; admins and category approvers also
+ * get {@link APPROVER_TABS}; admins also get {@link ADMIN_TABS}. A disallowed or unknown `tab`
+ * value silently falls back to `"mine"`. While the current user is still loading, only the
+ * user tabs are available.
+ */
 export function IdentityPage() {
   const { data: user } = useCurrentUser();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -75,6 +128,7 @@ export function IdentityPage() {
   ]);
   const tab: IdentityTab = allowed.has(requested) ? requested : "mine";
 
+  /** Switches tabs by updating `?tab=` (replacing the history entry) while preserving other search params. */
   const setTab = (next: IdentityTab) => {
     const params = new URLSearchParams(searchParams);
     params.set("tab", next);
@@ -175,6 +229,15 @@ export function IdentityPage() {
   );
 }
 
+/**
+ * "My attributes" tab: read-only table of the current user's effective attribute assignments.
+ *
+ * Uses `useMyAttributes`. Each row shows the attribute key and value, the principal it was
+ * granted through (the user directly or one of their groups), and its expiry.
+ *
+ * @remarks
+ * Visible to every signed-in user. No mutations.
+ */
 function MyAttributesPanel() {
   const { data, isPending, error } = useMyAttributes();
 
@@ -219,6 +282,23 @@ function MyAttributesPanel() {
   );
 }
 
+/**
+ * "Request access" tab: form for submitting an access request for an attribute value.
+ *
+ * Uses `useAttributeDefinitions` and `useRowFilterDimensions` to build the list of requestable
+ * attributes: the `sensitivity` definition (column masking) plus any definition whose key is a
+ * row-filter dimension. Values are restricted to the selected definition's `allowedValues`.
+ * The `?key=` and `?value=` search params prefill the form (key defaults to `sensitivity`),
+ * which lets other pages such as Access Explorer deep-link here.
+ *
+ * Submitting calls `useCreateAccessRequest` with the key, value, trimmed justification, and the
+ * requested expiry (required), then clears the value, justification, and expiry fields.
+ *
+ * @remarks
+ * Visible to every signed-in user. Sensitivity requests are routed to the matching category
+ * approvers when configured, otherwise to app admins; row-filter requests always go to app
+ * admins. Routing is decided by the backend.
+ */
 function RequestAccessPanel() {
   const [searchParams] = useSearchParams();
   const definitions = useAttributeDefinitions();
@@ -243,17 +323,20 @@ function RequestAccessPanel() {
   const values = selected?.allowedValues ?? [];
   const isRowFilter = attributeKey !== "sensitivity";
 
+  // Re-apply prefills when the deep-link search params change while the panel is mounted.
   useEffect(() => {
     if (prefillsKey) setAttributeKey(prefillsKey);
     if (prefillsValue) setAttributeValue(prefillsValue);
   }, [prefillsKey, prefillsValue]);
 
+  // Drop a selected (or prefilled) value that is not allowed for the current attribute.
   useEffect(() => {
     if (attributeValue && values.length && !values.includes(attributeValue)) {
       setAttributeValue("");
     }
   }, [attributeKey, values, attributeValue]);
 
+  /** Submits the access request and resets the value, justification, and expiry on success. */
   const onSubmit = async () => {
     await create.mutateAsync({
       attributeKey,
@@ -355,6 +438,17 @@ function RequestAccessPanel() {
   );
 }
 
+/**
+ * "My requests" tab: table of access requests submitted by the current user.
+ *
+ * Uses `useMyAccessRequests`. Each row shows the requested attribute and value, who the request
+ * was routed to (a resolved sensitivity category, category approvers, or app admins), its
+ * status, requested expiry, and submission time. Pending requests can be cancelled via
+ * `useCancelAccessRequest`.
+ *
+ * @remarks
+ * Visible to every signed-in user.
+ */
 function MyRequestsPanel() {
   const { data, isPending, error } = useMyAccessRequests();
   const cancel = useCancelAccessRequest();
@@ -423,6 +517,24 @@ function MyRequestsPanel() {
   );
 }
 
+/**
+ * "Approvals" tab: inbox of pending access requests and upcoming renewals the current user can
+ * decide.
+ *
+ * Uses `useApprovalsInbox`. Items are either `REQUEST` (a pending sensitivity or row-filter
+ * access request) or `RENEWAL` (a sensitivity assignment expiring within 30 days). Each card has
+ * an "Approve until" expiry (prefilled from the item's current expiry) and an optional note,
+ * held as per-item drafts in local state.
+ *
+ * Mutations: requests are approved with `useApproveAccessRequest` (expiry required) or denied
+ * with `useDenyAccessRequest`; renewals are extended with `useApproveRenewal` (expiry required)
+ * or dismissed with `useDismissRenewal`. Notes are sent as `null` when blank.
+ *
+ * @remarks
+ * Rendered only for app admins and category approvers. The backend scopes the inbox: category
+ * approvers see items for their matching sensitivity paths, while row-filter requests and
+ * sensitivity requests with no matching category go to app admins.
+ */
 function ApprovalsPanel() {
   const { data, isPending, error } = useApprovalsInbox();
   const approveRequest = useApproveAccessRequest();
@@ -432,6 +544,7 @@ function ApprovalsPanel() {
   const [draftExpiry, setDraftExpiry] = useState<Record<string, string>>({});
   const [draftNote, setDraftNote] = useState<Record<string, string>>({});
 
+  /** Returns a stable key for an inbox item, used for React keys and for the per-item expiry/note drafts. */
   const keyFor = (item: ApprovalInboxItem) =>
     item.kind === "REQUEST" ? `req:${item.request?.requestId}` : `ren:${item.assignment?.assignmentId}`;
 
@@ -565,6 +678,18 @@ function ApprovalsPanel() {
   );
 }
 
+/**
+ * "Category approvers" tab: configure which users or groups approve sensitivity requests for each
+ * `sensitivity_category` path.
+ *
+ * Uses `useGovernedTags("sensitivity_category")` to populate the category picker and
+ * `useCategoryApprovers` to list existing approvers. Adding calls `useUpsertCategoryApprover`
+ * (clearing the principal field on success); removing calls `useDeleteCategoryApprover`.
+ *
+ * @remarks
+ * Rendered only for app admins. The most specific configured category path wins when routing a
+ * request; a parent path's approvers cover child paths only when no deeper path is configured.
+ */
 function CategoryApproversPanel() {
   const { data, isPending, error } = useCategoryApprovers();
   const tags = useGovernedTags("sensitivity_category");
@@ -694,6 +819,22 @@ function CategoryApproversPanel() {
   );
 }
 
+/**
+ * "Assignments" tab: directly assign attribute values to principals and browse or revoke existing
+ * assignments.
+ *
+ * The "Assign attribute" form uses `useAttributeDefinitions` for the attribute picker; when the
+ * selected definition has `allowedValues` the value is a select, otherwise free text. Submitting
+ * calls `useAssignAttribute` (justification and expiry are optional and sent as `null` when
+ * blank), then clears the value, justification, and expiry while keeping principal and attribute.
+ *
+ * The "Assignments" table uses `useAttributeAssignments`, filtered by principal name, principal
+ * type, attribute key, and an "Include inactive" toggle. Active rows can be revoked via
+ * `useRevokeAttribute`.
+ *
+ * @remarks
+ * Rendered only for app admins. Direct assignments bypass the request/approval workflow.
+ */
 function AssignmentsPanel() {
   const definitions = useAttributeDefinitions();
   const [principalName, setPrincipalName] = useState("");
@@ -724,6 +865,7 @@ function AssignmentsPanel() {
   const selectedDefinition = definitions.data?.definitions.find((item) => item.key === formKey);
   const valueOptions = selectedDefinition?.allowedValues ?? [];
 
+  /** Creates the assignment from the form and resets the value, justification, and expiry on success. */
   const onAssign = async () => {
     await assign.mutateAsync({
       principalName: formPrincipal.trim(),
@@ -959,8 +1101,26 @@ function AssignmentsPanel() {
   );
 }
 
+/** Sub-view of the definitions tab: the list of existing definitions, or the create/edit form. */
 type DefinitionsView = "existing" | "create";
 
+/**
+ * "Definitions" tab: list, create, edit, and delete attribute definitions.
+ *
+ * The "Existing definitions" view lists definitions from `useAttributeDefinitions` with their
+ * value source, linked governed tags, and allowed values (truncated to {@link MAX_VALUE_CHIPS}).
+ * Definitions backed by governed tags can be edited here; other value sources (free-form list,
+ * SQL seed query) link to the Row filters page instead. Any definition can be deleted via
+ * `useDeleteAttributeDefinition`.
+ *
+ * The create/edit view searches governed tags with `useGovernedTags`, lets the admin select one
+ * or more tags, previews the union of their values as the resulting allowed values, and saves via
+ * `useUpsertAttributeDefinition` with `valueSource: "governed_tags"`. A blank key or description
+ * is sent as `null` so the backend can apply defaults (the first tag's key and description).
+ *
+ * @remarks
+ * Rendered only for app admins. The key is locked while editing an existing definition.
+ */
 function DefinitionsPanel() {
   const { data, isPending, error } = useAttributeDefinitions();
   const upsert = useUpsertAttributeDefinition();
@@ -974,12 +1134,17 @@ function DefinitionsPanel() {
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const tags = useGovernedTags(tagSearch.trim() || undefined);
 
+  /** Adds or removes a governed tag key from the selection. */
   const toggleTag = (tagKey: string) => {
     setSelectedTags((current) =>
       current.includes(tagKey) ? current.filter((item) => item !== tagKey) : [...current, tagKey],
     );
   };
 
+  /**
+   * De-duplicated union of values across the selected tags, in selection order. Only tags present
+   * in the current search results contribute, so this is a preview rather than the saved values.
+   */
   const selectedValues = useMemo(() => {
     const byKey = new Map((tags.data?.tags ?? []).map((tag) => [tag.tagKey, tag]));
     const values: string[] = [];
@@ -991,6 +1156,7 @@ function DefinitionsPanel() {
     return values;
   }, [selectedTags, tags.data]);
 
+  /** Clears the create/edit form and exits edit mode. */
   const resetForm = () => {
     setKey("");
     setDescription("");
@@ -999,16 +1165,19 @@ function DefinitionsPanel() {
     setEditingKey(null);
   };
 
+  /** Opens a blank create form, discarding any in-progress edit. */
   const openCreate = () => {
     resetForm();
     setView("create");
   };
 
+  /** Returns to the definitions list, discarding any unsaved form state. */
   const openExisting = () => {
     resetForm();
     setView("existing");
   };
 
+  /** Creates or updates the governed-tag-backed definition, then returns to the list on success. */
   const onSave = async () => {
     await upsert.mutateAsync({
       key: key.trim() || null,
@@ -1020,6 +1189,11 @@ function DefinitionsPanel() {
     setView("existing");
   };
 
+  /**
+   * Loads an existing definition into the form and switches to edit mode.
+   *
+   * @param definitionKey - Key of the definition to edit; ignored if it is not in the loaded list.
+   */
   const startEdit = (definitionKey: string) => {
     const definition = data?.definitions.find((item) => item.key === definitionKey);
     if (!definition) return;

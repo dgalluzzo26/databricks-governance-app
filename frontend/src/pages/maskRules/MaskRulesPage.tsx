@@ -1,3 +1,8 @@
+/**
+ * @file Admin UI for named column-mask rules and the Unity Catalog mask policy pack.
+ * Builtin handlers plus custom SQL expressions (AI-drafted, warehouse-validated) drive
+ * `apply_mask_rule`. The route is wrapped in `RequireAdmin`; `isAdmin` still gates edit controls.
+ */
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import {
@@ -21,6 +26,7 @@ import type {
 import { Alert, Badge, Card, ErrorAlert, PageHeader, Spinner } from "@/components/ui";
 import styles from "../identity/IdentityPage.module.css";
 
+/** Builtin mask handlers offered in the rule form, with human-readable labels. */
 const HANDLERS: { value: MaskHandler; label: string }[] = [
   { value: "full", label: "Full redact (***/NULL)" },
   { value: "joinable", label: "Joinable hash" },
@@ -29,6 +35,15 @@ const HANDLERS: { value: MaskHandler; label: string }[] = [
   { value: "keep_last_n", label: "Keep last N characters" },
 ];
 
+/**
+ * Column-mask rule administration: policy-pack status (admins) and the named-rule catalog.
+ *
+ * Uses {@link useCurrentUser} to derive `isAdmin`. Columns are tagged `mask_rule=<name>`; unknown
+ * names fall back to `full`. Authorization still uses Identity sensitivity attributes.
+ *
+ * @remarks The route is wrapped in `RequireAdmin`. The page still hides pack actions and rule
+ * mutations when `isAdmin` is false.
+ */
 export function MaskRulesPage() {
   const { data: user } = useCurrentUser();
   const isAdmin = Boolean(user?.isAdmin);
@@ -56,6 +71,13 @@ export function MaskRulesPage() {
   );
 }
 
+/**
+ * Policy-pack status and mutations: sync registry/UDF/policy, seed default rules, rotate salt.
+ *
+ * Loads pack config with {@link useMaskRulePack}. {@link useEnsureMaskRulePack} recreates the
+ * governed tag, `apply_mask_rule` UDF, and ABAC policy. {@link useSeedMaskRules} inserts builtin
+ * defaults. {@link useRotateMaskSalt} invalidates existing joinable hashes after confirmation.
+ */
 function PackCard() {
   const { data, error, isPending } = useMaskRulePack();
   const ensure = useEnsureMaskRulePack();
@@ -126,6 +148,14 @@ function PackCard() {
   );
 }
 
+/**
+ * Named mask-rule table with optional create/edit form and delete actions.
+ *
+ * Lists rules via {@link useMaskRules}. Deletes with {@link useDeleteMaskRule} (the `full` rule
+ * cannot be removed). Admins can open {@link RuleForm} for create or edit.
+ *
+ * @param props.isAdmin - When false, hides New/Edit/Delete and shows a count badge instead.
+ */
 function RulesCard({ isAdmin }: { isAdmin: boolean }) {
   const { data, error, isPending } = useMaskRules();
   const remove = useDeleteMaskRule();
@@ -234,11 +264,20 @@ function RulesCard({ isAdmin }: { isAdmin: boolean }) {
   );
 }
 
+/**
+ * Create or edit a builtin or custom mask rule.
+ *
+ * Builtin rules save handler + params via {@link useUpsertMaskRule}. Custom SQL must pass
+ * {@link useValidateMaskHandler} (warehouse dry-run) and include the returned `validationToken`.
+ * {@link useDraftMaskHandler} fills the expression from a natural-language prompt.
+ */
 function RuleForm({
   initial,
   onDone,
 }: {
+  /** Existing rule when editing; `null` starts a new rule (key is then editable). */
   initial: MaskRuleDefinition | null;
+  /** Closes the form after a successful save or cancel. */
   onDone: () => void;
 }) {
   const upsert = useUpsertMaskRule();
@@ -268,11 +307,16 @@ function RuleForm({
     (kind === "builtin" || Boolean(validationToken && expression.trim())) &&
     !upsert.isPending;
 
+  /** Drops the warehouse validation token and sample rows so save stays blocked until re-validated. */
   const clearValidation = () => {
     setValidationToken(null);
     setSamples([]);
   };
 
+  /**
+   * Upserts the rule: custom handlers send the validated expression and token; builtin handlers
+   * send `handler` and, for `keep_last_n`, `{ n }`.
+   */
   const onSave = async () => {
     if (kind === "custom") {
       await upsert.mutateAsync({
