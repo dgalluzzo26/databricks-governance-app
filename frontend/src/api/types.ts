@@ -274,6 +274,34 @@ export interface CategoryApproverList {
   total: number;
 }
 
+export interface PolicyException {
+  exceptionId: string;
+  principalName: string;
+  principalType: PrincipalKind;
+  note: string | null;
+  createdBy: string | null;
+  createdAt: string;
+  system: boolean;
+}
+
+export interface PolicyExceptionList {
+  exceptions: PolicyException[];
+  total: number;
+  systemPrincipals: string[];
+}
+
+export interface UpsertPolicyExceptionRequest {
+  principalName: string;
+  principalType: PrincipalKind;
+  note?: string | null;
+}
+
+export interface ApplyPolicyExceptionsResult {
+  exceptPrincipals: string[];
+  maskPackSynced: boolean;
+  rowFilterPackSynced: boolean;
+}
+
 export interface UpsertCategoryApproverRequest {
   categoryPath: string;
   principalName: string;

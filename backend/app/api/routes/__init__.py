@@ -10,6 +10,7 @@ from backend.app.api.routes import (
     mask_rules,
     me,
     policies,
+    policy_exceptions,
     row_filters,
 )
 
@@ -19,6 +20,7 @@ api_router.include_router(me.router)
 api_router.include_router(app_info.router)
 api_router.include_router(help_routes.router)
 api_router.include_router(policies.router)
+api_router.include_router(policy_exceptions.router)
 api_router.include_router(identity_attributes.router)
 api_router.include_router(access_requests.router)
 api_router.include_router(row_filters.router)

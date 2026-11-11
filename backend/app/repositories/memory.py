@@ -13,12 +13,14 @@ from backend.app.models.identity_attribute import (
     IdentityAttributeAssignment,
 )
 from backend.app.models.mask_rule import MaskRuleDefinition
+from backend.app.models.policy_exception import PolicyException
 from backend.app.repositories.base import (
     AccessRequestRepository,
     AuditRepository,
     CategoryApproverRepository,
     IdentityAttributeRepository,
     MaskRuleRepository,
+    PolicyExceptionRepository,
     SettingsRepository,
     StorageProvider,
 )
@@ -223,6 +225,42 @@ class InMemoryAccessRequestRepository(AccessRequestRepository):
             return (assignment_id, expires_at) in self._dismissals
 
 
+class InMemoryPolicyExceptionRepository(PolicyExceptionRepository):
+    def __init__(self) -> None:
+        self._items: dict[str, PolicyException] = {}
+        self._lock = threading.Lock()
+
+    def list_exceptions(self) -> list[PolicyException]:
+        with self._lock:
+            return sorted(
+                self._items.values(),
+                key=lambda item: (item.principal_type.value, item.principal_name.lower()),
+            )
+
+    def get_exception(self, exception_id: str) -> PolicyException | None:
+        with self._lock:
+            return self._items.get(exception_id)
+
+    def upsert_exception(self, exception: PolicyException) -> PolicyException:
+        with self._lock:
+            for existing in self._items.values():
+                if (
+                    existing.principal_name.lower() == exception.principal_name.lower()
+                    and existing.principal_type == exception.principal_type
+                ):
+                    updated = existing.model_copy(
+                        update={"note": exception.note, "created_by": exception.created_by or existing.created_by}
+                    )
+                    self._items[existing.exception_id] = updated
+                    return updated
+            self._items[exception.exception_id] = exception
+            return exception
+
+    def delete_exception(self, exception_id: str) -> bool:
+        with self._lock:
+            return self._items.pop(exception_id, None) is not None
+
+
 class InMemoryMaskRuleRepository(MaskRuleRepository):
     def __init__(self) -> None:
         self._rules: dict[str, MaskRuleDefinition] = {}
@@ -274,6 +312,7 @@ class InMemoryStorageProvider(StorageProvider):
         self._category_approvers = InMemoryCategoryApproverRepository()
         self._access_requests = InMemoryAccessRequestRepository()
         self._mask_rules = InMemoryMaskRuleRepository()
+        self._policy_exceptions = InMemoryPolicyExceptionRepository()
 
     @property
     def settings(self) -> SettingsRepository:
@@ -298,6 +337,10 @@ class InMemoryStorageProvider(StorageProvider):
     @property
     def mask_rules(self) -> MaskRuleRepository:
         return self._mask_rules
+
+    @property
+    def policy_exceptions(self) -> PolicyExceptionRepository:
+        return self._policy_exceptions
 
     def health(self) -> StorageHealth:
         return StorageHealth(

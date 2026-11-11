@@ -1,0 +1,183 @@
+import { useState } from "react";
+import {
+  useApplyPolicyExceptions,
+  useCurrentUser,
+  useDeletePolicyException,
+  usePolicyExceptions,
+  useUpsertPolicyException,
+} from "@/api/queries";
+import type { PrincipalKind } from "@/api/types";
+import { Alert, Badge, Card, ErrorAlert, PageHeader, Spinner } from "@/components/ui";
+import styles from "../identity/IdentityPage.module.css";
+
+const PRINCIPAL_TYPES: PrincipalKind[] = ["USER", "GROUP", "SERVICE_PRINCIPAL"];
+
+export function PolicyExceptionsPage() {
+  const { data: user } = useCurrentUser();
+  const list = usePolicyExceptions(Boolean(user?.isAdmin));
+  const upsert = useUpsertPolicyException();
+  const remove = useDeletePolicyException();
+  const apply = useApplyPolicyExceptions();
+  const [principalName, setPrincipalName] = useState("");
+  const [principalType, setPrincipalType] = useState<PrincipalKind>("GROUP");
+  const [note, setNote] = useState("");
+
+  if (user && !user.isAdmin) {
+    return (
+      <>
+        <PageHeader
+          title="Policy exceptions"
+          description="Principals exempt from app-managed column masks and row filters."
+        />
+        <Alert tone="warning" title="Admins only">
+          Only app admins can manage global ABAC exceptions.
+        </Alert>
+      </>
+    );
+  }
+
+  const onAdd = async () => {
+    await upsert.mutateAsync({
+      principalName: principalName.trim(),
+      principalType,
+      note: note.trim() || null,
+    });
+    setPrincipalName("");
+    setNote("");
+  };
+
+  return (
+    <>
+      <PageHeader
+        title="Policy exceptions"
+        description="Users, groups, and service principals listed here are added to the EXCEPT clause on app-managed mask and row-filter policies so they see clear values and all rows."
+        actions={
+          <button
+            type="button"
+            className={styles.button}
+            disabled={apply.isPending}
+            onClick={() => void apply.mutateAsync()}
+          >
+            {apply.isPending ? "Applying…" : "Re-apply to policies"}
+          </button>
+        }
+      />
+
+      <Card title="Add exception">
+        <p className={styles.muted}>
+          Use this for Data Service principals, break-glass groups, or other identities that need
+          full access without sensitivity or row-filter attributes. App and admin service principals
+          are always included as built-in system exceptions. Saving regenerates the mask and
+          row-filter packs.
+        </p>
+        <div className={styles.formGrid}>
+          <label className={styles.field}>
+            <span className={styles.label}>Principal type</span>
+            <select
+              className={styles.select}
+              value={principalType}
+              onChange={(event) => setPrincipalType(event.target.value as PrincipalKind)}
+            >
+              {PRINCIPAL_TYPES.map((type) => (
+                <option key={type} value={type}>
+                  {type}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className={styles.fieldGrow}>
+            <span className={styles.label}>Principal</span>
+            <input
+              className={styles.input}
+              value={principalName}
+              onChange={(event) => setPrincipalName(event.target.value)}
+              placeholder="user@example.com, group name, or SP application id"
+            />
+          </label>
+          <label className={styles.fieldGrow}>
+            <span className={styles.label}>Note</span>
+            <input
+              className={styles.input}
+              value={note}
+              onChange={(event) => setNote(event.target.value)}
+              placeholder="Why this principal needs full access"
+            />
+          </label>
+        </div>
+        <div className={styles.buttonRow} style={{ marginTop: "var(--space-3)" }}>
+          <button
+            type="button"
+            className={`${styles.button} ${styles.buttonPrimary}`}
+            disabled={!principalName.trim() || upsert.isPending}
+            onClick={() => void onAdd()}
+          >
+            {upsert.isPending ? "Saving…" : "Add exception"}
+          </button>
+          {upsert.error && <ErrorAlert error={upsert.error} title="Could not save exception" />}
+          {apply.error && <ErrorAlert error={apply.error} title="Could not apply exceptions" />}
+          {apply.data && (
+            <Alert tone="success" title="Policies updated">
+              EXCEPT list now has {apply.data.exceptPrincipals.length} principal(s). Mask pack:{" "}
+              {apply.data.maskPackSynced ? "synced" : "skipped"}; row-filter pack:{" "}
+              {apply.data.rowFilterPackSynced ? "synced" : "skipped"}.
+            </Alert>
+          )}
+        </div>
+      </Card>
+
+      <Card title="Current exceptions" actions={list.data ? <Badge>{list.data.total}</Badge> : null}>
+        {list.isPending && <Spinner label="Loading exceptions" />}
+        {list.error && <ErrorAlert error={list.error} title="Could not load exceptions" />}
+        {list.data && list.data.exceptions.length === 0 && (
+          <div className={styles.empty}>No exceptions configured yet.</div>
+        )}
+        {list.data && list.data.exceptions.length > 0 && (
+          <div className={styles.tableWrap}>
+            <table className={styles.table} aria-label="Policy exceptions">
+              <thead>
+                <tr>
+                  <th>Principal</th>
+                  <th>Type</th>
+                  <th>Note</th>
+                  <th>Source</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {list.data.exceptions.map((item) => (
+                  <tr key={item.exceptionId}>
+                    <td>
+                      <code>{item.principalName}</code>
+                    </td>
+                    <td>
+                      <Badge>{item.principalType}</Badge>
+                    </td>
+                    <td className={styles.muted}>{item.note ?? "—"}</td>
+                    <td>
+                      <Badge tone={item.system ? "info" : "neutral"}>
+                        {item.system ? "system" : "configured"}
+                      </Badge>
+                    </td>
+                    <td>
+                      {!item.system && (
+                        <button
+                          type="button"
+                          className={styles.button}
+                          disabled={remove.isPending}
+                          onClick={() => void remove.mutateAsync(item.exceptionId)}
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {remove.error && <ErrorAlert error={remove.error} title="Could not remove exception" />}
+      </Card>
+    </>
+  );
+}

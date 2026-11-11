@@ -74,6 +74,7 @@ class MaskRuleService:
         *,
         mirror_sql: SqlExecutor | None = None,
         workspace: WorkspaceClientFactory | None = None,
+        policy_exceptions=None,
     ) -> None:
         self._config = config
         self._sql = sql
@@ -82,6 +83,7 @@ class MaskRuleService:
         self._governed_tags = governed_tags
         self._metadata_cache = metadata_cache
         self._workspace = workspace
+        self._policy_exceptions = policy_exceptions
 
     @property
     def tag_key(self) -> str:
@@ -455,12 +457,18 @@ class MaskRuleService:
 
     def _recreate_variant_policy(self) -> None:
         name = self._config.mask_variant_policy_name
+        except_clause = ""
+        principals = self._except_principals()
+        if principals:
+            except_clause = "\nEXCEPT " + ", ".join(
+                f"`{p.replace('`', '')}`" for p in principals
+            )
         self._sql.execute(
             f"""
             CREATE OR REPLACE POLICY {name} ON METASTORE
             COMMENT 'Mask sensitivity columns (non-geo); presentation via mask_rule'
             COLUMN MASK {self.function_name}
-            TO `account users`
+            TO `account users`{except_clause}
             FOR TABLES
             MATCH COLUMNS (
               has_tag('sensitivity_category')
@@ -477,6 +485,18 @@ class MaskRuleService:
             )
             """
         )
+
+    def _except_principals(self) -> list[str]:
+        if self._policy_exceptions is not None:
+            return self._policy_exceptions.except_principals()
+        if self._workspace is None:
+            return []
+        ids = [self._workspace.app_client_id, self._workspace.admin_client_id]
+        seen: list[str] = []
+        for item in ids:
+            if item and item not in seen:
+                seen.append(item)
+        return seen
 
     def _ensure_uc_tables(self) -> None:
         self._mirror_sql.execute(

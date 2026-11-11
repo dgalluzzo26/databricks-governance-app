@@ -13,6 +13,7 @@ from backend.app.models.identity_attribute import (
     IdentityAttributeAssignment,
 )
 from backend.app.models.mask_rule import MaskRuleDefinition
+from backend.app.models.policy_exception import PolicyException
 
 
 class SettingsRepository(ABC):
@@ -131,6 +132,20 @@ class MaskRuleRepository(ABC):
     def put_config(self, key: str, value: str, actor: str) -> None: ...
 
 
+class PolicyExceptionRepository(ABC):
+    @abstractmethod
+    def list_exceptions(self) -> list[PolicyException]: ...
+
+    @abstractmethod
+    def get_exception(self, exception_id: str) -> PolicyException | None: ...
+
+    @abstractmethod
+    def upsert_exception(self, exception: PolicyException) -> PolicyException: ...
+
+    @abstractmethod
+    def delete_exception(self, exception_id: str) -> bool: ...
+
+
 class StorageProvider(ABC):
     """Strategy for where app state lives. One provider supplies every repository."""
 
@@ -159,6 +174,10 @@ class StorageProvider(ABC):
     @property
     @abstractmethod
     def mask_rules(self) -> MaskRuleRepository: ...
+
+    @property
+    @abstractmethod
+    def policy_exceptions(self) -> PolicyExceptionRepository: ...
 
     def initialize(self) -> None:
         """Prepare storage (create schema, open pools). Must be idempotent."""

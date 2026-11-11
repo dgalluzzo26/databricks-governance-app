@@ -29,6 +29,7 @@ from backend.app.repositories.memory import (
     InMemoryAccessRequestRepository,
     InMemoryCategoryApproverRepository,
     InMemoryMaskRuleRepository,
+    InMemoryPolicyExceptionRepository,
 )
 
 
@@ -333,6 +334,7 @@ class DeltaStorageProvider(StorageProvider):
         self._category_approvers = InMemoryCategoryApproverRepository()
         self._access_requests = InMemoryAccessRequestRepository()
         self._mask_rules = InMemoryMaskRuleRepository()
+        self._policy_exceptions = InMemoryPolicyExceptionRepository()
         self._probe_table = settings_table.fqn
 
     @property
@@ -358,6 +360,10 @@ class DeltaStorageProvider(StorageProvider):
     @property
     def mask_rules(self) -> MaskRuleRepository:
         return self._mask_rules
+
+    @property
+    def policy_exceptions(self):
+        return self._policy_exceptions
 
     def health(self) -> StorageHealth:
         try:

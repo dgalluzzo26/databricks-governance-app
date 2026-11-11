@@ -287,20 +287,84 @@ function SuggestionsCard({
 }) {
   const create = useCreateAccessRequest();
   const requestable = suggestions.filter((item) => item.requestable);
+  const sensitivityItems = suggestions.filter((item) => item.kind === "sensitivity");
+  const rowFilterItems = suggestions.filter((item) => item.kind === "row_filter");
+  const rowFilterStar = rowFilterItems.filter((item) => item.attributeValue === "*");
+  const rowFilterValues = rowFilterItems.filter((item) => item.attributeValue !== "*");
+  const rowFilterKeys = rowFilterItems.map((item) => suggestionKey(item));
+
   const [selected, setSelected] = useState<string[]>(
     requestable
-      .filter((item) => !item.isHierarchyParent)
+      .filter(
+        (item) =>
+          (item.kind === "sensitivity" && !item.isHierarchyParent) ||
+          (item.kind === "row_filter" && item.attributeValue === "*"),
+      )
       .map((item) => suggestionKey(item)),
   );
+  const [valueFilter, setValueFilter] = useState("");
   const [justification, setJustification] = useState(`Need access for ${tableFullName}`);
   const [expires, setExpires] = useState("");
   const [results, setResults] = useState<string[]>([]);
 
-  const toggle = (key: string) => {
-    setSelected((current) =>
-      current.includes(key) ? current.filter((item) => item !== key) : [...current, key],
-    );
+  const needle = valueFilter.trim().toLowerCase();
+  const matchedValues = needle
+    ? rowFilterValues.filter((item) => {
+        const haystack = [
+          item.attributeKey,
+          item.attributeValue,
+          ...item.coversPaths,
+          ...item.columnNames,
+        ]
+          .join(" ")
+          .toLowerCase();
+        return haystack.includes(needle);
+      })
+    : [];
+
+  const toggle = (item: SuggestedAttribute) => {
+    const key = suggestionKey(item);
+    setSelected((current) => {
+      if (current.includes(key)) return current.filter((value) => value !== key);
+      if (item.kind === "row_filter" && item.attributeValue === "*") {
+        // "*" already grants every row, so drop the individual values for the same dimension.
+        const sameDimension = (value: string) =>
+          value.startsWith(`${item.attributeKey}:`) && value !== key;
+        return [...current.filter((value) => !sameDimension(value)), key];
+      }
+      if (item.kind === "row_filter") {
+        // Selecting a concrete value drops "*" for that dimension.
+        const starKey = `${item.attributeKey}:*`;
+        return [...current.filter((value) => value !== starKey), key];
+      }
+      return [...current, key];
+    });
   };
+
+  const clearRowFilterValues = () => {
+    setSelected((current) => current.filter((key) => !rowFilterKeys.includes(key)));
+  };
+
+  const selectMatchedValues = () => {
+    if (!matchedValues.length) return;
+    setSelected((current) => {
+      const next = new Set(current);
+      for (const item of matchedValues) {
+        next.delete(`${item.attributeKey}:*`);
+        next.add(suggestionKey(item));
+      }
+      return [...next];
+    });
+  };
+
+  const clearMatchedValues = () => {
+    const matchedKeys = new Set(matchedValues.map((item) => suggestionKey(item)));
+    setSelected((current) => current.filter((key) => !matchedKeys.has(key)));
+  };
+
+  const selectedRowFilterItems = rowFilterItems.filter((item) =>
+    selected.includes(suggestionKey(item)),
+  );
 
   const onSubmit = async () => {
     const notes: string[] = [];
@@ -340,79 +404,105 @@ function SuggestionsCard({
         hierarchy parents cover multiple sensitivity tags with one request. Category approvers
         review sensitivity when configured; otherwise (and for all row filters) app admins review.
       </div>
-      <div className={styles.tableWrap}>
-        <table className={styles.table} aria-label="Suggested attributes">
-          <thead>
-            <tr>
-              <th />
-              <th>Attribute</th>
-              <th>Value</th>
-              <th>Covers</th>
-              <th>Columns</th>
-              <th>Reviewed by</th>
-            </tr>
-          </thead>
-          <tbody>
-            {suggestions.map((item) => {
-              const key = suggestionKey(item);
-              const selectable = item.requestable;
-              return (
-                <tr key={`${key}:${item.isHierarchyParent}`}>
-                  <td>
-                    {selectable ? (
-                      <input
-                        type="checkbox"
-                        aria-label={`Select ${item.attributeKey}=${item.attributeValue}`}
-                        checked={selected.includes(key)}
-                        onChange={() => toggle(key)}
-                      />
-                    ) : null}
-                  </td>
-                  <td>
-                    <code>{item.attributeKey}</code>
-                    <div className={styles.muted} style={{ fontSize: "0.85em" }}>
-                      {item.kind === "row_filter" ? "row filter" : "sensitivity"}
-                    </div>
-                  </td>
-                  <td>
-                    <Badge
-                      tone={
-                        item.isHierarchyParent
-                          ? "info"
-                          : item.kind === "row_filter"
-                            ? "warning"
-                            : "warning"
-                      }
-                    >
-                      {item.attributeValue}
-                    </Badge>
-                    {item.isHierarchyParent && (
-                      <div className={styles.muted} style={{ fontSize: "0.85em" }}>
-                        broader path
-                      </div>
-                    )}
-                  </td>
-                  <td className={styles.muted}>
-                    {(item.coversPaths.length ? item.coversPaths : [item.attributeValue]).map((path) => (
-                      <code key={path} style={{ display: "block" }}>
-                        {path}
-                      </code>
-                    ))}
-                  </td>
-                  <td>
-                    {item.columnNames.map((name) => (
-                      <code key={name} style={{ marginRight: 6 }}>
-                        {name}
-                      </code>
-                    ))}
-                  </td>
-                  <td className={styles.muted}>{routeLabel(item)}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+
+      {sensitivityItems.length > 0 && (
+        <div className={styles.stack} style={{ marginBottom: "var(--space-4)" }}>
+          <div className={styles.muted}>Sensitivity</div>
+          <SuggestionTable
+            label="Sensitivity suggestions"
+            items={sensitivityItems}
+            selected={selected}
+            onToggle={toggle}
+          />
+        </div>
+      )}
+
+      {rowFilterItems.length > 0 && (
+        <div className={styles.stack}>
+          <div className={styles.muted}>Row filter</div>
+          {rowFilterStar.length > 0 && (
+            <SuggestionTable
+              label="Row filter wildcard"
+              items={rowFilterStar}
+              selected={selected}
+              onToggle={toggle}
+            />
+          )}
+          <div className={styles.formGrid}>
+            <label className={styles.fieldGrow}>
+              <span className={styles.label}>Find values</span>
+              <input
+                className={styles.input}
+                value={valueFilter}
+                onChange={(event) => setValueFilter(event.target.value)}
+                placeholder="Type to find values (e.g. CA, NY, TX)"
+                aria-label="Find row-filter values"
+              />
+            </label>
+          </div>
+          <div className={styles.buttonRow}>
+            <button
+              type="button"
+              className={styles.button}
+              disabled={!matchedValues.length}
+              onClick={() => selectMatchedValues()}
+            >
+              Select matches ({matchedValues.length})
+            </button>
+            <button
+              type="button"
+              className={styles.button}
+              disabled={!matchedValues.some((item) => selected.includes(suggestionKey(item)))}
+              onClick={() => clearMatchedValues()}
+            >
+              Clear matches
+            </button>
+            <button type="button" className={styles.button} onClick={() => clearRowFilterValues()}>
+              Clear all row-filter values
+            </button>
+          </div>
+          {!needle && (
+            <div className={styles.muted}>
+              {rowFilterValues.length} concrete values available. Search to find and select the ones you
+              need, or keep <code>*</code> for all rows.
+            </div>
+          )}
+          {needle && matchedValues.length === 0 && (
+            <div className={styles.empty}>No values match “{valueFilter.trim()}”.</div>
+          )}
+          {matchedValues.length > 0 && (
+            <SuggestionTable
+              label="Row filter value matches"
+              items={matchedValues}
+              selected={selected}
+              onToggle={toggle}
+            />
+          )}
+          {selectedRowFilterItems.length > 0 && (
+            <div>
+              <div className={styles.muted} style={{ marginBottom: "var(--space-2)" }}>
+                Selected ({selectedRowFilterItems.length})
+              </div>
+              <div className={styles.buttonRow}>
+                {selectedRowFilterItems.map((item) => (
+                  <button
+                    key={suggestionKey(item)}
+                    type="button"
+                    className={styles.button}
+                    aria-label={`Remove ${item.attributeKey}=${item.attributeValue}`}
+                    onClick={() => toggle(item)}
+                  >
+                    <Badge tone="warning">
+                      {item.attributeKey}={item.attributeValue}
+                    </Badge>{" "}
+                    ×
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {requestable.length > 0 && (
         <div className={styles.stack} style={{ marginTop: "var(--space-3)" }}>
@@ -466,6 +556,84 @@ function SuggestionsCard({
         </div>
       )}
     </Card>
+  );
+}
+
+function SuggestionTable({
+  label,
+  items,
+  selected,
+  onToggle,
+}: {
+  label: string;
+  items: SuggestedAttribute[];
+  selected: string[];
+  onToggle: (item: SuggestedAttribute) => void;
+}) {
+  return (
+    <div className={styles.tableWrap}>
+      <table className={styles.table} aria-label={label}>
+        <thead>
+          <tr>
+            <th />
+            <th>Attribute</th>
+            <th>Value</th>
+            <th>Covers</th>
+            <th>Columns</th>
+            <th>Reviewed by</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((item) => {
+            const key = suggestionKey(item);
+            const selectable = item.requestable;
+            return (
+              <tr key={`${key}:${item.isHierarchyParent}`}>
+                <td>
+                  {selectable ? (
+                    <input
+                      type="checkbox"
+                      aria-label={`Select ${item.attributeKey}=${item.attributeValue}`}
+                      checked={selected.includes(key)}
+                      onChange={() => onToggle(item)}
+                    />
+                  ) : null}
+                </td>
+                <td>
+                  <code>{item.attributeKey}</code>
+                  <div className={styles.muted} style={{ fontSize: "0.85em" }}>
+                    {item.kind === "row_filter" ? "row filter" : "sensitivity"}
+                  </div>
+                </td>
+                <td>
+                  <Badge tone={item.isHierarchyParent ? "info" : "warning"}>{item.attributeValue}</Badge>
+                  {item.isHierarchyParent && (
+                    <div className={styles.muted} style={{ fontSize: "0.85em" }}>
+                      broader path
+                    </div>
+                  )}
+                </td>
+                <td className={styles.muted}>
+                  {(item.coversPaths.length ? item.coversPaths : [item.attributeValue]).map((path) => (
+                    <code key={path} style={{ display: "block" }}>
+                      {path}
+                    </code>
+                  ))}
+                </td>
+                <td>
+                  {item.columnNames.map((name) => (
+                    <code key={name} style={{ marginRight: 6 }}>
+                      {name}
+                    </code>
+                  ))}
+                </td>
+                <td className={styles.muted}>{routeLabel(item)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

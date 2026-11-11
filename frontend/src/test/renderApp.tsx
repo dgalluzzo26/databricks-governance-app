@@ -27,6 +27,7 @@ import type {
   UpsertAttributeDefinitionRequest,
   UpsertCategoryApproverRequest,
   UpsertMaskRuleRequest,
+  UpsertPolicyExceptionRequest,
   UpsertRowFilterDimensionRequest,
   MaskHandlerValidateRequest,
   TableAccessInsight,
@@ -307,6 +308,20 @@ export const testTableAccessInsight: TableAccessInsight = {
       requestPath: null,
       columnNames: ["s_open"],
       coversPaths: ["*"],
+      isHierarchyParent: false,
+      routedTo: "app_admins",
+      resolvedCategory: null,
+      approvers: [],
+    },
+    {
+      kind: "row_filter",
+      attributeKey: "state",
+      attributeValue: "CA",
+      reason: "Row filter on column s_open: request state=CA to see matching rows.",
+      requestable: true,
+      requestPath: null,
+      columnNames: ["s_open"],
+      coversPaths: ["CA"],
       isHierarchyParent: false,
       routedTo: "app_admins",
       resolvedCategory: null,
@@ -683,6 +698,38 @@ export function fakeServices(
     help: {
       flows: async () =>
         "# Developer guide\n\n## Mental model\n\nMasks and row filters.\n\n## Row filter flow\n\nUse `state=*`.\n",
+    },
+    policyExceptions: {
+      list: async () => ({
+        exceptions: [
+          {
+            exceptionId: "system:app-sp",
+            principalName: "app-sp",
+            principalType: "SERVICE_PRINCIPAL",
+            note: "App service principal (built-in)",
+            createdBy: null,
+            createdAt: "2026-01-01T00:00:00Z",
+            system: true,
+          },
+        ],
+        total: 1,
+        systemPrincipals: ["app-sp"],
+      }),
+      upsert: async (body: UpsertPolicyExceptionRequest) => ({
+        exceptionId: "ex-1",
+        principalName: body.principalName,
+        principalType: body.principalType,
+        note: body.note ?? null,
+        createdBy: "admin",
+        createdAt: "2026-01-01T00:00:00Z",
+        system: false,
+      }),
+      delete: async () => undefined,
+      apply: async () => ({
+        exceptPrincipals: ["app-sp", "data-services"],
+        maskPackSynced: true,
+        rowFilterPackSynced: true,
+      }),
     },
   } as unknown as ApiServices;
 }

@@ -25,6 +25,7 @@ from backend.app.models.identity_attribute import (
     ValueSource,
 )
 from backend.app.models.mask_rule import MaskRuleDefinition, MaskRuleKind
+from backend.app.models.policy_exception import PolicyException
 from backend.app.models.principal import PrincipalKind
 from backend.app.repositories.base import (
     AccessRequestRepository,
@@ -32,6 +33,7 @@ from backend.app.repositories.base import (
     CategoryApproverRepository,
     IdentityAttributeRepository,
     MaskRuleRepository,
+    PolicyExceptionRepository,
     SettingsRepository,
     StorageProvider,
 )
@@ -189,6 +191,19 @@ CREATE TABLE IF NOT EXISTS {schema}.masking_config (
   updated_by   TEXT,
   updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS {schema}.policy_exceptions (
+  exception_id    TEXT PRIMARY KEY,
+  principal_name  TEXT NOT NULL,
+  principal_type  TEXT NOT NULL,
+  note            TEXT,
+  created_by      TEXT,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS policy_exceptions_uniq
+  ON {schema}.policy_exceptions (lower(principal_name), principal_type);
+CREATE INDEX IF NOT EXISTS policy_exceptions_principal_idx
+  ON {schema}.policy_exceptions (principal_type, lower(principal_name));
 """
 
 
@@ -539,6 +554,95 @@ class LakebaseCategoryApproverRepository(CategoryApproverRepository):
         )
 
 
+class LakebasePolicyExceptionRepository(PolicyExceptionRepository):
+    def __init__(self, pg: _Pg) -> None:
+        self._pg = pg
+
+    def list_exceptions(self) -> list[PolicyException]:
+        rows = self._pg.fetch(
+            "SELECT * FROM {schema}.policy_exceptions "
+            "ORDER BY principal_type, principal_name"
+        )
+        return [self._from_row(r) for r in rows]
+
+    def get_exception(self, exception_id: str) -> PolicyException | None:
+        rows = self._pg.fetch(
+            "SELECT * FROM {schema}.policy_exceptions WHERE exception_id = %(id)s",
+            {"id": exception_id},
+        )
+        return self._from_row(rows[0]) if rows else None
+
+    def upsert_exception(self, exception: PolicyException) -> PolicyException:
+        existing = self._pg.fetch(
+            """
+            SELECT exception_id FROM {schema}.policy_exceptions
+            WHERE lower(principal_name) = lower(%(principal)s)
+              AND principal_type = %(ptype)s
+            """,
+            {
+                "principal": exception.principal_name,
+                "ptype": exception.principal_type.value,
+            },
+        )
+        if existing:
+            exception_id = str(existing[0]["exception_id"])
+            self._pg.run(
+                """
+                UPDATE {schema}.policy_exceptions
+                SET note = %(note)s,
+                    created_by = COALESCE(%(created_by)s, created_by)
+                WHERE exception_id = %(id)s
+                """,
+                {
+                    "id": exception_id,
+                    "note": exception.note,
+                    "created_by": exception.created_by,
+                },
+            )
+            return self.get_exception(exception_id) or exception
+        self._pg.run(
+            """
+            INSERT INTO {schema}.policy_exceptions (
+              exception_id, principal_name, principal_type, note, created_by, created_at
+            ) VALUES (
+              %(exception_id)s, %(principal_name)s, %(principal_type)s,
+              %(note)s, %(created_by)s, %(created_at)s
+            )
+            """,
+            {
+                "exception_id": exception.exception_id,
+                "principal_name": exception.principal_name,
+                "principal_type": exception.principal_type.value,
+                "note": exception.note,
+                "created_by": exception.created_by,
+                "created_at": exception.created_at,
+            },
+        )
+        return exception
+
+    def delete_exception(self, exception_id: str) -> bool:
+        before = self.get_exception(exception_id)
+        if before is None:
+            return False
+        self._pg.run(
+            "DELETE FROM {schema}.policy_exceptions WHERE exception_id = %(id)s",
+            {"id": exception_id},
+        )
+        return True
+
+    @staticmethod
+    def _from_row(row: dict[str, Any]) -> PolicyException:
+        return PolicyException(
+            exception_id=row["exception_id"],
+            principal_name=row["principal_name"],
+            principal_type=PrincipalKind(row["principal_type"]),
+            note=row.get("note"),
+            created_by=row.get("created_by"),
+            created_at=row["created_at"],
+            system=False,
+        )
+
+
 class LakebaseAccessRequestRepository(AccessRequestRepository):
     def __init__(self, pg: _Pg) -> None:
         self._pg = pg
@@ -820,6 +924,7 @@ class LakebaseStorageProvider(StorageProvider):
         self._category_approvers = LakebaseCategoryApproverRepository(self._pg)
         self._access_requests = LakebaseAccessRequestRepository(self._pg)
         self._mask_rules = LakebaseMaskRuleRepository(self._pg)
+        self._policy_exceptions = LakebasePolicyExceptionRepository(self._pg)
 
     @property
     def settings(self) -> SettingsRepository:
@@ -844,6 +949,10 @@ class LakebaseStorageProvider(StorageProvider):
     @property
     def mask_rules(self) -> MaskRuleRepository:
         return self._mask_rules
+
+    @property
+    def policy_exceptions(self) -> PolicyExceptionRepository:
+        return self._policy_exceptions
 
     def initialize(self) -> None:
         self._pool.open(wait=True, timeout=30)

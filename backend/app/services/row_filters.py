@@ -111,6 +111,7 @@ class RowFilterService:
         governed_tags: GovernedTagService,
         identity_attributes: IdentityAttributeService,
         metadata_cache: TtlCache | None = None,
+        policy_exceptions=None,
     ) -> None:
         self._config = config
         self._workspace = workspace
@@ -119,6 +120,7 @@ class RowFilterService:
         self._governed_tags = governed_tags
         self._identity = identity_attributes
         self._metadata_cache = metadata_cache
+        self._policy_exceptions = policy_exceptions
         if not _POLICY_NAME.match(config.row_filter_policy_name):
             raise ValueError(f"Invalid row filter policy name {config.row_filter_policy_name!r}")
 
@@ -346,7 +348,9 @@ class RowFilterService:
         return counts
 
     def _except_principals(self) -> list[str]:
-        """App and admin SPs must see every row to seed values and manage data."""
+        """Built-in SPs plus configured global exceptions bypass the row filter."""
+        if self._policy_exceptions is not None:
+            return self._policy_exceptions.except_principals()
         ids = [self._workspace.app_client_id, self._workspace.admin_client_id]
         seen: list[str] = []
         for item in ids:

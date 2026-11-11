@@ -21,6 +21,7 @@ from backend.app.services.identity_attributes import IdentityAttributeService
 from backend.app.services.identity_uc_sync import IdentityUcSync
 from backend.app.services.mask_rules import MaskRuleService
 from backend.app.services.policies import PolicyService
+from backend.app.services.policy_exceptions import PolicyExceptionService
 from backend.app.services.request_context import RequestContextResolver
 from backend.app.services.row_filters import RowFilterService
 
@@ -45,6 +46,7 @@ class ServiceContainer:
     row_filters: RowFilterService
     mask_rules: MaskRuleService
     access_explorer: AccessExplorerService
+    policy_exceptions: PolicyExceptionService
     identity_uc_sync: IdentityUcSync | None = None
 
     @classmethod
@@ -65,8 +67,16 @@ class ServiceContainer:
             else None
         )
         identity_attributes = IdentityAttributeService(storage, governed_tags, uc_sync, sql)
+        policy_exceptions = PolicyExceptionService(storage, workspace)
         row_filters = RowFilterService(
-            config, workspace, sql, storage, governed_tags, identity_attributes, metadata_cache
+            config,
+            workspace,
+            sql,
+            storage,
+            governed_tags,
+            identity_attributes,
+            metadata_cache,
+            policy_exceptions,
         )
         mask_rules = MaskRuleService(
             config,
@@ -76,7 +86,10 @@ class ServiceContainer:
             metadata_cache,
             mirror_sql=app_sql if storage.kind == StorageBackend.LAKEBASE.value else sql,
             workspace=workspace,
+            policy_exceptions=policy_exceptions,
         )
+        policy_exceptions._mask_rules = mask_rules  # noqa: SLF001
+        policy_exceptions._row_filters = row_filters  # noqa: SLF001
         access_requests = AccessRequestService(storage, identity_attributes)
         return cls(
             config=config,
@@ -100,6 +113,7 @@ class ServiceContainer:
                 row_filters,
                 access_requests,
             ),
+            policy_exceptions=policy_exceptions,
             identity_uc_sync=uc_sync,
         )
 

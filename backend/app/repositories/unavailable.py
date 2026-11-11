@@ -13,12 +13,14 @@ from backend.app.models.identity_attribute import (
     IdentityAttributeAssignment,
 )
 from backend.app.models.mask_rule import MaskRuleDefinition
+from backend.app.models.policy_exception import PolicyException
 from backend.app.repositories.base import (
     AccessRequestRepository,
     AuditRepository,
     CategoryApproverRepository,
     IdentityAttributeRepository,
     MaskRuleRepository,
+    PolicyExceptionRepository,
     SettingsRepository,
     StorageProvider,
 )
@@ -128,6 +130,20 @@ class _UnavailableAccessRequests(_Unavailable, AccessRequestRepository):
         self._fail()
 
 
+class _UnavailablePolicyExceptions(_Unavailable, PolicyExceptionRepository):
+    def list_exceptions(self) -> list[PolicyException]:
+        self._fail()
+
+    def get_exception(self, exception_id: str) -> PolicyException | None:
+        self._fail()
+
+    def upsert_exception(self, exception: PolicyException) -> PolicyException:
+        self._fail()
+
+    def delete_exception(self, exception_id: str) -> bool:
+        self._fail()
+
+
 class _UnavailableMaskRules(_Unavailable, MaskRuleRepository):
     def list_rules(self) -> list[MaskRuleDefinition]:
         self._fail()
@@ -160,6 +176,7 @@ class UnavailableStorageProvider(StorageProvider):
         self._category_approvers = _UnavailableCategoryApprovers(reason)
         self._access_requests = _UnavailableAccessRequests(reason)
         self._mask_rules = _UnavailableMaskRules(reason)
+        self._policy_exceptions = _UnavailablePolicyExceptions(reason)
 
     @property
     def settings(self) -> SettingsRepository:
@@ -184,6 +201,10 @@ class UnavailableStorageProvider(StorageProvider):
     @property
     def mask_rules(self) -> MaskRuleRepository:
         return self._mask_rules
+
+    @property
+    def policy_exceptions(self) -> PolicyExceptionRepository:
+        return self._policy_exceptions
 
     def health(self) -> StorageHealth:
         return StorageHealth(backend=self.kind, healthy=False, detail=self._reason)

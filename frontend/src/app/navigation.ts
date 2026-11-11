@@ -1,5 +1,6 @@
 import type { ComponentType, SVGProps } from "react";
 import {
+  ExceptionIcon,
   ExplorerIcon,
   HelpIcon,
   HomeIcon,
@@ -30,6 +31,7 @@ export const navigation: NavSection[] = [
     items: [
       { label: "Access explorer", to: "/access-explorer", icon: ExplorerIcon },
       { label: "Policies", to: "/policies", icon: PoliciesIcon },
+      { label: "Exceptions", to: "/exceptions", icon: ExceptionIcon, adminOnly: true },
       { label: "Identity", to: "/identity", icon: IdentityIcon },
       { label: "Row filters", to: "/row-filters", icon: RowFilterIcon },
       { label: "Mask rules", to: "/mask-rules", icon: MaskRuleIcon },

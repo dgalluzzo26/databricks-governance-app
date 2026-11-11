@@ -17,9 +17,13 @@ import type {
   DecideAccessRequestBody,
   GovernedTagList,
   IdentityAttributeAssignment,
+  ApplyPolicyExceptionsResult,
   PolicyDetail,
+  PolicyException,
+  PolicyExceptionList,
   PolicyListParams,
   PolicyListResponse,
+  UpsertPolicyExceptionRequest,
   RowFilterAttachment,
   RowFilterAttachmentList,
   RowFilterDimension,
@@ -329,6 +333,26 @@ export class HelpApi {
   }
 }
 
+export class PolicyExceptionsApi {
+  constructor(private readonly http: HttpClient) {}
+
+  list(signal?: AbortSignal): Promise<PolicyExceptionList> {
+    return this.http.get<PolicyExceptionList>("/policy-exceptions", signal);
+  }
+
+  upsert(body: UpsertPolicyExceptionRequest): Promise<PolicyException> {
+    return this.http.put<PolicyException>("/policy-exceptions", body);
+  }
+
+  delete(exceptionId: string): Promise<void> {
+    return this.http.delete<void>(`/policy-exceptions/${encodeURIComponent(exceptionId)}`);
+  }
+
+  apply(): Promise<ApplyPolicyExceptionsResult> {
+    return this.http.post<ApplyPolicyExceptionsResult>("/policy-exceptions/apply");
+  }
+}
+
 export interface ApiServices {
   identity: IdentityApi;
   appInfo: AppInfoApi;
@@ -338,6 +362,7 @@ export interface ApiServices {
   maskRules: MaskRulesApi;
   accessExplorer: AccessExplorerApi;
   help: HelpApi;
+  policyExceptions: PolicyExceptionsApi;
 }
 
 export function createApiServices(http: HttpClient = new HttpClient()): ApiServices {
@@ -350,5 +375,6 @@ export function createApiServices(http: HttpClient = new HttpClient()): ApiServi
     maskRules: new MaskRulesApi(http),
     accessExplorer: new AccessExplorerApi(http),
     help: new HelpApi(http),
+    policyExceptions: new PolicyExceptionsApi(http),
   };
 }

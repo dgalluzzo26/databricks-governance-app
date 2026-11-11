@@ -13,6 +13,7 @@ import type {
   MaskHandlerDraftRequest,
   MaskHandlerValidateRequest,
   UpsertMaskRuleRequest,
+  UpsertPolicyExceptionRequest,
   UpsertRowFilterDimensionRequest,
 } from "./types";
 
@@ -33,6 +34,7 @@ export const queryKeys = {
   maskRules: ["mask-rules"] as const,
   maskRulePack: ["mask-rules", "pack"] as const,
   helpFlows: ["help", "flows"] as const,
+  policyExceptions: ["policy-exceptions"] as const,
 };
 
 export function useCurrentUser() {
@@ -478,5 +480,49 @@ export function useHelpFlows() {
     queryKey: queryKeys.helpFlows,
     queryFn: ({ signal }) => api.help.flows(signal),
     staleTime: 10 * 60_000,
+  });
+}
+
+export function usePolicyExceptions(enabled = true) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.policyExceptions,
+    queryFn: ({ signal }) => api.policyExceptions.list(signal),
+    enabled,
+  });
+}
+
+export function useUpsertPolicyException() {
+  const api = useApi();
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: UpsertPolicyExceptionRequest) => api.policyExceptions.upsert(body),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.policyExceptions });
+    },
+  });
+}
+
+export function useDeletePolicyException() {
+  const api = useApi();
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (exceptionId: string) => api.policyExceptions.delete(exceptionId),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.policyExceptions });
+    },
+  });
+}
+
+export function useApplyPolicyExceptions() {
+  const api = useApi();
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.policyExceptions.apply(),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.policyExceptions });
+      void client.invalidateQueries({ queryKey: queryKeys.maskRulePack });
+      void client.invalidateQueries({ queryKey: queryKeys.rowFilterPack });
+    },
   });
 }

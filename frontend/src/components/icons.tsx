@@ -64,6 +64,13 @@ export const HelpIcon = (p: IconProps) => (
   </Icon>
 );
 
+export const ExceptionIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M8 2.5 13.5 13.5h-11L8 2.5Z" />
+    <path d="M8 6.5v3.2M8 11.5v.2" />
+  </Icon>
+);
+
 export const ExternalIcon = (p: IconProps) => (
   <Icon {...p}>
     <path d="M9 2.5h4.5V7M13.5 2.5 7.5 8.5M11.5 9.5v4h-9v-9h4" />

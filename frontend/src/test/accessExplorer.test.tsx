@@ -17,19 +17,22 @@ describe("Access explorer", () => {
     expect(analyze).toHaveBeenCalledWith({ tableFullName: "demo.default.customers" });
     expect(await screen.findByText("demo.default.customers")).toBeInTheDocument();
 
-    const suggestions = screen.getByRole("table", { name: "Suggested attributes" });
-    expect(within(suggestions).getAllByText("finance.budget.PII.Name").length).toBeGreaterThan(0);
-    expect(within(suggestions).getAllByText("App admins").length).toBeGreaterThan(0);
+    const sensitivity = screen.getByRole("table", { name: "Sensitivity suggestions" });
+    expect(within(sensitivity).getAllByText("finance.budget.PII.Name").length).toBeGreaterThan(0);
     expect(
-      within(suggestions).getByRole("checkbox", {
+      within(sensitivity).getByRole("checkbox", {
         name: "Select sensitivity=finance.budget.PII.Name",
       }),
     ).toBeChecked();
+
+    const wildcard = screen.getByRole("table", { name: "Row filter wildcard" });
     expect(
-      within(suggestions).getByRole("checkbox", {
+      within(wildcard).getByRole("checkbox", {
         name: "Select state=*",
       }),
     ).toBeChecked();
+    // Concrete values stay hidden until the user searches.
+    expect(screen.queryByRole("checkbox", { name: "Select state=CA" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Request/ })).toBeDisabled();
     expect(screen.getByRole("link", { name: "My requests" })).toHaveAttribute(
       "href",
@@ -79,5 +82,37 @@ describe("Access explorer", () => {
 
     await user.click(await screen.findByRole("treeitem", { name: /customers/ }));
     expect(analyze).toHaveBeenCalledWith({ tableFullName: "demo.default.customers" });
+  });
+});
+
+describe("Access explorer row-filter selection", () => {
+  it("searches values, selects matches, and clears without listing every value", async () => {
+    const user = userEvent.setup();
+    const services = fakeServices();
+    renderApp("/access-explorer", services);
+
+    await user.type(await screen.findByPlaceholderText("catalog.schema.table"), "demo.default.customers");
+    await user.click(screen.getByRole("button", { name: "Analyze" }));
+
+    const wildcard = await screen.findByRole("table", { name: "Row filter wildcard" });
+    const star = within(wildcard).getByRole("checkbox", { name: "Select state=*" });
+    expect(star).toBeChecked();
+
+    await user.type(screen.getByLabelText("Find row-filter values"), "CA");
+    const matches = await screen.findByRole("table", { name: "Row filter value matches" });
+    const ca = within(matches).getByRole("checkbox", { name: "Select state=CA" });
+    expect(ca).not.toBeChecked();
+
+    await user.click(screen.getByRole("button", { name: "Select matches (1)" }));
+    expect(ca).toBeChecked();
+    expect(star).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "Remove state=CA" })).toBeInTheDocument();
+
+    await user.click(star);
+    expect(star).toBeChecked();
+    expect(ca).not.toBeChecked();
+
+    await user.click(screen.getByRole("button", { name: "Clear all row-filter values" }));
+    expect(star).not.toBeChecked();
   });
 });

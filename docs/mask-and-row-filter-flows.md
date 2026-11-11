@@ -219,8 +219,18 @@ Builder: `build_policy_sql`. Recreated on every `ensure_pack`.
 - `ROW FILTER has_row_access`
 - `MATCH COLUMNS` is the OR of `has_tag_value('row_filter', '<each dimension>')`
 - Passes `(column_value, get_column_tag_value(c, 'row_filter'))`
-- `EXCEPT` app + admin service principals so pack/seed jobs still see all rows
+- `EXCEPT` built-in app + admin service principals **plus** any principals in the global
+  Policy exceptions registry (Data Service groups, break-glass users, other SPs)
 - If no dimensions exist → `DROP POLICY`
+
+### Global policy exceptions
+
+UI: `/exceptions` · API: `/api/policy-exceptions`
+
+Admins manage a registry of USER / GROUP / SERVICE_PRINCIPAL principals that are added to the
+`EXCEPT` clause on both `mask_sensitivity_variant` and `rf_by_dimension`. Saving an exception
+(or clicking **Re-apply to policies**) regenerates both packs. App and admin SPs are always
+included as built-in system exceptions and cannot be removed.
 
 ### Maintenance cheat sheet (row filters)
 
