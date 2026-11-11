@@ -1,8 +1,9 @@
 /**
  * @file Admin UI for the tag-driven data-access group planner.
  *
- * Dry-run tab: configure tags, run the planner (never mutates UC), inspect plan and history.
- * Live tab: apply readiness, prerequisites, and where sync logs live (apply still locked).
+ * Dry-run tab: configure schedule, run the planner, inspect dry-run logs.
+ * Live tab: apply readiness, manual apply, live-only logs.
+ * Schedule can pause, dry-run only, or plan-then-apply each interval.
  */
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
@@ -14,7 +15,12 @@ import {
   useRunDataAccessSync,
   useSaveDataAccessSettings,
 } from "@/api/queries";
-import type { DataAccessConflictPolicy, DataAccessRun, DataAccessSettings } from "@/api/types";
+import type {
+  DataAccessConflictPolicy,
+  DataAccessRun,
+  DataAccessRunList,
+  DataAccessSettings,
+} from "@/api/types";
 import { Alert, Badge, Card, ErrorAlert, PageHeader, Spinner } from "@/components/ui";
 import styles from "../identity/IdentityPage.module.css";
 
@@ -27,6 +33,8 @@ export function DataAccessPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const requested = (searchParams.get("tab") as DataAccessTab | null) ?? "dry-run";
   const tab: DataAccessTab = requested === "live" ? "live" : "dry-run";
+  const [dryPage, setDryPage] = useState(1);
+  const [livePage, setLivePage] = useState(1);
 
   const setTab = (next: DataAccessTab) => {
     const params = new URLSearchParams(searchParams);
@@ -36,8 +44,10 @@ export function DataAccessPage() {
 
   const settingsQuery = useDataAccessSettings();
   const readiness = useDataAccessReadiness();
-  const latest = useDataAccessLatestRun();
-  const history = useDataAccessRuns();
+  const dryLatest = useDataAccessLatestRun("dry_run");
+  const liveLatest = useDataAccessLatestRun("apply");
+  const dryHistory = useDataAccessRuns("dry_run", dryPage);
+  const liveHistory = useDataAccessRuns("apply", livePage);
   const save = useSaveDataAccessSettings();
   const run = useRunDataAccessSync();
 
@@ -86,10 +96,8 @@ export function DataAccessPage() {
               <button type="button" className={styles.linkButton} onClick={() => setTab("live")}>
                 Live
               </button>{" "}
-              for apply prerequisites.{" "}
-              {!readiness.data.dryRunReady && (
-                <Link to="/status">Open App status</Link>
-              )}
+              for apply, or set the schedule mode to Apply so each interval plans then mutates.{" "}
+              {!readiness.data.dryRunReady && <Link to="/status">Open App status</Link>}
             </Alert>
           )}
           {settingsQuery.isPending && <Spinner label="Loading settings" />}
@@ -100,6 +108,7 @@ export function DataAccessPage() {
             <SettingsCard
               initial={settingsQuery.data.settings}
               minInterval={settingsQuery.data.minIntervalMinutes}
+              applyReady={readiness.data?.applyReady === true && readiness.data?.setupReady === true}
               saving={save.isPending}
               error={save.error}
               onSave={(body) => void save.mutateAsync(body)}
@@ -120,17 +129,27 @@ export function DataAccessPage() {
           >
             <p className={styles.muted}>
               Plans groups, nesting, Identity→membership diffs, and table SELECT grants without
-              mutating Unity Catalog. Scheduled sync stays dry-run; use Live to apply.
+              mutating Unity Catalog.
             </p>
             {run.error && <ErrorAlert error={run.error} title="Dry-run failed" />}
-            {latest.isPending && <Spinner label="Loading latest run" />}
-            {latest.error && <ErrorAlert error={latest.error} title="Could not load latest run" />}
-            {latest.data == null && !latest.isPending && (
+            {dryLatest.isPending && <Spinner label="Loading latest dry-run" />}
+            {dryLatest.error && (
+              <ErrorAlert error={dryLatest.error} title="Could not load latest dry-run" />
+            )}
+            {dryLatest.data == null && !dryLatest.isPending && (
               <p className={styles.muted}>No dry-run has been stored yet.</p>
             )}
-            {latest.data && <RunReport run={latest.data} />}
+            {dryLatest.data && <RunReport run={dryLatest.data} />}
           </Card>
-          <RunHistoryCard history={history.data} title="Run history / logs" />
+          <RunHistoryCard
+            title="Dry-run logs"
+            emptyHint="No dry-run logs in the last 30 days."
+            history={dryHistory.data}
+            isPending={dryHistory.isPending}
+            error={dryHistory.error}
+            page={dryPage}
+            onPageChange={setDryPage}
+          />
         </>
       )}
 
@@ -139,8 +158,15 @@ export function DataAccessPage() {
           readiness={readiness}
           applyAvailable={settingsQuery.data?.applyAvailable === true}
           setupReady={readiness.data?.setupReady === true}
-          history={history.data}
-          latest={latest.data}
+          history={liveHistory.data}
+          historyPending={liveHistory.isPending}
+          historyError={liveHistory.error}
+          page={livePage}
+          onPageChange={setLivePage}
+          latest={liveLatest.data}
+          latestPending={liveLatest.isPending}
+          scheduleMode={settingsQuery.data?.settings.scheduleMode}
+          scheduleEnabled={settingsQuery.data?.settings.scheduleEnabled}
           run={run}
         />
       )}
@@ -149,19 +175,41 @@ export function DataAccessPage() {
 }
 
 /**
- * Live apply: readiness, membership preview from latest plan, confirm + Run apply.
+ * Live apply: readiness, membership preview from latest apply plan, confirm + Run apply.
  */
 function LiveTab(props: {
   readiness: ReturnType<typeof useDataAccessReadiness>;
   applyAvailable: boolean;
   setupReady: boolean;
-  history: DataAccessRun[] | undefined;
+  history: DataAccessRunList | undefined;
+  historyPending: boolean;
+  historyError: Error | null;
+  page: number;
+  onPageChange: (page: number) => void;
   latest: DataAccessRun | null | undefined;
+  latestPending: boolean;
+  scheduleMode: "dry_run" | "apply" | undefined;
+  scheduleEnabled: boolean | undefined;
   run: ReturnType<typeof useRunDataAccessSync>;
 }) {
-  const { readiness, applyAvailable, setupReady, history, latest, run } = props;
+  const {
+    readiness,
+    applyAvailable,
+    setupReady,
+    history,
+    historyPending,
+    historyError,
+    page,
+    onPageChange,
+    latest,
+    latestPending,
+    scheduleMode,
+    scheduleEnabled,
+    run,
+  } = props;
   const canApply =
     applyAvailable && readiness.data?.applyReady === true && setupReady && !run.isPending;
+  const scheduleApplies = scheduleEnabled === true && scheduleMode === "apply";
 
   return (
     <div className={styles.stack}>
@@ -179,19 +227,35 @@ function LiveTab(props: {
         </Alert>
       )}
 
+      <Card title="Schedule">
+        {scheduleApplies ? (
+          <Alert tone="success" title="Scheduled apply is on">
+            Every interval the scheduler inventories tags, builds a plan, then mutates groups /
+            membership / grants — the same path as Run apply. Logs appear below (apply only).
+          </Alert>
+        ) : (
+          <p className={styles.muted}>
+            Scheduled apply is off
+            {scheduleEnabled === false
+              ? " (schedule paused)."
+              : " (schedule mode is Dry-run)."}{" "}
+            Turn it on under Dry-run → Settings → Schedule mode = Apply.
+          </p>
+        )}
+      </Card>
+
       <Card title="Before you apply">
         <ul className={styles.list}>
           <li>
-            Confirm the latest Dry-run plan (groups, nesting, membership, table SELECT, revokes).
+            Each apply (manual or scheduled) plans first, then creates/nests groups, syncs
+            membership, and GRANT/REVOKE.
           </li>
           <li>
             Identity <code>data_access</code> assignments drive who is added to each{" "}
             <code>dac_*</code> group. Review holders in{" "}
             <Link to="/attribute-explorer">Attribute explorer</Link>.
           </li>
-          <li>
-            Path approvers are optional for requests; they do not gate apply.
-          </li>
+          <li>Path approvers are optional for requests; they do not gate apply.</li>
         </ul>
       </Card>
 
@@ -218,15 +282,16 @@ function LiveTab(props: {
       >
         <p className={styles.muted}>
           Order: create groups → nest parents into children → sync members from Identity assignments
-          → GRANT adds → REVOKE stale managed grants. Scheduled sync stays dry-run.
+          → GRANT adds → REVOKE stale managed grants.
         </p>
         {run.error && <ErrorAlert error={run.error} title="Apply failed" />}
+        {latestPending && <Spinner label="Loading latest apply" />}
         {latest?.plan && (
           <>
             <p>
-              Latest plan: members +{latest.plan.summary.membersToAdd ?? 0} / −
-              {latest.plan.summary.membersToRemove ?? 0}; grants +{latest.plan.summary.grantsToAdd} / −
-              {latest.plan.summary.grantsToRevoke}; groups to create{" "}
+              Latest apply plan: members +{latest.plan.summary.membersToAdd ?? 0} / −
+              {latest.plan.summary.membersToRemove ?? 0}; grants +{latest.plan.summary.grantsToAdd}{" "}
+              / −{latest.plan.summary.grantsToRevoke}; groups to create{" "}
               {latest.plan.summary.groupsToCreate}.
             </p>
             {(latest.plan.membershipChanges?.length ?? 0) > 0 && (
@@ -251,71 +316,113 @@ function LiveTab(props: {
         )}
       </Card>
 
-      <RunHistoryCard history={history} title="Sync logs (all modes)" />
+      <RunHistoryCard
+        title="Live apply logs"
+        emptyHint="No apply logs in the last 30 days."
+        history={history}
+        isPending={historyPending}
+        error={historyError}
+        page={page}
+        onPageChange={onPageChange}
+      />
     </div>
   );
 }
 
-function RunHistoryCard(props: { history: DataAccessRun[] | undefined; title: string }) {
-  if (!props.history || props.history.length === 0) {
-    return (
-      <Card title={props.title}>
-        <p className={styles.muted}>No runs stored yet. Dry-run → Run now writes the first log entry.</p>
-      </Card>
-    );
-  }
+function RunHistoryCard(props: {
+  history: DataAccessRunList | undefined;
+  title: string;
+  emptyHint: string;
+  isPending: boolean;
+  error: Error | null;
+  page: number;
+  onPageChange: (page: number) => void;
+}) {
+  const { history, title, emptyHint, isPending, error, page, onPageChange } = props;
+  const totalPages = history ? Math.max(1, Math.ceil(history.total / history.pageSize)) : 1;
+
   return (
-    <Card title={props.title}>
-      <div className={styles.tableWrap}>
-        <table className={styles.table}>
-          <thead>
-            <tr>
-              <th>When</th>
-              <th>Status</th>
-              <th>Mode</th>
-              <th>Trigger</th>
-              <th>Add / revoke / conflicts</th>
-            </tr>
-          </thead>
-          <tbody>
-            {props.history.map((item) => (
-              <tr key={item.runId}>
-                <td>{new Date(item.startedAt).toLocaleString()}</td>
-                <td>
-                  <Badge
-                    tone={
-                      item.status === "success"
-                        ? "success"
-                        : item.status === "failed"
-                          ? "danger"
-                          : "neutral"
-                    }
-                  >
-                    {item.status}
-                  </Badge>
-                </td>
-                <td>{item.mode}</td>
-                <td>{item.trigger}</td>
-                <td>
-                  {item.summary
-                    ? `${item.summary.grantsToAdd} / ${item.summary.grantsToRevoke} / ${item.summary.conflicts}`
-                    : (item.error ?? "—")}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+    <Card title={title}>
+      {isPending && <Spinner label="Loading logs" />}
+      {error && <ErrorAlert error={error} title="Could not load logs" />}
+      {!isPending && !error && (!history || history.runs.length === 0) && (
+        <p className={styles.muted}>{emptyHint}</p>
+      )}
+      {history && history.runs.length > 0 && (
+        <>
+          <p className={styles.muted}>
+            Last {history.retentionDays} days · {history.total} run
+            {history.total === 1 ? "" : "s"} · page {history.page} of {totalPages}
+          </p>
+          <div className={styles.tableWrap}>
+            <table className={styles.table} aria-label={title}>
+              <thead>
+                <tr>
+                  <th>When</th>
+                  <th>Status</th>
+                  <th>Trigger</th>
+                  <th>Add / revoke / conflicts</th>
+                </tr>
+              </thead>
+              <tbody>
+                {history.runs.map((item) => (
+                  <tr key={item.runId}>
+                    <td>{new Date(item.startedAt).toLocaleString()}</td>
+                    <td>
+                      <Badge
+                        tone={
+                          item.status === "success"
+                            ? "success"
+                            : item.status === "failed"
+                              ? "danger"
+                              : "neutral"
+                        }
+                      >
+                        {item.status}
+                      </Badge>
+                    </td>
+                    <td>{item.trigger}</td>
+                    <td>
+                      {item.summary
+                        ? `${item.summary.grantsToAdd} / ${item.summary.grantsToRevoke} / ${item.summary.conflicts}`
+                        : (item.error ?? "—")}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className={styles.buttonRow}>
+            <button
+              type="button"
+              className={styles.button}
+              disabled={page <= 1}
+              onClick={() => onPageChange(page - 1)}
+            >
+              Previous
+            </button>
+            <button
+              type="button"
+              className={styles.button}
+              disabled={page >= totalPages}
+              onClick={() => onPageChange(page + 1)}
+            >
+              Next
+            </button>
+          </div>
+        </>
+      )}
     </Card>
   );
 }
 
 /**
- * Editable settings form for tags, catalogs, interval, and conflict policy.
+ * Editable settings form for tags, catalogs, interval, schedule, and conflict policy.
  */
 function SettingsCard(props: {
   initial: DataAccessSettings;
   minInterval: number;
+  applyReady: boolean;
   saving: boolean;
   error: Error | null;
   onSave: (body: DataAccessSettings) => void;
@@ -391,6 +498,40 @@ function SettingsCard(props: {
             />
           </label>
           <label className={styles.field}>
+            <span className={styles.label}>Schedule</span>
+            <select
+              className={styles.select}
+              value={form.scheduleEnabled ? "on" : "paused"}
+              onChange={(e) =>
+                setForm({ ...form, scheduleEnabled: e.target.value === "on" })
+              }
+              aria-label="Schedule"
+            >
+              <option value="on">Enabled</option>
+              <option value="paused">Paused</option>
+            </select>
+          </label>
+          <label className={styles.field}>
+            <span className={styles.label}>Schedule mode</span>
+            <select
+              className={styles.select}
+              value={form.scheduleMode}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  scheduleMode: e.target.value as "dry_run" | "apply",
+                })
+              }
+              aria-label="Schedule mode"
+              title="Apply still plans first, then mutates Unity Catalog"
+            >
+              <option value="dry_run">Dry-run (plan only)</option>
+              <option value="apply" disabled={!props.applyReady}>
+                Apply (plan then mutate)
+              </option>
+            </select>
+          </label>
+          <label className={styles.field}>
             <span className={styles.label}>Conflict reporting</span>
             <select
               className={styles.select}
@@ -421,8 +562,18 @@ function SettingsCard(props: {
             />
           </label>
         </div>
+        {form.scheduleEnabled && form.scheduleMode === "apply" && (
+          <Alert tone="warning" title="Scheduled apply will mutate Unity Catalog">
+            Each interval invents the desired state from tags + Identity, then creates groups,
+            syncs members, and GRANT/REVOKE. Pause the schedule or switch mode to Dry-run to stop.
+          </Alert>
+        )}
         <div className={styles.buttonRow}>
-          <button type="submit" className={`${styles.button} ${styles.buttonPrimary}`} disabled={props.saving}>
+          <button
+            type="submit"
+            className={`${styles.button} ${styles.buttonPrimary}`}
+            disabled={props.saving}
+          >
             {props.saving ? "Saving…" : "Save settings"}
           </button>
         </div>
@@ -447,10 +598,10 @@ function RunReport({ run }: { run: DataAccessRun }) {
       {run.error && <Alert tone="danger" title="Run failed">{run.error}</Alert>}
       {summary && (
         <p>
-          Eligible objects {summary.eligibleObjects}. Unreviewed skipped {summary.skippedUnreviewed}. Groups to
-          create {summary.groupsToCreate}. Members to add {summary.membersToAdd ?? 0}, remove{" "}
-          {summary.membersToRemove ?? 0}. Grants to add {summary.grantsToAdd}, revoke {summary.grantsToRevoke},
-          unchanged {summary.grantsUnchanged}. Conflicts {summary.conflicts}.
+          Eligible objects {summary.eligibleObjects}. Unreviewed skipped {summary.skippedUnreviewed}.
+          Groups to create {summary.groupsToCreate}. Members to add {summary.membersToAdd ?? 0},
+          remove {summary.membersToRemove ?? 0}. Grants to add {summary.grantsToAdd}, revoke{" "}
+          {summary.grantsToRevoke}, unchanged {summary.grantsUnchanged}. Conflicts {summary.conflicts}.
         </p>
       )}
       {plan?.driftSinceLastRun.map((note) => (
@@ -458,15 +609,26 @@ function RunReport({ run }: { run: DataAccessRun }) {
           {note}
         </div>
       ))}
-      {plan?.truncated && <Alert tone="warning" title="Lists truncated">Showing the first 200 rows in each table.</Alert>}
+      {plan?.truncated && (
+        <Alert tone="warning" title="Lists truncated">
+          Showing the first 200 rows in each table.
+        </Alert>
+      )}
       {(plan?.applyErrors?.length ?? 0) > 0 && (
-        <Alert tone="warning" title="Apply step errors">{plan!.applyErrors.join("; ")}</Alert>
+        <Alert tone="warning" title="Apply step errors">
+          {plan!.applyErrors.join("; ")}
+        </Alert>
       )}
       {plan && plan.groups.length > 0 && (
         <GrantTable
           caption="Groups"
           headers={["Group", "Value", "Parent", "Exists"]}
-          rows={plan.groups.map((g) => [g.name, g.value, g.parentGroup ?? "—", g.exists ? "yes" : "would create"])}
+          rows={plan.groups.map((g) => [
+            g.name,
+            g.value,
+            g.parentGroup ?? "—",
+            g.exists ? "yes" : "would create",
+          ])}
         />
       )}
       {plan && (plan.membershipChanges?.length ?? 0) > 0 && (
@@ -493,7 +655,12 @@ function RunReport({ run }: { run: DataAccessRun }) {
         <GrantTable
           caption="Would revoke"
           headers={["Type", "Object", "Group", "Privilege"]}
-          rows={plan.grantsToRevoke.map((g) => [g.securableType, g.fullName, g.principal, g.privilege])}
+          rows={plan.grantsToRevoke.map((g) => [
+            g.securableType,
+            g.fullName,
+            g.principal,
+            g.privilege,
+          ])}
         />
       )}
       {plan && plan.conflicts.length > 0 && (

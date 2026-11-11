@@ -61,6 +61,8 @@ export const testDataAccessSettings: DataAccessSettingsView = {
     allowedCatalogs: [],
     dataPrivileges: ["SELECT"],
     intervalMinutes: 15,
+    scheduleEnabled: true,
+    scheduleMode: "dry_run",
     conflictPolicy: "hold",
     dryRun: true,
   },
@@ -664,14 +666,43 @@ export function fakeServices(
         overrides.dataAccessReadiness instanceof Error
           ? Promise.reject(overrides.dataAccessReadiness)
           : Promise.resolve(overrides.dataAccessReadiness ?? testDataAccessReadiness),
-      listRuns: () =>
-        overrides.dataAccessRun instanceof Error
-          ? Promise.reject(overrides.dataAccessRun)
-          : Promise.resolve(overrides.dataAccessRun ? [overrides.dataAccessRun] : [testDataAccessRun]),
-      latestRun: () =>
-        overrides.dataAccessRun instanceof Error
-          ? Promise.reject(overrides.dataAccessRun)
-          : Promise.resolve(overrides.dataAccessRun === null ? null : (overrides.dataAccessRun ?? testDataAccessRun)),
+      listRuns: async (
+        params?: { mode?: "dry_run" | "apply"; page?: number; pageSize?: number },
+      ) => {
+        if (overrides.dataAccessRun instanceof Error) {
+          return Promise.reject(overrides.dataAccessRun);
+        }
+        if (overrides.dataAccessRun === null) {
+          return {
+            runs: [],
+            total: 0,
+            page: params?.page ?? 1,
+            pageSize: params?.pageSize ?? 20,
+            mode: params?.mode ?? null,
+            retentionDays: 30,
+          };
+        }
+        const run = overrides.dataAccessRun ?? testDataAccessRun;
+        const mode = params?.mode;
+        const include = !mode || run.mode === mode;
+        return {
+          runs: include ? [run] : [],
+          total: include ? 1 : 0,
+          page: params?.page ?? 1,
+          pageSize: params?.pageSize ?? 20,
+          mode: mode ?? null,
+          retentionDays: 30,
+        };
+      },
+      latestRun: async (mode?: "dry_run" | "apply") => {
+        if (overrides.dataAccessRun instanceof Error) {
+          return Promise.reject(overrides.dataAccessRun);
+        }
+        if (overrides.dataAccessRun === null) return null;
+        const run = overrides.dataAccessRun ?? testDataAccessRun;
+        if (mode && run.mode !== mode) return null;
+        return run;
+      },
       runNow: async (_mode?: "dry_run" | "apply") =>
         overrides.dataAccessRun instanceof Error
           ? Promise.reject(overrides.dataAccessRun)

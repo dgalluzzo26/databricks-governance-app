@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 from backend.app.api.deps import Admin, Container
 from backend.app.models.data_access import (
+    RUN_HISTORY_PAGE_SIZE_DEFAULT,
+    RUN_HISTORY_PAGE_SIZE_MAX,
     DataAccessReadiness,
     DataAccessRun,
+    DataAccessRunList,
     DataAccessSettings,
     DataAccessSettingsView,
     RunDataAccessRequest,
@@ -57,28 +60,50 @@ def readiness(_: Admin, container: Container) -> DataAccessReadiness:
     return container.data_access.readiness()
 
 
-@router.get("/runs", response_model=list[DataAccessRun])
-def list_runs(_: Admin, container: Container) -> list[DataAccessRun]:
-    """List recent syncs, newest first (summaries only).
+@router.get("/runs", response_model=DataAccessRunList)
+def list_runs(
+    _: Admin,
+    container: Container,
+    mode: str | None = Query(default=None, description="dry_run or apply"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(
+        default=RUN_HISTORY_PAGE_SIZE_DEFAULT,
+        ge=1,
+        le=RUN_HISTORY_PAGE_SIZE_MAX,
+    ),
+) -> DataAccessRunList:
+    """List syncs for the last 30 days, newest first (summaries only).
 
-    Requires app admin.
+    Requires app admin. Filter by mode so Dry-run and Live tabs stay separate.
+
+    Args:
+        mode: Optional ``dry_run`` or ``apply``.
+        page: 1-based page.
+        page_size: Rows per page.
 
     Returns:
-        Stored runs without full plans.
+        Paginated runs without full plans.
     """
-    return container.data_access.list_runs()
+    return container.data_access.list_runs(mode=mode, page=page, page_size=page_size)
 
 
 @router.get("/runs/latest", response_model=DataAccessRun | None)
-def latest_run(_: Admin, container: Container) -> DataAccessRun | None:
+def latest_run(
+    _: Admin,
+    container: Container,
+    mode: str | None = Query(default=None, description="dry_run or apply"),
+) -> DataAccessRun | None:
     """Return the most recent sync including its truncated plan.
 
     Requires app admin.
 
+    Args:
+        mode: Optional ``dry_run`` or ``apply`` filter.
+
     Returns:
-        The latest run, or null when none exist.
+        The latest matching run, or null when none exist.
     """
-    return container.data_access.latest_run()
+    return container.data_access.latest_run(mode=mode)
 
 
 @router.post("/runs", response_model=DataAccessRun)
@@ -97,5 +122,5 @@ def run_now(
     Returns:
         The finished run.
     """
-    mode = (body.mode if body is not None else "dry_run")
+    mode = body.mode if body is not None else "dry_run"
     return container.data_access.run_now(admin, mode=mode)

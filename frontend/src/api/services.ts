@@ -13,6 +13,7 @@ import type {
   AttributeExplorerResult,
   DataAccessReadiness,
   DataAccessRun,
+  DataAccessRunList,
   DataAccessSettings,
   DataAccessSettingsView,
   DirectoryPrincipalList,
@@ -178,23 +179,38 @@ export class DataAccessApi {
   }
 
   /**
-   * `GET /data-access/runs` — recent dry-runs, newest first, without full plans.
+   * `GET /data-access/runs` — paginated runs for the last 30 days (summaries only).
    *
+   * @param params - Optional mode filter and page.
    * @param signal - Optional abort signal.
-   * @returns Stored runs.
+   * @returns Paginated run list.
    */
-  listRuns(signal?: AbortSignal): Promise<DataAccessRun[]> {
-    return this.http.get<DataAccessRun[]>("/data-access/runs", signal);
+  listRuns(
+    params?: { mode?: "dry_run" | "apply"; page?: number; pageSize?: number },
+    signal?: AbortSignal,
+  ): Promise<DataAccessRunList> {
+    return this.http.get<DataAccessRunList>(
+      `/data-access/runs${toQuery({
+        mode: params?.mode,
+        page: params?.page != null ? String(params.page) : undefined,
+        page_size: params?.pageSize != null ? String(params.pageSize) : undefined,
+      })}`,
+      signal,
+    );
   }
 
   /**
-   * `GET /data-access/runs/latest` — most recent dry-run including its truncated plan.
+   * `GET /data-access/runs/latest` — most recent run including its truncated plan.
    *
+   * @param mode - Optional ``dry_run`` or ``apply`` filter.
    * @param signal - Optional abort signal.
-   * @returns The latest run, or `null` when none exist.
+   * @returns The latest matching run, or `null` when none exist.
    */
-  latestRun(signal?: AbortSignal): Promise<DataAccessRun | null> {
-    return this.http.get<DataAccessRun | null>("/data-access/runs/latest", signal);
+  latestRun(mode?: "dry_run" | "apply", signal?: AbortSignal): Promise<DataAccessRun | null> {
+    return this.http.get<DataAccessRun | null>(
+      `/data-access/runs/latest${toQuery({ mode })}`,
+      signal,
+    );
   }
 
   /**

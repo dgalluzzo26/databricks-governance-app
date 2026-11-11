@@ -21,9 +21,13 @@ from backend.app.core.errors import InvalidRequestError, NotConfiguredError
 from backend.app.models.data_access import (
     MIN_SYNC_INTERVAL_MINUTES,
     RUN_HISTORY_LIMIT,
+    RUN_HISTORY_PAGE_SIZE_DEFAULT,
+    RUN_HISTORY_PAGE_SIZE_MAX,
+    RUN_HISTORY_RETENTION_DAYS,
     DataAccessPlan,
     DataAccessReadiness,
     DataAccessRun,
+    DataAccessRunList,
     DataAccessSettings,
     DataAccessSettingsView,
     MembershipAction,
@@ -172,21 +176,50 @@ class DataAccessService:
             ),
         ]
 
-    def list_runs(self) -> list[DataAccessRun]:
-        """Return recent sync runs, newest first, without full plans.
+    def list_runs(
+        self,
+        *,
+        mode: str | None = None,
+        page: int = 1,
+        page_size: int = RUN_HISTORY_PAGE_SIZE_DEFAULT,
+    ) -> DataAccessRunList:
+        """Return paginated sync runs for the last retention window.
+
+        Args:
+            mode: Optional ``dry_run`` or ``apply`` filter.
+            page: 1-based page index.
+            page_size: Rows per page (clamped).
 
         Returns:
-            Up to ``RUN_HISTORY_LIMIT`` runs.
+            Summaries only (no full plans), newest first.
         """
-        return [r.model_copy(update={"plan": None}) for r in self._runs()]
+        mode_filter = self._normalize_mode_filter(mode)
+        page = max(1, page)
+        page_size = min(max(1, page_size), RUN_HISTORY_PAGE_SIZE_MAX)
+        filtered = self._filtered_runs(mode=mode_filter)
+        total = len(filtered)
+        start = (page - 1) * page_size
+        page_rows = filtered[start : start + page_size]
+        return DataAccessRunList(
+            runs=[r.model_copy(update={"plan": None}) for r in page_rows],
+            total=total,
+            page=page,
+            page_size=page_size,
+            mode=mode_filter,
+            retention_days=RUN_HISTORY_RETENTION_DAYS,
+        )
 
-    def latest_run(self) -> DataAccessRun | None:
-        """Return the most recent run including its truncated plan.
+    def latest_run(self, *, mode: str | None = None) -> DataAccessRun | None:
+        """Return the most recent run (optionally mode-filtered) including its plan.
+
+        Args:
+            mode: Optional ``dry_run`` or ``apply`` filter.
 
         Returns:
-            The newest run, or None when none have been stored.
+            The newest matching run in the retention window, or None.
         """
-        runs = self._runs()
+        mode_filter = self._normalize_mode_filter(mode)
+        runs = self._filtered_runs(mode=mode_filter)
         return runs[0] if runs else None
 
     def run_now(self, actor: CurrentUser, *, mode: str = "dry_run") -> DataAccessRun:
@@ -253,7 +286,14 @@ class DataAccessService:
             groups = self._group_loader(settings)
             assignments = self._assignment_loader(settings)
             members = self._member_loader(settings, groups)
-            previous = next((r for r in self._runs() if r.status == SyncRunStatus.SUCCESS), None)
+            previous = next(
+                (
+                    r
+                    for r in self._filtered_runs(mode=mode)
+                    if r.status == SyncRunStatus.SUCCESS
+                ),
+                None,
+            )
             plan = plan_data_access(
                 settings,
                 tags,
@@ -318,19 +358,52 @@ class DataAccessService:
             self._thread = None
 
     def _scheduler_loop(self) -> None:
-        """Sleep for the configured interval, then dry-run, until stopped."""
+        """Sleep for the interval, then dry-run or apply per settings when enabled.
+
+        Apply mode still plans first (inventory → plan → mutate) in one run — the same
+        path as Live → Run apply. Readiness failures and lock contention skip the tick.
+        """
         while not self._stop.wait(self._interval_seconds()):
+            settings = self._settings()
+            if not settings.schedule_enabled:
+                logger.debug("Scheduled data-access sync paused (schedule_enabled=false)")
+                continue
+            mode = (settings.schedule_mode.value if settings.schedule_mode else "dry_run").lower()
+            if mode not in {"dry_run", "apply"}:
+                mode = "dry_run"
             try:
-                self.run_sync(actor="scheduler", trigger=SyncTrigger.SCHEDULE)
-            except InvalidRequestError:
-                logger.info("Skipping scheduled data-access dry-run; another run holds the lock")
+                self.run_sync(actor="scheduler", trigger=SyncTrigger.SCHEDULE, mode=mode)
+            except InvalidRequestError as exc:
+                logger.info("Skipping scheduled data-access %s: %s", mode, exc)
             except Exception:
-                logger.exception("Scheduled data-access dry-run failed")
+                logger.exception("Scheduled data-access %s failed", mode)
 
     def _interval_seconds(self) -> float:
         """Return the current scheduler sleep in seconds (at least the minimum)."""
         minutes = max(self._settings().interval_minutes, MIN_SYNC_INTERVAL_MINUTES)
         return float(minutes * 60)
+
+    @staticmethod
+    def _normalize_mode_filter(mode: str | None) -> str | None:
+        """Return ``dry_run`` / ``apply`` or None; reject unknown values."""
+        if mode is None or not str(mode).strip():
+            return None
+        text = str(mode).strip().lower()
+        if text not in {"dry_run", "apply"}:
+            raise InvalidRequestError("mode must be dry_run or apply")
+        return text
+
+    def _retention_cutoff(self) -> datetime:
+        """UTC timestamp before which runs are hidden and pruned."""
+        return datetime.now(UTC) - timedelta(days=RUN_HISTORY_RETENTION_DAYS)
+
+    def _filtered_runs(self, *, mode: str | None = None) -> list[DataAccessRun]:
+        """Runs in the retention window, optionally filtered by mode, newest first."""
+        cutoff = self._retention_cutoff()
+        runs = [r for r in self._runs() if r.started_at >= cutoff]
+        if mode:
+            runs = [r for r in runs if (r.mode or "dry_run").lower() == mode]
+        return runs
 
     def _settings(self) -> DataAccessSettings:
         """Load settings from storage, or defaults when missing/invalid."""
@@ -358,9 +431,14 @@ class DataAccessService:
         return runs
 
     def _write_run(self, run: DataAccessRun) -> None:
-        """Upsert ``run`` at the front of history, dropping the oldest past the cap."""
+        """Upsert ``run`` at the front; prune by retention days and hard cap."""
         with self._lock:
-            existing = [r for r in self._runs() if r.run_id != run.run_id]
+            cutoff = self._retention_cutoff()
+            existing = [
+                r
+                for r in self._runs()
+                if r.run_id != run.run_id and r.started_at >= cutoff
+            ]
             blob = [run.model_dump(mode="json"), *[r.model_dump(mode="json") for r in existing]]
             self._storage.settings.put_many({_RUNS_KEY: blob[:RUN_HISTORY_LIMIT]}, "system")
 
@@ -481,7 +559,7 @@ class DataAccessService:
               {catalog_filter}
             """
         ):
-            if row.get("inherited_from"):
+            if self._is_inherited_privilege(row.get("inherited_from")):
                 continue
             grants.append(
                 ActualGrant(
@@ -499,7 +577,7 @@ class DataAccessService:
               {self._catalog_sql(settings, "catalog_name")}
             """
         ):
-            if row.get("inherited_from"):
+            if self._is_inherited_privilege(row.get("inherited_from")):
                 continue
             grants.append(
                 ActualGrant(
@@ -517,7 +595,7 @@ class DataAccessService:
               {self._catalog_sql(settings, "table_catalog")}
             """
         ):
-            if row.get("inherited_from"):
+            if self._is_inherited_privilege(row.get("inherited_from")):
                 continue
             grants.append(
                 ActualGrant(
@@ -528,6 +606,19 @@ class DataAccessService:
                 )
             )
         return grants
+
+    @staticmethod
+    def _is_inherited_privilege(inherited_from: object) -> bool:
+        """True when the privilege is inherited from a parent securable.
+
+        ``information_schema`` returns the string ``NONE`` for direct grants; that must
+        not be treated as inherited (a truthy check would skip every direct grant and
+        prevent REVOKE of stale ``dac_*`` privileges after a tag change).
+        """
+        if inherited_from is None:
+            return False
+        text = str(inherited_from).strip()
+        return bool(text) and text.upper() != "NONE"
 
     # Account SCIM — Unity Catalog only recognizes account groups as GRANT principals.
     # Workspace ``groups.create`` yields WorkspaceGroup (PRINCIPAL_DOES_NOT_EXIST on GRANT).

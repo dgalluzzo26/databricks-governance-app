@@ -87,6 +87,40 @@ def test_plan_revokes_stale_managed_grants() -> None:
     assert plan.summary.groups_to_create == 0
 
 
+def test_plan_revokes_previous_group_after_tag_change() -> None:
+    """Retagging a table from public → non-public must revoke dac_public SELECT."""
+    tags = [*_reviewed("table", "sandbox", "default", "us_states", "non-public")]
+    actual = [
+        ActualGrant("table", "sandbox.default.us_states", "dac_public", "SELECT"),
+        ActualGrant("table", "sandbox.default.us_states", "dac_non_public", "SELECT"),
+        ActualGrant("catalog", "sandbox", "dac_public", "USE CATALOG"),
+        ActualGrant("schema", "sandbox.default", "dac_public", "USE SCHEMA"),
+        ActualGrant("catalog", "sandbox", "dac_non_public", "USE CATALOG"),
+        ActualGrant("schema", "sandbox.default", "dac_non_public", "USE SCHEMA"),
+    ]
+    plan = plan_data_access(
+        DataAccessSettings(),
+        tags,
+        actual,
+        {"dac_public", "dac_non_public"},
+    )
+    revoked = {(g.principal, g.privilege, g.full_name) for g in plan.grants_to_revoke}
+    assert ("dac_public", "SELECT", "sandbox.default.us_states") in revoked
+    assert ("dac_public", "USE CATALOG", "sandbox") in revoked
+    assert ("dac_public", "USE SCHEMA", "sandbox.default") in revoked
+    assert ("dac_non_public", "SELECT", "sandbox.default.us_states") not in revoked
+
+
+def test_inherited_from_none_is_direct_grant() -> None:
+    from backend.app.services.data_access import DataAccessService
+
+    assert DataAccessService._is_inherited_privilege(None) is False  # noqa: SLF001
+    assert DataAccessService._is_inherited_privilege("NONE") is False  # noqa: SLF001
+    assert DataAccessService._is_inherited_privilege("none") is False  # noqa: SLF001
+    assert DataAccessService._is_inherited_privilege("") is False  # noqa: SLF001
+    assert DataAccessService._is_inherited_privilege("SCHEMA") is True  # noqa: SLF001
+
+
 def test_plan_reports_drift_against_previous_fingerprint() -> None:
     tags = [*_reviewed("table", "sandbox", "finance", "budget", "finance.budget")]
     first = plan_data_access(DataAccessSettings(), tags, [], set())
@@ -195,8 +229,30 @@ def test_dry_run_uses_injected_inventory(client: TestClient, container) -> None:
     assert run["mode"] == "dry_run"
     assert run["plan"]["summary"]["eligibleObjects"] == 1
     assert run["plan"]["grantsToAdd"]
-    latest = client.get("/api/data-access/runs/latest", headers=headers_for("admin@example.com")).json()
+    admin = headers_for("admin@example.com")
+    latest = client.get("/api/data-access/runs/latest?mode=dry_run", headers=admin).json()
     assert latest["runId"] == run["runId"]
+    history = client.get("/api/data-access/runs?mode=dry_run&page=1", headers=admin).json()
+    assert history["total"] == 1
+    assert history["retentionDays"] == 30
+    assert history["runs"][0]["runId"] == run["runId"]
+    assert history["runs"][0]["plan"] is None
+    apply_only = client.get("/api/data-access/runs?mode=apply", headers=admin).json()
+    assert apply_only["total"] == 0
+
+
+def test_settings_schedule_mode_and_pause(client: TestClient) -> None:
+    admin = headers_for("admin@example.com")
+    current = client.get("/api/data-access/settings", headers=admin).json()["settings"]
+    saved = client.put(
+        "/api/data-access/settings",
+        headers=admin,
+        json={**current, "scheduleEnabled": False, "scheduleMode": "apply"},
+    )
+    assert saved.status_code == 200
+    body = saved.json()["settings"]
+    assert body["scheduleEnabled"] is False
+    assert body["scheduleMode"] == "apply"
 
 
 def test_apply_runs_when_readiness_forced(client: TestClient, container) -> None:

@@ -849,6 +849,10 @@ export interface DataAccessSettings {
   allowedCatalogs: string[];
   dataPrivileges: string[];
   intervalMinutes: number;
+  /** When false, the background scheduler is paused. */
+  scheduleEnabled: boolean;
+  /** What each scheduled tick does: plan only, or plan-then-apply. */
+  scheduleMode: "dry_run" | "apply";
   conflictPolicy: DataAccessConflictPolicy;
   dryRun: boolean;
 }
@@ -991,6 +995,16 @@ export interface AttributeExplorerResult {
   principals: AttributePrincipalSummary[];
   tables: UnlockedTable[];
   note: string | null;
+}
+
+/** Paginated sync history (`GET /data-access/runs`). */
+export interface DataAccessRunList {
+  runs: DataAccessRun[];
+  total: number;
+  page: number;
+  pageSize: number;
+  mode: "dry_run" | "apply" | null;
+  retentionDays: number;
 }
 
 /** One stored dry-run execution (`GET/POST /data-access/runs`). */

@@ -56,8 +56,10 @@ export const queryKeys = {
   policyExceptions: ["policy-exceptions"] as const,
   dataAccessSettings: ["data-access", "settings"] as const,
   dataAccessReadiness: ["data-access", "readiness"] as const,
-  dataAccessRuns: ["data-access", "runs"] as const,
-  dataAccessLatestRun: ["data-access", "runs", "latest"] as const,
+  dataAccessRuns: (mode: "dry_run" | "apply", page: number) =>
+    ["data-access", "runs", mode, page] as const,
+  dataAccessLatestRun: (mode: "dry_run" | "apply") =>
+    ["data-access", "runs", "latest", mode] as const,
   directoryPrincipals: (q: string, kind?: string) => ["directory", "principals", q, kind ?? ""] as const,
 };
 
@@ -140,30 +142,31 @@ export function useDataAccessReadiness() {
 }
 
 /**
- * Fetches recent data-access dry-runs (`GET /data-access/runs`).
+ * Fetches paginated data-access runs for one mode (`GET /data-access/runs`).
  *
- * @remarks Key: `queryKeys.dataAccessRuns`.
- * @returns The query result for {@link DataAccessRun}[].
+ * @param mode - ``dry_run`` or ``apply`` (tab-scoped history).
+ * @param page - 1-based page index.
+ * @returns The query result for {@link DataAccessRunList}.
  */
-export function useDataAccessRuns() {
+export function useDataAccessRuns(mode: "dry_run" | "apply", page = 1) {
   const api = useApi();
   return useQuery({
-    queryKey: queryKeys.dataAccessRuns,
-    queryFn: ({ signal }) => api.dataAccess.listRuns(signal),
+    queryKey: queryKeys.dataAccessRuns(mode, page),
+    queryFn: ({ signal }) => api.dataAccess.listRuns({ mode, page, pageSize: 20 }, signal),
   });
 }
 
 /**
- * Fetches the latest data-access dry-run including its plan (`GET /data-access/runs/latest`).
+ * Fetches the latest run for one mode including its plan (`GET /data-access/runs/latest`).
  *
- * @remarks Key: `queryKeys.dataAccessLatestRun`.
+ * @param mode - ``dry_run`` or ``apply``.
  * @returns The query result for {@link DataAccessRun} or `null`.
  */
-export function useDataAccessLatestRun() {
+export function useDataAccessLatestRun(mode: "dry_run" | "apply") {
   const api = useApi();
   return useQuery({
-    queryKey: queryKeys.dataAccessLatestRun,
-    queryFn: ({ signal }) => api.dataAccess.latestRun(signal),
+    queryKey: queryKeys.dataAccessLatestRun(mode),
+    queryFn: ({ signal }) => api.dataAccess.latestRun(mode, signal),
   });
 }
 

@@ -13,13 +13,15 @@ describe("Data access dry-run", () => {
     expect(screen.getByRole("button", { name: "Run now" })).toBeEnabled();
     expect(screen.getByRole("table", { name: "Would grant" })).toBeInTheDocument();
     expect(screen.getByText("sandbox.finance.budget")).toBeInTheDocument();
-    expect(screen.getByText("Run history / logs")).toBeInTheDocument();
+    expect(screen.getByText("Dry-run logs")).toBeInTheDocument();
     expect(screen.getByRole("table", { name: "Membership" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Schedule mode")).toHaveValue("dry_run");
   });
 
   it("shows an empty state when no run exists", async () => {
     renderApp("/data-access", fakeServices({ dataAccessRun: null }));
     expect(await screen.findByText("No dry-run has been stored yet.")).toBeInTheDocument();
+    expect(await screen.findByText("No dry-run logs in the last 30 days.")).toBeInTheDocument();
   });
 
   it("runs a dry-run from the button", async () => {
@@ -30,12 +32,13 @@ describe("Data access dry-run", () => {
     expect(screen.getByRole("table", { name: "Would grant" })).toBeInTheDocument();
   });
 
-  it("shows Live tab with apply ready and Run apply", async () => {
+  it("shows Live tab with apply ready, Run apply, and apply-only logs", async () => {
     const user = userEvent.setup();
     renderApp("/data-access");
     await user.click(await screen.findByRole("tab", { name: "Live" }));
     expect(await screen.findByText("Apply ready")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Run apply" })).toBeEnabled();
-    expect(screen.getByText("Sync logs (all modes)")).toBeInTheDocument();
+    expect(screen.getByText("Live apply logs")).toBeInTheDocument();
+    expect(screen.getByText("No apply logs in the last 30 days.")).toBeInTheDocument();
   });
 });

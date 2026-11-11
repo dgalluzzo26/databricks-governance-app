@@ -12,7 +12,11 @@ from backend.app.models.base import ApiModel
 MIN_SYNC_INTERVAL_MINUTES = 5
 DEFAULT_SYNC_INTERVAL_MINUTES = 15
 PLAN_ITEM_LIMIT = 200
-RUN_HISTORY_LIMIT = 20
+# Persist enough history for the UI's 30-day window (paginated); prune older on write.
+RUN_HISTORY_LIMIT = 500
+RUN_HISTORY_RETENTION_DAYS = 30
+RUN_HISTORY_PAGE_SIZE_DEFAULT = 20
+RUN_HISTORY_PAGE_SIZE_MAX = 50
 
 
 class ConflictPolicy(StrEnum):
@@ -34,6 +38,18 @@ class SyncTrigger(StrEnum):
     USER = "user"
 
 
+class ScheduleMode(StrEnum):
+    """What the background scheduler does each interval when enabled.
+
+    Attributes:
+        DRY_RUN: Plan only (no UC mutations).
+        APPLY: Inventory → plan → mutate groups/membership/grants (same as Live apply).
+    """
+
+    DRY_RUN = "dry_run"
+    APPLY = "apply"
+
+
 class SyncRunStatus(StrEnum):
     """Lifecycle of a dry-run (or later apply) sync."""
 
@@ -53,9 +69,11 @@ class DataAccessSettings(ApiModel):
         hierarchy_separator: Splits an access value into parent prefixes for nested groups.
         allowed_catalogs: Catalogs to scan; empty means every catalog except system catalogs.
         data_privileges: Privileges granted on the tagged securable (traversal is added).
-        interval_minutes: How often the in-app scheduler runs a dry-run.
+        interval_minutes: How often the in-app scheduler runs when enabled.
+        schedule_enabled: When false, the background scheduler is paused.
+        schedule_mode: ``dry_run`` (plan only) or ``apply`` (plan then mutate UC).
         conflict_policy: Hold or warn when an ancestor grant would over-expose descendants.
-        dry_run: Preferred mode for the settings form; scheduled sync stays dry-run.
+        dry_run: Preferred mode for the settings form (legacy; schedule uses schedule_mode).
     """
 
     access_tag_key: str = "data_access_control"
@@ -66,6 +84,8 @@ class DataAccessSettings(ApiModel):
     allowed_catalogs: list[str] = Field(default_factory=list)
     data_privileges: list[str] = Field(default_factory=lambda: ["SELECT"])
     interval_minutes: int = DEFAULT_SYNC_INTERVAL_MINUTES
+    schedule_enabled: bool = True
+    schedule_mode: ScheduleMode = ScheduleMode.DRY_RUN
     conflict_policy: ConflictPolicy = ConflictPolicy.HOLD
     dry_run: bool = True
 
@@ -348,3 +368,23 @@ class DataAccessRun(ApiModel):
     summary: DataAccessPlanSummary | None = None
     plan: DataAccessPlan | None = None
     fingerprint: str | None = None
+
+
+class DataAccessRunList(ApiModel):
+    """Paginated sync history for the last retention window.
+
+    Attributes:
+        runs: Page of runs (summaries only; no full plans).
+        total: Total matching runs in the retention window.
+        page: 1-based page index.
+        page_size: Page size used for this response.
+        mode: Mode filter applied (``dry_run``, ``apply``), or None for all.
+        retention_days: How many days of history are retained / returned.
+    """
+
+    runs: list[DataAccessRun] = Field(default_factory=list)
+    total: int = 0
+    page: int = 1
+    page_size: int = RUN_HISTORY_PAGE_SIZE_DEFAULT
+    mode: str | None = None
+    retention_days: int = RUN_HISTORY_RETENTION_DAYS
