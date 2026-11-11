@@ -1,9 +1,8 @@
 /**
  * @file Lazy catalog → schema → table browser for Access Explorer.
  *
- * Each tree level fetches only when expanded: catalogs via `useTreeCatalogs`, schemas via
- * `useTreeSchemas`, and tables via `useTreeTables`. Catalog and schema rows can be selected
- * for data-access analysis; table leaves keep the full mask/row-filter analyze path.
+ * Each tree level fetches only when expanded. Catalog and schema rows expand only;
+ * table leaves trigger analysis.
  */
 import { useState } from "react";
 import { useTreeCatalogs, useTreeSchemas, useTreeTables } from "@/api/queries";
@@ -12,16 +11,16 @@ import styles from "./AccessExplorerTree.module.css";
 
 /** Props for the Access Explorer catalog tree. */
 interface TreeProps {
-  /** Currently analyzed object full name, or `null` when none is selected. */
+  /** Currently analyzed three-part table name, or `null` when none is selected. */
   selected: string | null;
-  /** Called with `catalog`, `catalog.schema`, or `catalog.schema.table`. */
-  onSelect: (fullName: string) => void;
+  /** Called with `catalog.schema.table` when a table leaf is clicked. */
+  onSelectTable: (fullName: string) => void;
 }
 
 /**
  * Lazy catalog → schema → table browser. Each level loads only when expanded.
  */
-export function AccessExplorerTree({ selected, onSelect }: TreeProps) {
+export function AccessExplorerTree({ selected, onSelectTable }: TreeProps) {
   const catalogs = useTreeCatalogs();
 
   if (catalogs.isPending) return <Spinner label="Loading catalogs" />;
@@ -37,7 +36,7 @@ export function AccessExplorerTree({ selected, onSelect }: TreeProps) {
           key={c.catalogName}
           catalog={c.catalogName}
           selected={selected}
-          onSelect={onSelect}
+          onSelectTable={onSelectTable}
         />
       ))}
       {catalogs.data.truncated && (
@@ -50,38 +49,27 @@ export function AccessExplorerTree({ selected, onSelect }: TreeProps) {
 function CatalogNode({
   catalog,
   selected,
-  onSelect,
+  onSelectTable,
 }: {
   catalog: string;
   selected: string | null;
-  onSelect: (n: string) => void;
+  onSelectTable: (n: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const schemas = useTreeSchemas(catalog, open);
 
   return (
     <div role="none">
-      <div className={`${styles.row} ${selected === catalog ? styles.selected : ""}`}>
-        <button
-          type="button"
-          className={styles.chevron}
-          aria-expanded={open}
-          aria-label={open ? `Collapse ${catalog}` : `Expand ${catalog}`}
-          onClick={() => setOpen((v) => !v)}
-        >
-          {open ? "▾" : "▸"}
-        </button>
-        <button
-          type="button"
-          role="treeitem"
-          aria-selected={selected === catalog}
-          className={styles.rowButton}
-          onClick={() => onSelect(catalog)}
-          title={`Analyze catalog ${catalog}`}
-        >
-          {catalog}
-        </button>
-      </div>
+      <button
+        type="button"
+        role="treeitem"
+        aria-expanded={open}
+        className={styles.row}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className={styles.chevron}>{open ? "▾" : "▸"}</span>
+        <span>{catalog}</span>
+      </button>
       {open && (
         <div role="group">
           {schemas.isPending && <Spinner label={`Loading ${catalog} schemas`} />}
@@ -92,7 +80,7 @@ function CatalogNode({
               catalog={catalog}
               schema={s.schemaName}
               selected={selected}
-              onSelect={onSelect}
+              onSelectTable={onSelectTable}
             />
           ))}
           {schemas.data?.schemas.length === 0 && (
@@ -108,40 +96,28 @@ function SchemaNode({
   catalog,
   schema,
   selected,
-  onSelect,
+  onSelectTable,
 }: {
   catalog: string;
   schema: string;
   selected: string | null;
-  onSelect: (n: string) => void;
+  onSelectTable: (n: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const tables = useTreeTables(catalog, schema, open);
-  const fullSchema = `${catalog}.${schema}`;
 
   return (
     <div role="none">
-      <div className={`${styles.row} ${styles.indent1} ${selected === fullSchema ? styles.selected : ""}`}>
-        <button
-          type="button"
-          className={styles.chevron}
-          aria-expanded={open}
-          aria-label={open ? `Collapse ${schema}` : `Expand ${schema}`}
-          onClick={() => setOpen((v) => !v)}
-        >
-          {open ? "▾" : "▸"}
-        </button>
-        <button
-          type="button"
-          role="treeitem"
-          aria-selected={selected === fullSchema}
-          className={styles.rowButton}
-          onClick={() => onSelect(fullSchema)}
-          title={`Analyze schema ${fullSchema}`}
-        >
-          {schema}
-        </button>
-      </div>
+      <button
+        type="button"
+        role="treeitem"
+        aria-expanded={open}
+        className={`${styles.row} ${styles.indent1}`}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className={styles.chevron}>{open ? "▾" : "▸"}</span>
+        <span>{schema}</span>
+      </button>
       {open && (
         <div role="group">
           {tables.isPending && <Spinner label={`Loading ${schema} tables`} />}
@@ -155,7 +131,7 @@ function SchemaNode({
                 role="treeitem"
                 aria-selected={selected === full}
                 className={`${styles.row} ${styles.indent2} ${selected === full ? styles.selected : ""}`}
-                onClick={() => onSelect(full)}
+                onClick={() => onSelectTable(full)}
                 title={full}
               >
                 <span className={styles.muted}>▫</span>

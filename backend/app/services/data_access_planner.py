@@ -1,8 +1,9 @@
 """Pure planner: tagged objects + current grants → desired groups and GRANT/REVOKE diffs.
 
 Does not call Databricks. Callers supply inventory rows so tests can cover the rules
-without a warehouse: grant at the tagged level, both tags on the same object, nested
-groups via longest known parent prefix, fail-closed ancestor conflicts.
+without a warehouse: data privileges (SELECT) only on reviewed tagged tables, traversal
+grants for those tables, nested groups via longest known parent prefix. Catalog/schema
+tags still create groups for nesting but never receive SELECT.
 """
 
 from __future__ import annotations
@@ -14,7 +15,6 @@ from dataclasses import dataclass
 
 from backend.app.models.data_access import (
     PLAN_ITEM_LIMIT,
-    ConflictPolicy,
     DataAccessConflict,
     DataAccessPlan,
     DataAccessPlanSummary,
@@ -207,27 +207,26 @@ def plan_data_access(
             )
         )
 
+    # Informational only: schema/catalog tags no longer drive SELECT.
     conflicts: list[DataAccessConflict] = []
-    held_ancestors: set[tuple[str, str]] = set()
     for obj, value in eligible:
         if obj.level == "table":
             continue
-        child_conflicts = _descendant_conflicts(
-            obj, value, objects, by_object, access_key, review_key, review_value
+        conflicts.extend(
+            _descendant_conflicts(
+                obj, value, objects, by_object, access_key, review_key, review_value
+            )
         )
-        conflicts.extend(child_conflicts)
-        if child_conflicts and settings.conflict_policy == ConflictPolicy.HOLD:
-            held_ancestors.add((obj.level, obj.full_name.lower()))
 
     desired: set[tuple[str, str, str, str]] = set()
     reasons: dict[tuple[str, str, str, str], str] = {}
     for obj, value in eligible:
+        if obj.level != "table":
+            continue
         group = value_to_group.get(value)
         if group is None:
             continue
-        if (obj.level, obj.full_name.lower()) in held_ancestors:
-            continue
-        for grant in _grants_for(obj, group, settings.data_privileges):
+        for grant in _grants_for_table(obj, group, settings.data_privileges):
             key = (grant.securable_type, grant.full_name.lower(), grant.principal.lower(), grant.privilege)
             desired.add(key)
             reasons[key] = grant.reason
@@ -380,10 +379,10 @@ def _is_descendant(ancestor: _Object, obj: _Object) -> bool:
     return False
 
 
-def _grants_for(obj: _Object, group: str, data_privileges: list[str]) -> list[PlannedGrant]:
-    """Build traversal plus data privileges for one eligible tagged object."""
+def _grants_for_table(obj: _Object, group: str, data_privileges: list[str]) -> list[PlannedGrant]:
+    """Build USE CATALOG / USE SCHEMA plus table data privileges for one tagged table."""
     grants: list[PlannedGrant] = []
-    reason = f"tagged {obj.level} {obj.full_name}"
+    reason = f"tagged table {obj.full_name}"
     grants.append(
         PlannedGrant(
             securable_type="catalog",
@@ -393,24 +392,21 @@ def _grants_for(obj: _Object, group: str, data_privileges: list[str]) -> list[Pl
             reason=reason,
         )
     )
-    if obj.level in {"schema", "table"}:
-        schema_name = f"{obj.catalog}.{obj.schema}"
-        grants.append(
-            PlannedGrant(
-                securable_type="schema",
-                full_name=schema_name,
-                principal=group,
-                privilege="USE SCHEMA",
-                reason=reason,
-            )
+    schema_name = f"{obj.catalog}.{obj.schema}"
+    grants.append(
+        PlannedGrant(
+            securable_type="schema",
+            full_name=schema_name,
+            principal=group,
+            privilege="USE SCHEMA",
+            reason=reason,
         )
-    target_type = obj.level
-    target_name = obj.full_name
+    )
     for privilege in data_privileges:
         grants.append(
             PlannedGrant(
-                securable_type=target_type,
-                full_name=target_name,
+                securable_type="table",
+                full_name=obj.full_name,
                 principal=group,
                 privilege=privilege,
                 reason=reason,

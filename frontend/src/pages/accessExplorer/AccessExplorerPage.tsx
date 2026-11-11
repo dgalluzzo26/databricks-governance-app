@@ -139,9 +139,9 @@ export function AccessExplorerPage() {
         title="Access explorer"
         description={
           <>
-            Browse a catalog, schema, or table. Tables show masks and row filters. Catalogs and
-            schemas with a reviewed <code>data_access_control</code> tag offer a grant request for
-            that value. Group grants stay dry-run until apply mode is enabled.
+            Browse or search a table to see masks, row filters, and requestable attributes.
+            Reviewed <code>data_access_control</code> tags on the table offer a data-access
+            request (broader paths allowed). Group grants stay dry-run until apply mode is on.
           </>
         }
       />
@@ -150,18 +150,18 @@ export function AccessExplorerPage() {
       <Card title="Browse data">
         <AccessExplorerTree
           selected={insight?.tableFullName ?? null}
-          onSelect={(name) => void runAnalyze(name)}
+          onSelectTable={(name) => void runAnalyze(name)}
         />
       </Card>
       <div className={layout.main}>
-      <Card title="Find an object">
+      <Card title="Find a table">
         <div className={styles.formGrid}>
           <label className={styles.fieldGrow}>
-            <span className={styles.label}>Catalog, schema, or table</span>
+            <span className={styles.label}>Three-part name</span>
             <input
               className={styles.input}
               value={tableInput}
-              placeholder="catalog / catalog.schema / catalog.schema.table"
+              placeholder="catalog.schema.table"
               onChange={(event) => setTableInput(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === "Enter") void runAnalyze(tableInput);
@@ -240,113 +240,103 @@ export function AccessExplorerPage() {
  * @param props.insight - Full table access insight returned by `useAnalyzeTable`.
  */
 function InsightView({ insight }: { insight: TableAccessInsight }) {
-  const level = insight.securableLevel ?? "table";
-  const isTable = level === "table";
   return (
     <>
       <Card
         title={insight.tableFullName}
-        actions={
-          <Badge tone="info">
-            {isTable ? `${insight.columns.length} columns` : level}
-          </Badge>
-        }
+        actions={<Badge tone="info">{insight.columns.length} columns</Badge>}
       >
         <div className={styles.muted}>{insight.summary}</div>
       </Card>
 
       <SuggestionsCard suggestions={insight.suggestions} tableFullName={insight.tableFullName} />
 
-      {isTable && (
-        <Card title="Row filter">
-          {!insight.rowFilter.attached ? (
-            <div className={styles.muted}>{insight.rowFilter.notes ?? "No row filter on this table."}</div>
-          ) : (
-            <div className={styles.stack}>
-              <DescriptionRow
-                label="Dimension"
-                value={<code>{insight.rowFilter.dimensionKey}</code>}
-              />
-              <DescriptionRow
-                label="Column"
-                value={<code>{insight.rowFilter.columnName}</code>}
-              />
-              <DescriptionRow
-                label="Your access"
-                value={
-                  <Badge tone={insight.rowFilter.userCanSeeRows ? "success" : "danger"}>
-                    {insight.rowFilter.userCanSeeRows
-                      ? insight.rowFilter.userHasWildcard
-                        ? "All rows (*)"
-                        : `Values: ${insight.rowFilter.userValues.join(", ")}`
-                      : "No rows"}
-                  </Badge>
-                }
-              />
-              <div className={styles.muted}>{insight.rowFilter.notes}</div>
-            </div>
-          )}
-        </Card>
-      )}
-
-      {isTable && (
-        <Card title="Columns">
-          <div className={styles.tableWrap}>
-            <table className={styles.table} aria-label="Column access">
-              <thead>
-                <tr>
-                  <th>Column</th>
-                  <th>State</th>
-                  <th>Required path</th>
-                  <th>Mask rule</th>
-                  <th>Handler</th>
-                  <th>Notes</th>
-                </tr>
-              </thead>
-              <tbody>
-                {insight.columns.map((col) => (
-                  <tr key={col.columnName}>
-                    <td>
-                      <code>{col.columnName}</code>
-                      {col.dataType && (
-                        <div className={styles.muted} style={{ fontSize: "0.85em" }}>
-                          {col.dataType}
-                        </div>
-                      )}
-                    </td>
-                    <td>
-                      <Badge tone={stateTone(col.accessState)}>{stateLabel(col.accessState)}</Badge>
-                    </td>
-                    <td>
-                      {col.requiredSensitivityPath ? (
-                        <code>{col.requiredSensitivityPath}</code>
-                      ) : (
-                        "—"
-                      )}
-                    </td>
-                    <td>{col.maskRuleKey ? <code>{col.maskRuleKey}</code> : "—"}</td>
-                    <td>
-                      {col.maskHandler ? (
-                        <>
-                          <code>{col.maskHandler}</code>
-                          {col.maskKind && (
-                            <div className={styles.muted} style={{ fontSize: "0.85em" }}>
-                              {col.maskKind}
-                            </div>
-                          )}
-                        </>
-                      ) : (
-                        "—"
-                      )}
-                    </td>
-                    <td className={styles.muted}>{col.notes ?? col.maskDescription ?? ""}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      <Card title="Row filter">
+        {!insight.rowFilter.attached ? (
+          <div className={styles.muted}>{insight.rowFilter.notes ?? "No row filter on this table."}</div>
+        ) : (
+          <div className={styles.stack}>
+            <DescriptionRow
+              label="Dimension"
+              value={<code>{insight.rowFilter.dimensionKey}</code>}
+            />
+            <DescriptionRow
+              label="Column"
+              value={<code>{insight.rowFilter.columnName}</code>}
+            />
+            <DescriptionRow
+              label="Your access"
+              value={
+                <Badge tone={insight.rowFilter.userCanSeeRows ? "success" : "danger"}>
+                  {insight.rowFilter.userCanSeeRows
+                    ? insight.rowFilter.userHasWildcard
+                      ? "All rows (*)"
+                      : `Values: ${insight.rowFilter.userValues.join(", ")}`
+                    : "No rows"}
+                </Badge>
+              }
+            />
+            <div className={styles.muted}>{insight.rowFilter.notes}</div>
           </div>
-        </Card>
-      )}
+        )}
+      </Card>
+
+      <Card title="Columns">
+        <div className={styles.tableWrap}>
+          <table className={styles.table} aria-label="Column access">
+            <thead>
+              <tr>
+                <th>Column</th>
+                <th>State</th>
+                <th>Required path</th>
+                <th>Mask rule</th>
+                <th>Handler</th>
+                <th>Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              {insight.columns.map((col) => (
+                <tr key={col.columnName}>
+                  <td>
+                    <code>{col.columnName}</code>
+                    {col.dataType && (
+                      <div className={styles.muted} style={{ fontSize: "0.85em" }}>
+                        {col.dataType}
+                      </div>
+                    )}
+                  </td>
+                  <td>
+                    <Badge tone={stateTone(col.accessState)}>{stateLabel(col.accessState)}</Badge>
+                  </td>
+                  <td>
+                    {col.requiredSensitivityPath ? (
+                      <code>{col.requiredSensitivityPath}</code>
+                    ) : (
+                      "—"
+                    )}
+                  </td>
+                  <td>{col.maskRuleKey ? <code>{col.maskRuleKey}</code> : "—"}</td>
+                  <td>
+                    {col.maskHandler ? (
+                      <>
+                        <code>{col.maskHandler}</code>
+                        {col.maskKind && (
+                          <div className={styles.muted} style={{ fontSize: "0.85em" }}>
+                            {col.maskKind}
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      "—"
+                    )}
+                  </td>
+                  <td className={styles.muted}>{col.notes ?? col.maskDescription ?? ""}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
     </>
   );
 }

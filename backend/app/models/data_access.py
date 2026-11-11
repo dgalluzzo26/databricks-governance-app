@@ -16,11 +16,11 @@ RUN_HISTORY_LIMIT = 20
 
 
 class ConflictPolicy(StrEnum):
-    """How the planner treats an ancestor grant that would over-expose descendants.
+    """How mismatched parent/child tags are reported (SELECT is table-only).
 
     Attributes:
-        HOLD: Omit the ancestor grant from the desired set (fail closed).
-        WARN: Keep the ancestor grant and still report the conflict.
+        HOLD: Report conflicts (historical fail-closed label; does not omit table grants).
+        WARN: Report conflicts the same way; kept for settings compatibility.
     """
 
     HOLD = "hold"

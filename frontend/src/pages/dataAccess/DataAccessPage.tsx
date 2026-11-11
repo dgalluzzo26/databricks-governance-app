@@ -32,7 +32,7 @@ export function DataAccessPage() {
     <div className={styles.stack}>
       <PageHeader
         title="Data access"
-        description="Until Unity Catalog ABAC grants exist, the app plans one group per data_access_control value and SELECT at the tagged object. This page is dry-run only: it never creates groups or changes grants."
+        description="Plans one nested group per data_access_control value and SELECT only on reviewed tagged tables (plus USE CATALOG/SCHEMA). Schema/catalog tags still seed parent groups for nesting. Dry-run only until apply mode is enabled."
       />
       {readiness.isPending && <Spinner label="Checking Account Admin SP" />}
       {readiness.error && <ErrorAlert error={readiness.error} title="Could not load readiness" />}
@@ -198,16 +198,17 @@ function SettingsCard(props: {
             />
           </label>
           <label className={styles.field}>
-            <span className={styles.label}>Conflict policy</span>
+            <span className={styles.label}>Conflict reporting</span>
             <select
               className={styles.select}
               value={form.conflictPolicy}
               onChange={(e) =>
                 setForm({ ...form, conflictPolicy: e.target.value as DataAccessConflictPolicy })
               }
+              title="SELECT is table-only; this only controls how parent/child tag mismatches are labeled in the plan"
             >
-              <option value="hold">Hold ancestor grant (fail closed)</option>
-              <option value="warn">Warn but keep ancestor grant</option>
+              <option value="hold">Report mismatches (hold)</option>
+              <option value="warn">Report mismatches (warn)</option>
             </select>
           </label>
           <label className={styles.fieldGrow}>

@@ -11,7 +11,7 @@ describe("Access explorer", () => {
     renderApp("/access-explorer", services);
 
     expect(await screen.findByRole("heading", { name: "Access explorer" })).toBeInTheDocument();
-    await user.type(screen.getByPlaceholderText("catalog / catalog.schema / catalog.schema.table"), "demo.default.customers");
+    await user.type(screen.getByPlaceholderText("catalog.schema.table"), "demo.default.customers");
     await user.click(screen.getByRole("button", { name: "Analyze" }));
 
     expect(analyze).toHaveBeenCalledWith({
@@ -103,10 +103,10 @@ describe("Access explorer", () => {
     renderApp("/access-explorer", services);
 
     expect(schemas).not.toHaveBeenCalled();
-    await user.click(await screen.findByRole("button", { name: "Expand demo" }));
+    await user.click(await screen.findByRole("treeitem", { name: /demo$/ }));
     expect(schemas).toHaveBeenCalledWith("demo", expect.anything());
 
-    await user.click(await screen.findByRole("button", { name: "Expand default" }));
+    await user.click(await screen.findByRole("treeitem", { name: /default$/ }));
     expect(tables).toHaveBeenCalledWith("demo", "default", expect.anything());
 
     await user.click(await screen.findByRole("treeitem", { name: /customers/ }));
@@ -123,7 +123,7 @@ describe("Access explorer row-filter selection", () => {
     const services = fakeServices();
     renderApp("/access-explorer", services);
 
-    await user.type(await screen.findByPlaceholderText("catalog / catalog.schema / catalog.schema.table"), "demo.default.customers");
+    await user.type(await screen.findByPlaceholderText("catalog.schema.table"), "demo.default.customers");
     await user.click(screen.getByRole("button", { name: "Analyze" }));
 
     const wildcard = await screen.findByRole("table", { name: "Row filter wildcard" });

@@ -263,29 +263,22 @@ class AccessExplorerService:
         return TreeTableList(tables=items, total=len(items), truncated=truncated)
 
     def analyze_table(self, request: AnalyzeTableRequest, user: CurrentUser) -> TableAccessInsight:
-        """Explain access for a catalog, schema, or table.
-
-        Catalog/schema analysis covers data-access tags only. Table analysis also covers
-        column masks and row filters.
+        """Explain column masks, row filters, and attribute gaps for one table.
 
         Args:
-            request: Object full name (1–3 dotted parts).
+            request: Three-part ``catalog.schema.table`` name.
             user: The signed-in user whose attributes are evaluated.
 
         Returns:
-            Access insight and suggested attribute requests.
+            Access insight and suggested attribute requests (including data-access).
 
         Raises:
-            InvalidRequestError: If the name is invalid.
-            NotFoundError: If the object does not exist or is not visible.
+            InvalidRequestError: If the name is not a valid three-part table name.
+            NotFoundError: If the table does not exist or is not visible.
         """
         parts = [p for p in request.resolved_name().split(".") if p]
-        if len(parts) == 1:
-            return self._analyze_catalog(parts[0], user)
-        if len(parts) == 2:
-            return self._analyze_schema(parts[0], parts[1], user)
         if len(parts) != 3:
-            raise InvalidRequestError("Analyze a catalog, catalog.schema, or catalog.schema.table")
+            raise InvalidRequestError("Analyze a catalog.schema.table (table-level access only)")
         catalog, schema, table = parts[0], parts[1], parts[2]
         _require_identifier(catalog, "catalog")
         _require_identifier(schema, "schema")
@@ -393,73 +386,6 @@ class AccessExplorerService:
             row_filter=row_filter,
             suggestions=suggestions,
             summary="; ".join(summary_parts),
-        )
-
-    def _analyze_catalog(self, catalog: str, user: CurrentUser) -> TableAccessInsight:
-        """Explain data-access tags on a catalog (no column/row-filter analysis)."""
-        catalog = _require_identifier(catalog, "catalog")
-        exists = self._sql.query(
-            f"""
-            SELECT 1 AS ok FROM system.information_schema.catalogs
-            WHERE catalog_name = {string_literal(catalog)} LIMIT 1
-            """
-        )
-        if not exists:
-            raise NotFoundError(f"Catalog '{catalog}' was not found")
-        held = self._held_attribute_values(user)
-        dac = self._data_access_suggestion("catalog", catalog, held)
-        suggestions = [dac] if dac else []
-        summary = (
-            f"catalog tagged {dac.attribute_value}; requestable"
-            if dac and dac.requestable
-            else (
-                f"catalog tagged {dac.attribute_value}; you already hold it"
-                if dac
-                else "catalog has no reviewed data-access tag"
-            )
-        )
-        return TableAccessInsight(
-            table_full_name=catalog,
-            securable_level="catalog",
-            catalog_name=catalog,
-            suggestions=suggestions,
-            summary=summary,
-        )
-
-    def _analyze_schema(self, catalog: str, schema: str, user: CurrentUser) -> TableAccessInsight:
-        """Explain data-access tags on a schema (no column/row-filter analysis)."""
-        catalog = _require_identifier(catalog, "catalog")
-        schema = _require_identifier(schema, "schema")
-        exists = self._sql.query(
-            f"""
-            SELECT 1 AS ok FROM system.information_schema.schemata
-            WHERE catalog_name = {string_literal(catalog)}
-              AND schema_name = {string_literal(schema)}
-            LIMIT 1
-            """
-        )
-        if not exists:
-            raise NotFoundError(f"Schema '{catalog}.{schema}' was not found")
-        held = self._held_attribute_values(user)
-        full = f"{catalog}.{schema}"
-        dac = self._data_access_suggestion("schema", full, held)
-        suggestions = [dac] if dac else []
-        summary = (
-            f"schema tagged {dac.attribute_value}; requestable"
-            if dac and dac.requestable
-            else (
-                f"schema tagged {dac.attribute_value}; you already hold it"
-                if dac
-                else "schema has no reviewed data-access tag"
-            )
-        )
-        return TableAccessInsight(
-            table_full_name=full,
-            securable_level="schema",
-            catalog_name=catalog,
-            schema_name=schema,
-            suggestions=suggestions,
-            summary=summary,
         )
 
     def _data_access_suggestion(

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from backend.app.models.data_access import ConflictPolicy, DataAccessSettings
+from backend.app.models.data_access import DataAccessSettings
 from backend.app.services.data_access_planner import ActualGrant, TagRow, group_name, plan_data_access
 from backend.tests.conftest import headers_for
 
@@ -22,7 +22,7 @@ def test_group_name_slugifies_hierarchy() -> None:
     assert group_name("dac_", "finance.budget") == "dac_finance_budget"
 
 
-def test_plan_grants_at_tagged_level_when_both_tags_present() -> None:
+def test_plan_grants_select_only_on_tables() -> None:
     tags = [
         *_reviewed("schema", "sandbox", "public", None, "public"),
         *_reviewed("table", "sandbox", "finance", "budget", "finance.budget"),
@@ -30,12 +30,15 @@ def test_plan_grants_at_tagged_level_when_both_tags_present() -> None:
     ]
     plan = plan_data_access(DataAccessSettings(), tags, [], set())
     add = {(g.securable_type, g.full_name, g.principal, g.privilege) for g in plan.grants_to_add}
-    assert ("schema", "sandbox.public", "dac_public", "SELECT") in add
-    assert ("schema", "sandbox.public", "dac_public", "USE SCHEMA") in add
-    assert ("catalog", "sandbox", "dac_public", "USE CATALOG") in add
+    # Schema tags create groups for nesting but never get SELECT.
+    assert ("schema", "sandbox.public", "dac_public", "SELECT") not in add
     assert ("table", "sandbox.finance.budget", "dac_finance_budget", "SELECT") in add
+    assert ("table", "sandbox.finance.forecast", "dac_finance", "SELECT") in add
+    assert ("schema", "sandbox.finance", "dac_finance_budget", "USE SCHEMA") in add
+    assert ("catalog", "sandbox", "dac_finance_budget", "USE CATALOG") in add
     parents = {g.value: g.parent_group for g in plan.groups}
     assert parents["finance.budget"] == "dac_finance"
+    assert "public" in parents
     assert plan.summary.eligible_objects == 3
 
 
@@ -47,29 +50,21 @@ def test_plan_skips_unreviewed_objects() -> None:
     assert plan.grants_to_add == []
 
 
-def test_hold_policy_omits_schema_grant_when_child_has_different_value() -> None:
+def test_schema_tag_mismatch_reports_conflict_without_schema_select() -> None:
     tags = [
         *_reviewed("schema", "sandbox", "finance", None, "finance"),
         *_reviewed("table", "sandbox", "finance", "contracts", "finance.contracts"),
+        *_reviewed("table", "sandbox", "finance", "other", "hr"),
     ]
     plan = plan_data_access(DataAccessSettings(), tags, [], set())
-    assert plan.summary.conflicts == 1
-    schema_select = [
-        g for g in plan.grants_to_add if g.securable_type == "schema" and g.privilege == "SELECT"
-    ]
-    assert schema_select == []
-    assert any(g.full_name.endswith(".contracts") for g in plan.grants_to_add)
-
-
-def test_warn_policy_keeps_ancestor_grant_and_reports_conflict() -> None:
-    tags = [
-        *_reviewed("schema", "sandbox", "finance", None, "finance"),
-        *_reviewed("table", "sandbox", "finance", "contracts", "finance.contracts"),
-    ]
-    settings = DataAccessSettings(conflict_policy=ConflictPolicy.WARN)
-    plan = plan_data_access(settings, tags, [], set())
-    assert plan.summary.conflicts == 1
-    assert any(g.securable_type == "schema" and g.privilege == "SELECT" for g in plan.grants_to_add)
+    assert plan.summary.conflicts >= 1
+    assert not any(
+        g.securable_type == "schema" and g.privilege == "SELECT" for g in plan.grants_to_add
+    )
+    assert any(g.full_name.endswith(".contracts") and g.privilege == "SELECT" for g in plan.grants_to_add)
+    assert any(g.full_name.endswith(".other") and g.privilege == "SELECT" for g in plan.grants_to_add)
+    # Nested parent group still planned from schema tag value.
+    assert any(g.value == "finance" for g in plan.groups)
 
 
 def test_plan_revokes_stale_managed_grants() -> None:

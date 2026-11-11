@@ -406,14 +406,13 @@ def test_row_filter_only_table_suggests_dimension(container) -> None:  # noqa: A
     assert any(s.attribute_value == "*" and s.requestable for s in rf)
 
 
-def test_analyze_catalog_suggests_data_access(container) -> None:  # noqa: ANN001
+def test_analyze_table_suggests_data_access(container) -> None:  # noqa: ANN001
     service, sql = _explorer(container)
-    sql.catalog_tags = [
+    sql.table_tags = [
         {"tag_name": "data_access_control", "tag_value": "finance"},
         {"tag_name": "clr_review_status", "tag_value": "reviewed"},
     ]
     actor = _admin()
-    # Real deployments often use attribute key data_access linked to tag data_access_control.
     container.identity_attributes.upsert_definition(
         UpsertAttributeDefinitionRequest(
             key="data_access",
@@ -423,7 +422,6 @@ def test_analyze_catalog_suggests_data_access(container) -> None:  # noqa: ANN00
         ),
         actor,  # type: ignore[arg-type]
     )
-    # Free-form keys don't auto-link tags; simulate a governed-tag style link via storage.
     stored = container.storage.identity_attributes.get_definition("data_access")
     assert stored is not None
     container.storage.identity_attributes.upsert_definition(
@@ -437,9 +435,10 @@ def test_analyze_catalog_suggests_data_access(container) -> None:  # noqa: ANN00
         groups=["users"],
         is_admin=False,
     )
-    insight = service.analyze_table(AnalyzeTableRequest(full_name="demo"), user)
-    assert insight.securable_level == "catalog"
-    assert insight.columns == []
+    insight = service.analyze_table(
+        AnalyzeTableRequest(full_name="demo.default.customers"), user
+    )
+    assert insight.securable_level == "table"
     dac = next(s for s in insight.suggestions if s.kind.value == "data_access")
     assert dac.attribute_key == "data_access"
     assert dac.attribute_value == "finance"
