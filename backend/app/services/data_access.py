@@ -1,7 +1,7 @@
-"""Data-access group sync: settings, Account Admin SP readiness, and dry-run runs.
+"""Data-access group sync: settings, Account Admin SP readiness, dry-run, and apply.
 
-Reads catalog/schema/table tags and current grants, plans managed ``dac_*`` groups, and
-stores the report. Never creates groups or issues GRANT/REVOKE while apply mode is locked.
+Reads catalog/schema/table tags, current grants, and Identity assignments; plans managed
+``dac_*`` groups (nesting, membership, GRANT/REVOKE). Apply mutates account groups and UC.
 """
 
 from __future__ import annotations
@@ -12,25 +12,38 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 from databricks.sdk.errors import DatabricksError
+from databricks.sdk.service.iam import GroupSchema, Patch, PatchOp, PatchSchema
 from pydantic import ValidationError
 
-from backend.app.clients.sql import SqlExecutor, string_literal
+from backend.app.clients.sql import SqlExecutor, quote_identifier, string_literal
 from backend.app.clients.workspace import WorkspaceClientFactory
 from backend.app.core.errors import InvalidRequestError, NotConfiguredError
 from backend.app.models.data_access import (
     MIN_SYNC_INTERVAL_MINUTES,
     RUN_HISTORY_LIMIT,
+    DataAccessPlan,
     DataAccessReadiness,
     DataAccessRun,
     DataAccessSettings,
     DataAccessSettingsView,
+    MembershipAction,
+    MembershipChange,
+    PlannedGrant,
+    PlannedGroup,
     ReadinessCheck,
     SyncRunStatus,
     SyncTrigger,
 )
+from backend.app.models.identity_attribute import AttributeAssignmentFilter
 from backend.app.models.user import CurrentUser
 from backend.app.repositories.base import StorageProvider
-from backend.app.services.data_access_planner import ActualGrant, TagRow, plan_data_access
+from backend.app.services.data_access_planner import (
+    ActualGrant,
+    ActualMember,
+    AssignmentRow,
+    TagRow,
+    plan_data_access,
+)
 from backend.app.services.identity_attributes import IdentityAttributeService
 
 logger = logging.getLogger(__name__)
@@ -43,7 +56,7 @@ _EXCLUDED_CATALOGS = ("system", "samples", "__databricks_internal")
 
 
 class DataAccessService:
-    """Settings, readiness probes, and dry-run orchestration for data-access groups.
+    """Settings, readiness probes, and sync orchestration for data-access groups.
 
     Args:
         storage: App state (settings JSON for config and run history).
@@ -70,6 +83,9 @@ class DataAccessService:
         self._tag_loader = self._load_tags
         self._grant_loader = self._load_grants
         self._group_loader = self._load_groups
+        self._member_loader = self._load_members
+        self._assignment_loader = self._load_assignments
+        self._apply_plan = self._apply_plan_impl
 
     def get_settings(self) -> DataAccessSettingsView:
         """Return stored settings or defaults, plus UI constants.
@@ -77,10 +93,10 @@ class DataAccessService:
         Returns:
             Settings view. Invalid stored JSON falls back to defaults and is logged.
         """
-        return DataAccessSettingsView(settings=self._settings())
+        return DataAccessSettingsView(settings=self._settings(), apply_available=True)
 
     def save_settings(self, body: DataAccessSettings, actor: CurrentUser) -> DataAccessSettingsView:
-        """Validate and persist settings. Apply mode cannot be enabled yet.
+        """Validate and persist settings (including preferred dry_run flag).
 
         Args:
             body: Settings posted by an admin.
@@ -88,16 +104,10 @@ class DataAccessService:
 
         Returns:
             The stored settings view.
-
-        Raises:
-            InvalidRequestError: If apply is requested or validation fails.
         """
-        payload = body.model_copy(update={"dry_run": True})
-        if not body.dry_run:
-            raise InvalidRequestError("Apply mode is not available yet; dry-run only")
-        self._storage.settings.put_many({_SETTINGS_KEY: payload.model_dump(mode="json")}, actor.user_name)
+        self._storage.settings.put_many({_SETTINGS_KEY: body.model_dump(mode="json")}, actor.user_name)
         logger.info("Data-access settings updated by %s", actor.user_name)
-        return DataAccessSettingsView(settings=payload)
+        return DataAccessSettingsView(settings=body, apply_available=True)
 
     def readiness(self) -> DataAccessReadiness:
         """Probe Account Admin SP and warehouse capabilities.
@@ -179,33 +189,50 @@ class DataAccessService:
         runs = self._runs()
         return runs[0] if runs else None
 
-    def run_now(self, actor: CurrentUser) -> DataAccessRun:
-        """Run a dry-run sync as the signed-in admin.
+    def run_now(self, actor: CurrentUser, *, mode: str = "dry_run") -> DataAccessRun:
+        """Run a sync as the signed-in admin.
 
         Args:
             actor: Admin who clicked Run now.
+            mode: ``dry_run`` or ``apply``.
 
         Returns:
             The finished run (success or failed).
 
         Raises:
-            InvalidRequestError: If another run holds the lock.
+            InvalidRequestError: If another run holds the lock or apply is not ready.
         """
-        return self.run_sync(actor=actor.user_name, trigger=SyncTrigger.USER)
+        return self.run_sync(actor=actor.user_name, trigger=SyncTrigger.USER, mode=mode)
 
-    def run_sync(self, *, actor: str, trigger: SyncTrigger) -> DataAccessRun:
-        """Execute one dry-run: inventory, plan, persist, never mutate Unity Catalog.
+    def run_sync(
+        self, *, actor: str, trigger: SyncTrigger, mode: str = "dry_run"
+    ) -> DataAccessRun:
+        """Inventory, plan, optionally apply, and persist the run.
 
         Args:
             actor: User name or ``scheduler``.
             trigger: Manual or scheduled.
+            mode: ``dry_run`` (plan only) or ``apply`` (mutate groups/grants/members).
 
         Returns:
             The stored run.
 
         Raises:
-            InvalidRequestError: If a run is already in progress.
+            InvalidRequestError: If a run is already in progress or apply is blocked.
         """
+        mode = (mode or "dry_run").strip().lower()
+        if mode not in {"dry_run", "apply"}:
+            raise InvalidRequestError("mode must be dry_run or apply")
+        if mode == "apply":
+            readiness = self.readiness()
+            if not readiness.apply_ready:
+                raise InvalidRequestError(
+                    "Apply is not ready — fix failing Account Admin SP / warehouse checks"
+                )
+            if not readiness.setup_ready:
+                raise InvalidRequestError(
+                    "Apply requires sensitivity and data-access Identity definitions"
+                )
         run_id = str(uuid.uuid4())
         started = datetime.now(UTC)
         if not self._acquire_lock(run_id, started):
@@ -214,6 +241,7 @@ class DataAccessService:
             run_id=run_id,
             status=SyncRunStatus.RUNNING,
             trigger=trigger,
+            mode=mode,
             started_at=started,
             triggered_by=actor,
         )
@@ -223,6 +251,8 @@ class DataAccessService:
             tags = self._tag_loader(settings)
             grants = self._grant_loader(settings)
             groups = self._group_loader(settings)
+            assignments = self._assignment_loader(settings)
+            members = self._member_loader(settings, groups)
             previous = next((r for r in self._runs() if r.status == SyncRunStatus.SUCCESS), None)
             plan = plan_data_access(
                 settings,
@@ -231,7 +261,11 @@ class DataAccessService:
                 groups,
                 previous.fingerprint if previous else None,
                 previous.summary if previous else None,
+                assignments=assignments,
+                actual_members=members,
             )
+            if mode == "apply":
+                plan = self._apply_plan(settings, plan)
             finished = running.model_copy(
                 update={
                     "status": SyncRunStatus.SUCCESS,
@@ -239,14 +273,18 @@ class DataAccessService:
                     "summary": plan.summary,
                     "plan": plan,
                     "fingerprint": plan.fingerprint,
+                    "error": "; ".join(plan.apply_errors) if plan.apply_errors else None,
                 }
             )
             self._write_run(finished)
             logger.info(
-                "Data-access dry-run %s finished: add=%s revoke=%s conflicts=%s",
+                "Data-access %s %s finished: add=%s revoke=%s members+=%s members-=%s conflicts=%s",
+                mode,
                 run_id,
                 plan.summary.grants_to_add,
                 plan.summary.grants_to_revoke,
+                plan.summary.members_to_add,
+                plan.summary.members_to_remove,
                 plan.summary.conflicts,
             )
             return finished
@@ -259,7 +297,7 @@ class DataAccessService:
                 }
             )
             self._write_run(failed)
-            logger.exception("Data-access dry-run %s failed", run_id)
+            logger.exception("Data-access %s %s failed", mode, run_id)
             return failed
         finally:
             self._release_lock(run_id)
@@ -507,6 +545,296 @@ class DataAccessService:
         except DatabricksError as exc:
             logger.warning("Listing managed groups failed: %s", exc)
         return names
+
+    def _load_assignments(self, settings: DataAccessSettings) -> list[AssignmentRow]:
+        """Active Identity data-access assignments that map into ``dac_*`` groups."""
+        if self._identity is None:
+            return []
+        definition = self._identity.find_data_access_definition(settings.access_tag_key)
+        if definition is None:
+            return []
+        items = self._storage.identity_attributes.list_assignments(
+            AttributeAssignmentFilter(attribute_key=definition.key, include_inactive=False)
+        )
+        return [
+            AssignmentRow(
+                principal_name=item.principal_name,
+                principal_type=item.principal_type.value,
+                attribute_value=item.attribute_value,
+            )
+            for item in items
+        ]
+
+    def _load_members(
+        self, settings: DataAccessSettings, existing_groups: set[str]
+    ) -> list[ActualMember]:
+        """Load current members of managed groups via SCIM (display names)."""
+        if not existing_groups or not self._factory.admin_configured:
+            return []
+        admin = self._factory.admin()
+        members: list[ActualMember] = []
+        by_name = {name.lower(): name for name in existing_groups}
+        try:
+            escaped = settings.group_prefix.replace('"', '\\"')
+            listed = admin.groups.list(
+                filter=f'displayName sw "{escaped}"',
+                attributes="id,displayName,members",
+            )
+            for group in listed:
+                name = getattr(group, "display_name", None) or ""
+                if name.lower() not in by_name:
+                    continue
+                for entry in group.members or []:
+                    display = getattr(entry, "display", None) or getattr(entry, "value", None)
+                    if not display:
+                        continue
+                    raw_type = (getattr(entry, "type", None) or "UNKNOWN").upper()
+                    if raw_type in {"USER", "GROUP", "SERVICE_PRINCIPAL"}:
+                        principal_type = raw_type
+                    else:
+                        # Heuristic when SCIM omits type.
+                        principal_type = (
+                            "GROUP"
+                            if str(display).lower().startswith(
+                                settings.group_prefix.lower()
+                                if settings.group_prefix.endswith("_")
+                                else f"{settings.group_prefix}_".lower()
+                            )
+                            else "USER"
+                        )
+                    members.append(
+                        ActualMember(
+                            group_name=str(name),
+                            principal_name=str(display),
+                            principal_type=principal_type,
+                        )
+                    )
+        except DatabricksError as exc:
+            logger.warning("Listing managed group members failed: %s", exc)
+        return members
+
+    def _apply_plan_impl(self, settings: DataAccessSettings, plan: DataAccessPlan) -> DataAccessPlan:
+        """Create/nest groups, sync membership, GRANT/REVOKE. Collects per-step errors."""
+        errors: list[str] = []
+        group_ids = self._ensure_groups(plan.groups, errors)
+        self._nest_groups(plan.groups, group_ids, errors)
+        self._apply_membership(plan.membership_changes, group_ids, errors)
+        self._apply_grants(plan.grants_to_add, plan.grants_to_revoke, errors)
+        return plan.model_copy(update={"apply_errors": errors})
+
+    def _ensure_groups(
+        self, groups: list[PlannedGroup], errors: list[str]
+    ) -> dict[str, str]:
+        """Create missing groups; return display-name(lower) → SCIM id map."""
+        admin = self._factory.admin()
+        ids: dict[str, str] = {}
+        # Seed from existing list.
+        try:
+            for group in admin.groups.list(attributes="id,displayName"):
+                name = getattr(group, "display_name", None)
+                gid = getattr(group, "id", None)
+                if name and gid:
+                    ids[str(name).lower()] = str(gid)
+        except DatabricksError as exc:
+            errors.append(f"list groups: {exc}")
+        for planned in groups:
+            key = planned.name.lower()
+            if key in ids:
+                continue
+            try:
+                created = admin.groups.create(
+                    display_name=planned.name,
+                    schemas=[GroupSchema.URN_IETF_PARAMS_SCIM_SCHEMAS_CORE_2_0_GROUP],
+                )
+                gid = getattr(created, "id", None)
+                if gid:
+                    ids[key] = str(gid)
+                else:
+                    errors.append(f"create group {planned.name}: missing id")
+            except Exception as exc:  # noqa: BLE001
+                # Retry lookup in case of race / already exists.
+                try:
+                    found = next(
+                        (
+                            g
+                            for g in admin.groups.list(
+                                filter=f'displayName eq "{planned.name.replace(chr(34), "")}"',
+                                attributes="id,displayName",
+                            )
+                            if (getattr(g, "display_name", None) or "").lower() == key
+                        ),
+                        None,
+                    )
+                    if found and getattr(found, "id", None):
+                        ids[key] = str(found.id)
+                        continue
+                except Exception:  # noqa: BLE001
+                    pass
+                errors.append(f"create group {planned.name}: {exc}")
+        return ids
+
+    def _nest_groups(
+        self,
+        groups: list[PlannedGroup],
+        group_ids: dict[str, str],
+        errors: list[str],
+    ) -> None:
+        """Nest each parent ``dac_*`` group into its child (idempotent ADD)."""
+        admin = self._factory.admin()
+        for planned in groups:
+            if not planned.parent_group:
+                continue
+            child_id = group_ids.get(planned.name.lower())
+            parent_id = group_ids.get(planned.parent_group.lower())
+            if not child_id or not parent_id:
+                errors.append(
+                    f"nest {planned.parent_group} → {planned.name}: missing group id"
+                )
+                continue
+            try:
+                admin.groups.patch(
+                    id=child_id,
+                    schemas=[PatchSchema.URN_IETF_PARAMS_SCIM_API_MESSAGES_2_0_PATCH_OP],
+                    operations=[
+                        Patch(
+                            op=PatchOp.ADD,
+                            path="members",
+                            value=[{"value": parent_id}],
+                        )
+                    ],
+                )
+            except Exception as exc:  # noqa: BLE001
+                # Already a member is fine.
+                message = str(exc).lower()
+                if "already" in message or "exists" in message or "409" in message:
+                    continue
+                errors.append(f"nest {planned.parent_group} → {planned.name}: {exc}")
+
+    def _apply_membership(
+        self,
+        changes: list[MembershipChange],
+        group_ids: dict[str, str],
+        errors: list[str],
+    ) -> None:
+        """Add/remove principals on managed groups via SCIM patch."""
+        admin = self._factory.admin()
+        for change in changes:
+            group_id = group_ids.get(change.group.lower())
+            if not group_id:
+                errors.append(f"membership {change.action.value} {change.principal_name}: missing group")
+                continue
+            member_id = self._resolve_principal_id(
+                change.principal_name, change.principal_type, errors
+            )
+            if not member_id:
+                continue
+            try:
+                if change.action == MembershipAction.ADD:
+                    admin.groups.patch(
+                        id=group_id,
+                        schemas=[PatchSchema.URN_IETF_PARAMS_SCIM_API_MESSAGES_2_0_PATCH_OP],
+                        operations=[
+                            Patch(
+                                op=PatchOp.ADD,
+                                path="members",
+                                value=[{"value": member_id}],
+                            )
+                        ],
+                    )
+                else:
+                    admin.groups.patch(
+                        id=group_id,
+                        schemas=[PatchSchema.URN_IETF_PARAMS_SCIM_API_MESSAGES_2_0_PATCH_OP],
+                        operations=[
+                            Patch(
+                                op=PatchOp.REMOVE,
+                                path=f'members[value eq "{member_id}"]',
+                            )
+                        ],
+                    )
+            except Exception as exc:  # noqa: BLE001
+                message = str(exc).lower()
+                if change.action == MembershipAction.ADD and (
+                    "already" in message or "exists" in message
+                ):
+                    continue
+                errors.append(
+                    f"membership {change.action.value} {change.principal_name} "
+                    f"on {change.group}: {exc}"
+                )
+
+    def _resolve_principal_id(
+        self, name: str, principal_type: str, errors: list[str]
+    ) -> str | None:
+        """Resolve a user/group/SP display name to a SCIM id."""
+        admin = self._factory.admin()
+        kind = (principal_type or "USER").upper()
+        escaped = name.replace('"', '\\"')
+        try:
+            if kind == "GROUP":
+                found = next(
+                    iter(
+                        admin.groups.list(
+                            filter=f'displayName eq "{escaped}"', attributes="id,displayName"
+                        )
+                    ),
+                    None,
+                )
+                return str(found.id) if found and found.id else None
+            if kind == "SERVICE_PRINCIPAL":
+                sps = admin.service_principals.list(
+                    filter=f'applicationId eq "{escaped}" or displayName eq "{escaped}"',
+                    attributes="id,applicationId,displayName",
+                )
+                found = next(iter(sps), None)
+                return str(found.id) if found and found.id else None
+            users = admin.users.list(
+                filter=f'userName eq "{escaped}" or displayName eq "{escaped}"',
+                attributes="id,userName,displayName",
+            )
+            found = next(iter(users), None)
+            if found and found.id:
+                return str(found.id)
+            errors.append(f"resolve principal {name}: not found")
+            return None
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"resolve principal {name}: {exc}")
+            return None
+
+    def _apply_grants(
+        self,
+        to_add: list[PlannedGrant],
+        to_revoke: list[PlannedGrant],
+        errors: list[str],
+    ) -> None:
+        """Issue GRANT / REVOKE SQL for planned privileges."""
+        for grant in to_add:
+            sql = self._grant_sql("GRANT", grant)
+            try:
+                self._sql.execute(sql)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"GRANT {grant.privilege} on {grant.full_name}: {exc}")
+        for grant in to_revoke:
+            sql = self._grant_sql("REVOKE", grant)
+            try:
+                self._sql.execute(sql)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"REVOKE {grant.privilege} on {grant.full_name}: {exc}")
+
+    @staticmethod
+    def _grant_sql(verb: str, grant: PlannedGrant) -> str:
+        """Build GRANT/REVOKE SQL for one planned privilege."""
+        parts = grant.full_name.split(".")
+        quoted_name = ".".join(quote_identifier(p) for p in parts)
+        principal = f"`{grant.principal.replace('`', '')}`"
+        securable = grant.securable_type.upper()
+        if verb == "GRANT":
+            return f"GRANT {grant.privilege} ON {securable} {quoted_name} TO {principal}"
+        return f"REVOKE {grant.privilege} ON {securable} {quoted_name} FROM {principal}"
+
+    def load_tags_public(self, settings: DataAccessSettings | None = None) -> list[TagRow]:
+        """Expose tag inventory for Attribute Explorer (same loader as sync)."""
+        return self._tag_loader(settings or self._settings())
 
     def _catalog_sql(self, settings: DataAccessSettings, column: str) -> str:
         """Return an AND-clause limiting ``column`` to allowed, non-system catalogs."""

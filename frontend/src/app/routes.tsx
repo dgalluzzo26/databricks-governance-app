@@ -13,6 +13,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { AppStatusPage } from "@/pages/AppStatusPage";
 import { HomePage } from "@/pages/HomePage";
 import { ApprovalsPage } from "@/pages/approvals/ApprovalsPage";
+import { AttributeExplorerPage } from "@/pages/attributeExplorer/AttributeExplorerPage";
 import { IdentityPage } from "@/pages/identity/IdentityPage";
 import { NotFoundPage } from "@/pages/NotFoundPage";
 import { PoliciesPage } from "@/pages/policies/PoliciesPage";
@@ -31,6 +32,14 @@ export const routes: RouteObject[] = [
     children: [
       { index: true, element: <HomePage /> },
       { path: "access-explorer", element: <AccessExplorerPage /> },
+      {
+        path: "attribute-explorer",
+        element: (
+          <RequireApprover>
+            <AttributeExplorerPage />
+          </RequireApprover>
+        ),
+      },
       { path: "identity", element: <IdentityPage /> },
       {
         path: "approvals",

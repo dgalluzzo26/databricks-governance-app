@@ -907,7 +907,7 @@ export interface DataAccessConflict {
   reason: string;
 }
 
-/** Counts for a dry-run plan. */
+/** Counts for a dry-run / apply plan. */
 export interface DataAccessPlanSummary {
   eligibleObjects: number;
   skippedUnreviewed: number;
@@ -917,21 +917,70 @@ export interface DataAccessPlanSummary {
   grantsToAdd: number;
   grantsToRevoke: number;
   grantsUnchanged: number;
+  membersToAdd: number;
+  membersToRemove: number;
   conflicts: number;
   invalidValues: number;
 }
 
-/** Truncated dry-run plan. */
+/** Identity-driven membership change for a managed group. */
+export interface DataAccessMembershipChange {
+  group: string;
+  principalName: string;
+  principalType: string;
+  action: "add" | "remove";
+  reason: string;
+}
+
+/** Truncated dry-run / apply plan. */
 export interface DataAccessPlan {
   summary: DataAccessPlanSummary;
   fingerprint: string;
   groups: DataAccessPlannedGroup[];
   grantsToAdd: DataAccessPlannedGrant[];
   grantsToRevoke: DataAccessPlannedGrant[];
+  membershipChanges: DataAccessMembershipChange[];
   conflicts: DataAccessConflict[];
   invalidValues: string[];
   truncated: boolean;
   driftSinceLastRun: string[];
+  applyErrors: string[];
+}
+
+/** Attribute Explorer analyze request / response. */
+export type AttributeExplorerKind = "data_access" | "sensitivity" | "row_filter" | "other";
+export type AttributeHolderMatch = "exact" | "descendant" | "ancestor" | "related";
+
+export interface AnalyzeAttributeRequest {
+  attributeKey: string;
+  attributeValue: string;
+}
+
+export interface AttributeHolder {
+  principalName: string;
+  principalType: PrincipalKind;
+  attributeValue: string;
+  match: AttributeHolderMatch;
+  expiresAt: string | null;
+  assignmentId: string;
+}
+
+export interface UnlockedTable {
+  fullName: string;
+  tagValue: string;
+  match: AttributeHolderMatch;
+  groupName: string | null;
+}
+
+export interface AttributeExplorerResult {
+  attributeKey: string;
+  attributeValue: string;
+  kind: AttributeExplorerKind;
+  groupName: string | null;
+  parentGroup: string | null;
+  holders: AttributeHolder[];
+  tables: UnlockedTable[];
+  note: string | null;
 }
 
 /** One stored dry-run execution (`GET/POST /data-access/runs`). */

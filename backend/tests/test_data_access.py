@@ -3,7 +3,14 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from backend.app.models.data_access import DataAccessSettings
-from backend.app.services.data_access_planner import ActualGrant, TagRow, group_name, plan_data_access
+from backend.app.services.data_access_planner import (
+    ActualGrant,
+    ActualMember,
+    AssignmentRow,
+    TagRow,
+    group_name,
+    plan_data_access,
+)
 from backend.tests.conftest import headers_for
 
 
@@ -104,12 +111,40 @@ def test_plan_reports_drift_against_previous_fingerprint() -> None:
     assert any("changed" in note for note in third.drift_since_last_run)
 
 
-def test_settings_round_trip_and_rejects_apply(client: TestClient) -> None:
+def test_plan_membership_add_and_remove() -> None:
+    tags = [*_reviewed("table", "sandbox", "finance", "budget", "finance.budget")]
+    assignments = [
+        AssignmentRow("ana@example.com", "USER", "finance.budget"),
+        AssignmentRow("finance-owners", "GROUP", "finance.budget"),
+    ]
+    actual_members = [
+        ActualMember("dac_finance_budget", "stale@example.com", "USER"),
+        ActualMember("dac_finance_budget", "dac_finance", "GROUP"),
+    ]
+    plan = plan_data_access(
+        DataAccessSettings(),
+        tags,
+        [],
+        {"dac_finance_budget", "dac_finance"},
+        assignments=assignments,
+        actual_members=actual_members,
+    )
+    adds = {(m.principal_name, m.action.value) for m in plan.membership_changes}
+    assert ("ana@example.com", "add") in adds
+    assert ("finance-owners", "add") in adds
+    assert ("stale@example.com", "remove") in adds
+    # Nested parent group is never removed.
+    assert ("dac_finance", "remove") not in adds
+    assert plan.summary.members_to_add == 2
+    assert plan.summary.members_to_remove == 1
+
+
+def test_settings_round_trip_allows_dry_run_flag(client: TestClient) -> None:
     admin = headers_for("admin@example.com")
     body = client.get("/api/data-access/settings", headers=admin).json()
     assert body["minIntervalMinutes"] == 5
     assert body["settings"]["accessTagKey"] == "data_access_control"
-    assert body["applyAvailable"] is False
+    assert body["applyAvailable"] is True
 
     saved = client.put(
         "/api/data-access/settings",
@@ -126,12 +161,13 @@ def test_settings_round_trip_and_rejects_apply(client: TestClient) -> None:
     )
     assert too_small.status_code == 422
 
-    apply = client.put(
+    apply_pref = client.put(
         "/api/data-access/settings",
         headers=admin,
         json={**body["settings"], "dryRun": False},
     )
-    assert apply.status_code == 422
+    assert apply_pref.status_code == 200
+    assert apply_pref.json()["settings"]["dryRun"] is False
 
 
 def test_data_access_forbidden_for_non_admin(client: TestClient) -> None:
@@ -146,15 +182,61 @@ def test_dry_run_uses_injected_inventory(client: TestClient, container) -> None:
     container.data_access._tag_loader = lambda _settings: tags  # noqa: SLF001
     container.data_access._grant_loader = lambda _settings: []  # noqa: SLF001
     container.data_access._group_loader = lambda _settings: set()  # noqa: SLF001
+    container.data_access._member_loader = lambda _settings, _groups: []  # noqa: SLF001
+    container.data_access._assignment_loader = lambda _settings: []  # noqa: SLF001
     del settings
 
-    run = client.post("/api/data-access/runs", headers=headers_for("admin@example.com")).json()
+    run = client.post(
+        "/api/data-access/runs",
+        headers=headers_for("admin@example.com"),
+        json={"mode": "dry_run"},
+    ).json()
     assert run["status"] == "success"
     assert run["mode"] == "dry_run"
     assert run["plan"]["summary"]["eligibleObjects"] == 1
     assert run["plan"]["grantsToAdd"]
     latest = client.get("/api/data-access/runs/latest", headers=headers_for("admin@example.com")).json()
     assert latest["runId"] == run["runId"]
+
+
+def test_apply_runs_when_readiness_forced(client: TestClient, container) -> None:
+    from backend.app.models.data_access import DataAccessPlan, DataAccessReadiness, ReadinessCheck
+
+    tags = [*_reviewed("table", "sandbox", "finance", "budget", "finance.budget")]
+    container.data_access._tag_loader = lambda _settings: tags  # noqa: SLF001
+    container.data_access._grant_loader = lambda _settings: []  # noqa: SLF001
+    container.data_access._group_loader = lambda _settings: set()  # noqa: SLF001
+    container.data_access._member_loader = lambda _settings, _groups: []  # noqa: SLF001
+    container.data_access._assignment_loader = lambda _settings: [  # noqa: SLF001
+        AssignmentRow("ana@example.com", "USER", "finance.budget"),
+    ]
+    container.data_access.readiness = lambda: DataAccessReadiness(  # type: ignore[method-assign]
+        dry_run_ready=True,
+        apply_ready=True,
+        checks=[
+            ReadinessCheck(id="credentials", label="c", ok=True, required_for="dry_run"),
+        ],
+        setup_checks=[],
+        setup_ready=True,
+    )
+    applied: list[str] = []
+
+    def _fake_apply(settings, plan):  # noqa: ANN001
+        applied.append("yes")
+        return plan
+
+    container.data_access._apply_plan = _fake_apply  # noqa: SLF001
+
+    run = client.post(
+        "/api/data-access/runs",
+        headers=headers_for("admin@example.com"),
+        json={"mode": "apply"},
+    ).json()
+    assert run["status"] == "success"
+    assert run["mode"] == "apply"
+    assert applied == ["yes"]
+    assert run["plan"]["summary"]["membersToAdd"] == 1
+    del DataAccessPlan
 
 
 def test_readiness_reports_checks(client: TestClient) -> None:

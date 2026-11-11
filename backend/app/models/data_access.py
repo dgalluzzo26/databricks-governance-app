@@ -45,8 +45,6 @@ class SyncRunStatus(StrEnum):
 class DataAccessSettings(ApiModel):
     """Admin-editable configuration for the data-access group sync.
 
-    Apply mode is not available yet: ``dry_run`` is always true regardless of input.
-
     Attributes:
         access_tag_key: Governed tag whose values map to ``dac_*`` groups.
         review_tag_key: Tag that must also be present on the same object.
@@ -57,7 +55,7 @@ class DataAccessSettings(ApiModel):
         data_privileges: Privileges granted on the tagged securable (traversal is added).
         interval_minutes: How often the in-app scheduler runs a dry-run.
         conflict_policy: Hold or warn when an ancestor grant would over-expose descendants.
-        dry_run: When true, the sync never creates groups or changes Unity Catalog grants.
+        dry_run: Preferred mode for the settings form; scheduled sync stays dry-run.
     """
 
     access_tag_key: str = "data_access_control"
@@ -119,12 +117,30 @@ class DataAccessSettingsView(ApiModel):
     Attributes:
         settings: Current persisted (or default) settings.
         min_interval_minutes: Smallest interval the API will accept.
-        apply_available: False until apply mode is implemented.
+        apply_available: True when live apply is implemented (still gated by readiness).
     """
 
     settings: DataAccessSettings
     min_interval_minutes: int = MIN_SYNC_INTERVAL_MINUTES
-    apply_available: bool = False
+    apply_available: bool = True
+
+
+class RunDataAccessRequest(ApiModel):
+    """Body for ``POST /data-access/runs``.
+
+    Attributes:
+        mode: ``dry_run`` plans only; ``apply`` mutates groups, membership, and grants.
+    """
+
+    mode: str = "dry_run"
+
+    @field_validator("mode")
+    @classmethod
+    def _mode(cls, value: str) -> str:
+        text = (value or "dry_run").strip().lower()
+        if text not in {"dry_run", "apply"}:
+            raise ValueError("mode must be dry_run or apply")
+        return text
 
 
 class ReadinessCheck(ApiModel):
@@ -197,6 +213,31 @@ class PlannedGrant(ApiModel):
     reason: str = ""
 
 
+class MembershipAction(StrEnum):
+    """Whether a principal should be added to or removed from a managed group."""
+
+    ADD = "add"
+    REMOVE = "remove"
+
+
+class MembershipChange(ApiModel):
+    """One Identity-driven membership change for a managed ``dac_*`` group.
+
+    Attributes:
+        group: Managed group display name.
+        principal_name: User name, group name, or SP application id.
+        principal_type: ``USER``, ``GROUP``, or ``SERVICE_PRINCIPAL``.
+        action: Add or remove.
+        reason: Why this change is in the plan.
+    """
+
+    group: str
+    principal_name: str
+    principal_type: str
+    action: MembershipAction
+    reason: str = ""
+
+
 class DataAccessConflict(ApiModel):
     """An ancestor grant that would expose a descendant the tags do not allow.
 
@@ -229,6 +270,8 @@ class DataAccessPlanSummary(ApiModel):
         grants_to_add: Privileges present in desired state but not in Unity Catalog.
         grants_to_revoke: Managed-prefix privileges in Unity Catalog but not desired.
         grants_unchanged: Desired privileges already present.
+        members_to_add: Identity principals missing from their ``dac_*`` group.
+        members_to_remove: Stale user/SP members not backed by an active assignment.
         conflicts: Ancestor/descendant tag mismatches.
         invalid_values: Access values that cannot become group names.
     """
@@ -241,23 +284,27 @@ class DataAccessPlanSummary(ApiModel):
     grants_to_add: int = 0
     grants_to_revoke: int = 0
     grants_unchanged: int = 0
+    members_to_add: int = 0
+    members_to_remove: int = 0
     conflicts: int = 0
     invalid_values: int = 0
 
 
 class DataAccessPlan(ApiModel):
-    """Full dry-run result (truncated lists plus complete summary counts).
+    """Full dry-run / apply plan (truncated lists plus complete summary counts).
 
     Attributes:
         summary: Counts for every category.
-        fingerprint: Hash of the desired grant/group set; used to detect drift.
+        fingerprint: Hash of the desired grant/group/membership set; used to detect drift.
         groups: Groups the sync would create or reuse (truncated).
         grants_to_add: Missing privileges (truncated).
         grants_to_revoke: Extra managed-prefix privileges (truncated).
+        membership_changes: Identity-driven member add/remove (truncated).
         conflicts: Over-grant risks (truncated).
         invalid_values: Values that could not be turned into group names.
         truncated: True when any list was cut at ``PLAN_ITEM_LIMIT``.
         drift_since_last_run: Human-readable changes versus the previous successful plan.
+        apply_errors: Per-step errors collected during apply (empty for dry-run).
     """
 
     summary: DataAccessPlanSummary
@@ -265,20 +312,22 @@ class DataAccessPlan(ApiModel):
     groups: list[PlannedGroup] = Field(default_factory=list)
     grants_to_add: list[PlannedGrant] = Field(default_factory=list)
     grants_to_revoke: list[PlannedGrant] = Field(default_factory=list)
+    membership_changes: list[MembershipChange] = Field(default_factory=list)
     conflicts: list[DataAccessConflict] = Field(default_factory=list)
     invalid_values: list[str] = Field(default_factory=list)
     truncated: bool = False
     drift_since_last_run: list[str] = Field(default_factory=list)
+    apply_errors: list[str] = Field(default_factory=list)
 
 
 class DataAccessRun(ApiModel):
-    """One stored dry-run execution.
+    """One stored sync execution (dry-run or apply).
 
     Attributes:
         run_id: Unique identifier.
         status: Running, success, or failed.
         trigger: Schedule or an admin clicking Run now.
-        mode: Always ``dry_run`` until apply exists.
+        mode: ``dry_run`` or ``apply``.
         started_at: When the run began.
         finished_at: When it finished; None while running.
         triggered_by: User name or ``scheduler``.

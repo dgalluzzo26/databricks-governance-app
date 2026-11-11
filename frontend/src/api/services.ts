@@ -8,7 +8,9 @@ import { HttpClient } from "./httpClient";
 import type {
   AccessRequest,
   AccessRequestList,
+  AnalyzeAttributeRequest,
   AppInfo,
+  AttributeExplorerResult,
   DataAccessReadiness,
   DataAccessRun,
   DataAccessSettings,
@@ -196,12 +198,29 @@ export class DataAccessApi {
   }
 
   /**
-   * `POST /data-access/runs` — run a dry-run now. Does not create groups or grants.
+   * `POST /data-access/runs` — run a sync now (`dry_run` or `apply`).
    *
+   * @param mode - Plan only, or mutate groups / membership / grants.
    * @returns The finished run.
    */
-  runNow(): Promise<DataAccessRun> {
-    return this.http.post<DataAccessRun>("/data-access/runs");
+  runNow(mode: "dry_run" | "apply" = "dry_run"): Promise<DataAccessRun> {
+    return this.http.post<DataAccessRun>("/data-access/runs", { mode });
+  }
+}
+
+/** Attribute Explorer — holders and unlocked tables for a path. */
+export class AttributeExplorerApi {
+  /** @param http - Shared HTTP client. */
+  constructor(private readonly http: HttpClient) {}
+
+  /**
+   * `POST /attribute-explorer/analyze` — reverse lookup for admins / path approvers.
+   *
+   * @param body - Attribute key and value.
+   * @returns Holders, optional tables, and group metadata.
+   */
+  analyze(body: AnalyzeAttributeRequest): Promise<AttributeExplorerResult> {
+    return this.http.post<AttributeExplorerResult>("/attribute-explorer/analyze", body);
   }
 }
 
@@ -899,6 +918,7 @@ export interface ApiServices {
   rowFilters: RowFiltersApi;
   maskRules: MaskRulesApi;
   accessExplorer: AccessExplorerApi;
+  attributeExplorer: AttributeExplorerApi;
   help: HelpApi;
   policyExceptions: PolicyExceptionsApi;
 }
@@ -920,6 +940,7 @@ export function createApiServices(http: HttpClient = new HttpClient()): ApiServi
     rowFilters: new RowFiltersApi(http),
     maskRules: new MaskRulesApi(http),
     accessExplorer: new AccessExplorerApi(http),
+    attributeExplorer: new AttributeExplorerApi(http),
     help: new HelpApi(http),
     policyExceptions: new PolicyExceptionsApi(http),
   };

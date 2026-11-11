@@ -168,19 +168,33 @@ export function useDataAccessLatestRun() {
 }
 
 /**
- * Runs a data-access dry-run now (`POST /data-access/runs`). Never creates groups or grants.
+ * Runs a data-access sync now (`POST /data-access/runs`).
  *
- * @returns A mutation with no variables, resolving to a {@link DataAccessRun}.
+ * @returns A mutation taking `dry_run` | `apply`, resolving to a {@link DataAccessRun}.
  */
 export function useRunDataAccessSync() {
   const api = useApi();
   const client = useQueryClient();
   return useMutation({
-    meta: { busyMessage: "Running data-access dry-run…" },
-    mutationFn: () => api.dataAccess.runNow(),
+    meta: { busyMessage: "Running data-access sync…" },
+    mutationFn: (mode: "dry_run" | "apply" = "dry_run") => api.dataAccess.runNow(mode),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: ["data-access"] });
     },
+  });
+}
+
+/**
+ * Attribute Explorer reverse lookup (`POST /attribute-explorer/analyze`).
+ *
+ * @returns A mutation taking `{ attributeKey, attributeValue }`.
+ */
+export function useAnalyzeAttribute() {
+  const api = useApi();
+  return useMutation({
+    meta: { busyMessage: "Analyzing attribute…" },
+    mutationFn: (body: { attributeKey: string; attributeValue: string }) =>
+      api.attributeExplorer.analyze(body),
   });
 }
 

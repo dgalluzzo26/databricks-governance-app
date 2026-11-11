@@ -52,6 +52,12 @@ export const navigation: NavSection[] = [
     title: "Governance",
     items: [
       { label: "Access explorer", to: "/access-explorer", icon: ExplorerIcon },
+      {
+        label: "Attribute explorer",
+        to: "/attribute-explorer",
+        icon: ExplorerIcon,
+        approverVisible: true,
+      },
       { label: "Identity", to: "/identity", icon: IdentityIcon },
       {
         label: "Approvals",

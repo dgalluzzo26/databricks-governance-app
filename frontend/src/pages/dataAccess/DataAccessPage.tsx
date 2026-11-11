@@ -112,16 +112,15 @@ export function DataAccessPage() {
                 type="button"
                 className={`${styles.button} ${styles.buttonPrimary}`}
                 disabled={run.isPending || readiness.data?.dryRunReady === false}
-                onClick={() => void run.mutateAsync()}
+                onClick={() => void run.mutateAsync("dry_run")}
               >
                 {run.isPending ? "Running…" : "Run now"}
               </button>
             }
           >
             <p className={styles.muted}>
-              Runs the planner against live tags and current UC grants, stores the plan, and never
-              mutates Unity Catalog. Scheduled interval sync uses the same dry-run path until apply
-              is unlocked.
+              Plans groups, nesting, Identity→membership diffs, and table SELECT grants without
+              mutating Unity Catalog. Scheduled sync stays dry-run; use Live to apply.
             </p>
             {run.error && <ErrorAlert error={run.error} title="Dry-run failed" />}
             {latest.isPending && <Spinner label="Loading latest run" />}
@@ -139,7 +138,10 @@ export function DataAccessPage() {
         <LiveTab
           readiness={readiness}
           applyAvailable={settingsQuery.data?.applyAvailable === true}
+          setupReady={readiness.data?.setupReady === true}
           history={history.data}
+          latest={latest.data}
+          run={run}
         />
       )}
     </div>
@@ -147,63 +149,106 @@ export function DataAccessPage() {
 }
 
 /**
- * Live / apply framing: readiness checklist, locked apply, pointers to dry-run history.
+ * Live apply: readiness, membership preview from latest plan, confirm + Run apply.
  */
 function LiveTab(props: {
   readiness: ReturnType<typeof useDataAccessReadiness>;
   applyAvailable: boolean;
+  setupReady: boolean;
   history: DataAccessRun[] | undefined;
+  latest: DataAccessRun | null | undefined;
+  run: ReturnType<typeof useRunDataAccessSync>;
 }) {
-  const { readiness, applyAvailable, history } = props;
+  const { readiness, applyAvailable, setupReady, history, latest, run } = props;
+  const canApply =
+    applyAvailable && readiness.data?.applyReady === true && setupReady && !run.isPending;
+
   return (
     <div className={styles.stack}>
       {readiness.isPending && <Spinner label="Checking apply readiness" />}
       {readiness.error && <ErrorAlert error={readiness.error} title="Could not load readiness" />}
       {readiness.data && (
         <Alert
-          tone={applyAvailable && readiness.data.applyReady ? "success" : "warning"}
-          title={
-            applyAvailable && readiness.data.applyReady
-              ? "Apply mode available"
-              : "Apply mode is locked"
-          }
+          tone={canApply ? "success" : "warning"}
+          title={canApply ? "Apply ready" : "Apply not ready"}
         >
-          {applyAvailable
-            ? readiness.data.applyReady
-              ? "All apply probes pass. Live sync can create groups and change grants."
-              : "Apply is enabled in settings but one or more probes still fail — see App status."
-            : "The planner stays dry-run-only until apply is turned on in a future release. Use Dry-run → Run now for manual sync today."}
+          {canApply
+            ? "Account Admin SP probes and Identity definitions look good. Apply will mutate groups, membership, and grants."
+            : "Fix failing checks on App status (Account Admin SP, warehouse, definitions) before applying."}{" "}
+          <Link to="/status">Open App status</Link>
         </Alert>
       )}
 
-      <Card title="Before live sync">
+      <Card title="Before you apply">
         <ul className={styles.list}>
           <li>
-            Pass every dry-run and apply check on <Link to="/status">App status</Link> (Account Admin
-            SP, warehouse, sensitivity + data-access definitions).
+            Confirm the latest Dry-run plan (groups, nesting, membership, table SELECT, revokes).
           </li>
           <li>
-            Confirm Dry-run plans look right (groups, nested parents, table SELECT grants) with no
-            unexpected revokes.
+            Identity <code>data_access</code> assignments drive who is added to each{" "}
+            <code>dac_*</code> group. Review holders in{" "}
+            <Link to="/attribute-explorer">Attribute explorer</Link>.
           </li>
           <li>
-            Configure data-access path approvers under{" "}
-            <Link to="/identity?tab=approvers">Identity → Approvers</Link> so grant requests route
-            correctly.
-          </li>
-          <li>
-            When apply unlocks, live runs will appear in the same run history below; until then only
-            dry-run rows are stored.
+            Path approvers are optional for requests; they do not gate apply.
           </li>
         </ul>
       </Card>
 
-      <Card title="What live will do (when unlocked)">
+      <Card
+        title="Apply now"
+        actions={
+          <button
+            type="button"
+            className={`${styles.button} ${styles.buttonPrimary}`}
+            disabled={!canApply}
+            onClick={() => {
+              if (
+                window.confirm(
+                  "Apply will create/nest dac_* groups, sync membership from Identity, and GRANT/REVOKE table access. Continue?",
+                )
+              ) {
+                void run.mutateAsync("apply");
+              }
+            }}
+          >
+            {run.isPending ? "Applying…" : "Run apply"}
+          </button>
+        }
+      >
         <p className={styles.muted}>
-          Create missing <code>dac_*</code> groups, nest parents into children, grant table SELECT
-          (and USE CATALOG/SCHEMA), and revoke stale planner-managed grants. Manual sync will use
-          the same Run now control with mode=apply.
+          Order: create groups → nest parents into children → sync members from Identity assignments
+          → GRANT adds → REVOKE stale managed grants. Scheduled sync stays dry-run.
         </p>
+        {run.error && <ErrorAlert error={run.error} title="Apply failed" />}
+        {latest?.plan && (
+          <>
+            <p>
+              Latest plan: members +{latest.plan.summary.membersToAdd ?? 0} / −
+              {latest.plan.summary.membersToRemove ?? 0}; grants +{latest.plan.summary.grantsToAdd} / −
+              {latest.plan.summary.grantsToRevoke}; groups to create{" "}
+              {latest.plan.summary.groupsToCreate}.
+            </p>
+            {(latest.plan.membershipChanges?.length ?? 0) > 0 && (
+              <GrantTable
+                caption="Membership changes"
+                headers={["Action", "Group", "Principal", "Type", "Reason"]}
+                rows={latest.plan.membershipChanges.map((m) => [
+                  m.action,
+                  m.group,
+                  m.principalName,
+                  m.principalType,
+                  m.reason,
+                ])}
+              />
+            )}
+            {(latest.plan.applyErrors?.length ?? 0) > 0 && (
+              <Alert tone="warning" title="Apply reported step errors">
+                {latest.plan.applyErrors.join("; ")}
+              </Alert>
+            )}
+          </>
+        )}
       </Card>
 
       <RunHistoryCard history={history} title="Sync logs (all modes)" />
@@ -403,7 +448,8 @@ function RunReport({ run }: { run: DataAccessRun }) {
       {summary && (
         <p>
           Eligible objects {summary.eligibleObjects}. Unreviewed skipped {summary.skippedUnreviewed}. Groups to
-          create {summary.groupsToCreate}. Grants to add {summary.grantsToAdd}, revoke {summary.grantsToRevoke},
+          create {summary.groupsToCreate}. Members to add {summary.membersToAdd ?? 0}, remove{" "}
+          {summary.membersToRemove ?? 0}. Grants to add {summary.grantsToAdd}, revoke {summary.grantsToRevoke},
           unchanged {summary.grantsUnchanged}. Conflicts {summary.conflicts}.
         </p>
       )}
@@ -413,11 +459,27 @@ function RunReport({ run }: { run: DataAccessRun }) {
         </div>
       ))}
       {plan?.truncated && <Alert tone="warning" title="Lists truncated">Showing the first 200 rows in each table.</Alert>}
+      {(plan?.applyErrors?.length ?? 0) > 0 && (
+        <Alert tone="warning" title="Apply step errors">{plan!.applyErrors.join("; ")}</Alert>
+      )}
       {plan && plan.groups.length > 0 && (
         <GrantTable
           caption="Groups"
           headers={["Group", "Value", "Parent", "Exists"]}
           rows={plan.groups.map((g) => [g.name, g.value, g.parentGroup ?? "—", g.exists ? "yes" : "would create"])}
+        />
+      )}
+      {plan && (plan.membershipChanges?.length ?? 0) > 0 && (
+        <GrantTable
+          caption="Membership"
+          headers={["Action", "Group", "Principal", "Type", "Reason"]}
+          rows={plan.membershipChanges.map((m) => [
+            m.action,
+            m.group,
+            m.principalName,
+            m.principalType,
+            m.reason,
+          ])}
         />
       )}
       {plan && plan.grantsToAdd.length > 0 && (

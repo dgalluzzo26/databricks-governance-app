@@ -1,4 +1,4 @@
-"""Admin API for data-access group settings, readiness, and dry-run syncs."""
+"""Admin API for data-access group settings, readiness, and sync runs."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from backend.app.models.data_access import (
     DataAccessRun,
     DataAccessSettings,
     DataAccessSettingsView,
+    RunDataAccessRequest,
 )
 
 router = APIRouter(prefix="/data-access", tags=["data-access"])
@@ -31,7 +32,7 @@ def get_settings(_: Admin, container: Container) -> DataAccessSettingsView:
 def put_settings(body: DataAccessSettings, admin: Admin, container: Container) -> DataAccessSettingsView:
     """Save data-access sync settings.
 
-    Requires app admin. Apply mode is rejected until that phase ships.
+    Requires app admin.
 
     Args:
         body: Settings to persist.
@@ -58,7 +59,7 @@ def readiness(_: Admin, container: Container) -> DataAccessReadiness:
 
 @router.get("/runs", response_model=list[DataAccessRun])
 def list_runs(_: Admin, container: Container) -> list[DataAccessRun]:
-    """List recent dry-run syncs, newest first (summaries only).
+    """List recent syncs, newest first (summaries only).
 
     Requires app admin.
 
@@ -70,7 +71,7 @@ def list_runs(_: Admin, container: Container) -> list[DataAccessRun]:
 
 @router.get("/runs/latest", response_model=DataAccessRun | None)
 def latest_run(_: Admin, container: Container) -> DataAccessRun | None:
-    """Return the most recent dry-run including its truncated plan.
+    """Return the most recent sync including its truncated plan.
 
     Requires app admin.
 
@@ -81,12 +82,20 @@ def latest_run(_: Admin, container: Container) -> DataAccessRun | None:
 
 
 @router.post("/runs", response_model=DataAccessRun)
-def run_now(admin: Admin, container: Container) -> DataAccessRun:
-    """Run a dry-run sync now.
+def run_now(
+    admin: Admin, container: Container, body: RunDataAccessRequest | None = None
+) -> DataAccessRun:
+    """Run a data-access sync now (dry-run or apply).
 
-    Requires app admin. Does not create groups or change Unity Catalog grants.
+    Requires app admin. Apply creates/nests groups, syncs membership, and GRANT/REVOKE.
+
+    Args:
+        admin: Signed-in app admin.
+        container: Service container.
+        body: Optional mode (defaults to dry_run).
 
     Returns:
         The finished run.
     """
-    return container.data_access.run_now(admin)
+    mode = (body.mode if body is not None else "dry_run")
+    return container.data_access.run_now(admin, mode=mode)

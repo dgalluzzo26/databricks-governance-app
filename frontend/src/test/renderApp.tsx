@@ -65,12 +65,12 @@ export const testDataAccessSettings: DataAccessSettingsView = {
     dryRun: true,
   },
   minIntervalMinutes: 5,
-  applyAvailable: false,
+  applyAvailable: true,
 };
 
 export const testDataAccessReadiness: DataAccessReadiness = {
   dryRunReady: true,
-  applyReady: false,
+  applyReady: true,
   checks: [
     { id: "credentials", label: "Account Admin SP credentials", ok: true, requiredFor: "dry_run", detail: "Present" },
     { id: "warehouse", label: "SQL warehouse", ok: true, requiredFor: "dry_run", detail: "Configured" },
@@ -113,6 +113,8 @@ export const testDataAccessRun: DataAccessRun = {
     grantsToAdd: 3,
     grantsToRevoke: 0,
     grantsUnchanged: 0,
+    membersToAdd: 1,
+    membersToRemove: 0,
     conflicts: 0,
     invalidValues: 0,
   },
@@ -121,6 +123,16 @@ export const testDataAccessRun: DataAccessRun = {
     truncated: false,
     driftSinceLastRun: ["No previous successful dry-run to compare"],
     invalidValues: [],
+    applyErrors: [],
+    membershipChanges: [
+      {
+        group: "dac_finance_budget",
+        principalName: "ana.lopez@example.com",
+        principalType: "USER",
+        action: "add",
+        reason: "Identity assignment finance.budget",
+      },
+    ],
     summary: {
       eligibleObjects: 1,
       skippedUnreviewed: 0,
@@ -130,6 +142,8 @@ export const testDataAccessRun: DataAccessRun = {
       grantsToAdd: 3,
       grantsToRevoke: 0,
       grantsUnchanged: 0,
+      membersToAdd: 1,
+      membersToRemove: 0,
       conflicts: 0,
       invalidValues: 0,
     },
@@ -658,10 +672,38 @@ export function fakeServices(
         overrides.dataAccessRun instanceof Error
           ? Promise.reject(overrides.dataAccessRun)
           : Promise.resolve(overrides.dataAccessRun === null ? null : (overrides.dataAccessRun ?? testDataAccessRun)),
-      runNow: () =>
+      runNow: async (_mode?: "dry_run" | "apply") =>
         overrides.dataAccessRun instanceof Error
           ? Promise.reject(overrides.dataAccessRun)
           : Promise.resolve(overrides.dataAccessRun ?? testDataAccessRun),
+    },
+    attributeExplorer: {
+      analyze: async (body) => ({
+        attributeKey: body.attributeKey,
+        attributeValue: body.attributeValue,
+        kind: "data_access" as const,
+        groupName: "dac_finance",
+        parentGroup: null,
+        holders: [
+          {
+            principalName: "ana.lopez@example.com",
+            principalType: "USER" as const,
+            attributeValue: body.attributeValue,
+            match: "exact" as const,
+            expiresAt: null,
+            assignmentId: "as-1",
+          },
+        ],
+        tables: [
+          {
+            fullName: "sandbox.finance.budget",
+            tagValue: body.attributeValue,
+            match: "exact" as const,
+            groupName: "dac_finance",
+          },
+        ],
+        note: null,
+      }),
     },
     policies: {
       list: () => (policies instanceof Error ? Promise.reject(policies) : Promise.resolve(policies)),

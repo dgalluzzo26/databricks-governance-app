@@ -19,6 +19,8 @@ from backend.app.models.data_access import (
     DataAccessPlan,
     DataAccessPlanSummary,
     DataAccessSettings,
+    MembershipAction,
+    MembershipChange,
     PlannedGrant,
     PlannedGroup,
 )
@@ -75,6 +77,36 @@ class ActualGrant:
 
 
 @dataclass(frozen=True)
+class ActualMember:
+    """A current member of a managed ``dac_*`` group.
+
+    Attributes:
+        group_name: Managed group display name.
+        principal_name: Member display name or user name.
+        principal_type: ``USER``, ``GROUP``, ``SERVICE_PRINCIPAL``, or ``UNKNOWN``.
+    """
+
+    group_name: str
+    principal_name: str
+    principal_type: str
+
+
+@dataclass(frozen=True)
+class AssignmentRow:
+    """An active Identity assignment that should map into a ``dac_*`` group.
+
+    Attributes:
+        principal_name: Assignee display name / user name / SP id.
+        principal_type: ``USER``, ``GROUP``, or ``SERVICE_PRINCIPAL``.
+        attribute_value: Data-access path (e.g. ``finance.budget``).
+    """
+
+    principal_name: str
+    principal_type: str
+    attribute_value: str
+
+
+@dataclass(frozen=True)
 class _Object:
     level: str
     full_name: str
@@ -126,8 +158,11 @@ def plan_data_access(
     existing_groups: set[str],
     previous_fingerprint: str | None = None,
     previous_summary: DataAccessPlanSummary | None = None,
+    *,
+    assignments: list[AssignmentRow] | None = None,
+    actual_members: list[ActualMember] | None = None,
 ) -> DataAccessPlan:
-    """Compute the dry-run plan from inventory snapshots.
+    """Compute the dry-run / apply plan from inventory snapshots.
 
     Args:
         settings: Current data-access settings.
@@ -136,6 +171,8 @@ def plan_data_access(
         existing_groups: Group display names already in the account.
         previous_fingerprint: Fingerprint from the last successful run, if any.
         previous_summary: Summary from the last successful run, if any.
+        assignments: Active Identity data-access assignments (membership desired state).
+        actual_members: Current members of managed groups (for membership diffs).
 
     Returns:
         Truncated plan with full summary counts and drift notes.
@@ -172,7 +209,12 @@ def plan_data_access(
             continue
         eligible.append((obj, access))
 
-    values = sorted({value for _, value in eligible})
+    assignment_values = {
+        (row.attribute_value or "").strip()
+        for row in (assignments or [])
+        if (row.attribute_value or "").strip() and (row.attribute_value or "").strip() != "*"
+    }
+    values = sorted({value for _, value in eligible} | assignment_values)
     known_values = set(values)
 
     invalid_values: list[str] = []
@@ -265,26 +307,18 @@ def plan_data_access(
             )
         )
 
-    fingerprint = _fingerprint(desired, groups)
-    drift = _drift(
-        fingerprint,
-        previous_fingerprint,
-        previous_summary,
-        DataAccessPlanSummary(
-            eligible_objects=len(eligible),
-            skipped_unreviewed=skipped_unreviewed,
-            unique_values=len(values),
-            groups_to_create=sum(1 for g in groups if not g.exists),
-            groups_existing=sum(1 for g in groups if g.exists),
-            grants_to_add=len(grants_to_add),
-            grants_to_revoke=len(grants_to_revoke),
-            grants_unchanged=unchanged,
-            conflicts=len(conflicts),
-            invalid_values=len(invalid_values),
-        ),
+    membership_changes = _membership_changes(
+        settings=settings,
+        groups=groups,
+        value_to_group=value_to_group,
+        assignments=assignments or [],
+        actual_members=actual_members or [],
     )
+    members_to_add = sum(1 for m in membership_changes if m.action == MembershipAction.ADD)
+    members_to_remove = sum(1 for m in membership_changes if m.action == MembershipAction.REMOVE)
 
-    summary = DataAccessPlanSummary(
+    fingerprint = _fingerprint(desired, groups, membership_changes)
+    draft_summary = DataAccessPlanSummary(
         eligible_objects=len(eligible),
         skipped_unreviewed=skipped_unreviewed,
         unique_values=len(values),
@@ -293,24 +327,127 @@ def plan_data_access(
         grants_to_add=len(grants_to_add),
         grants_to_revoke=len(grants_to_revoke),
         grants_unchanged=unchanged,
+        members_to_add=members_to_add,
+        members_to_remove=members_to_remove,
         conflicts=len(conflicts),
         invalid_values=len(invalid_values),
     )
+    drift = _drift(fingerprint, previous_fingerprint, previous_summary, draft_summary)
     truncated = any(
         len(items) > PLAN_ITEM_LIMIT
-        for items in (groups, grants_to_add, grants_to_revoke, conflicts, invalid_values)
+        for items in (
+            groups,
+            grants_to_add,
+            grants_to_revoke,
+            membership_changes,
+            conflicts,
+            invalid_values,
+        )
     )
     return DataAccessPlan(
-        summary=summary,
+        summary=draft_summary,
         fingerprint=fingerprint,
         groups=groups[:PLAN_ITEM_LIMIT],
         grants_to_add=grants_to_add[:PLAN_ITEM_LIMIT],
         grants_to_revoke=grants_to_revoke[:PLAN_ITEM_LIMIT],
+        membership_changes=membership_changes[:PLAN_ITEM_LIMIT],
         conflicts=conflicts[:PLAN_ITEM_LIMIT],
         invalid_values=invalid_values[:PLAN_ITEM_LIMIT],
         truncated=truncated,
         drift_since_last_run=drift,
     )
+
+
+def _membership_changes(
+    *,
+    settings: DataAccessSettings,
+    groups: list[PlannedGroup],
+    value_to_group: dict[str, str],
+    assignments: list[AssignmentRow],
+    actual_members: list[ActualMember],
+) -> list[MembershipChange]:
+    """Diff Identity assignments against current group members.
+
+    Nested parent ``dac_*`` groups are never removed from children. Wildcard ``*``
+    assignments are ignored (no single target group).
+    """
+    managed_groups = {g.name.lower(): g.name for g in groups}
+    nested_parents: set[tuple[str, str]] = set()
+    for group in groups:
+        if group.parent_group:
+            nested_parents.add((group.name.lower(), group.parent_group.lower()))
+
+    desired: dict[tuple[str, str], AssignmentRow] = {}
+    for row in assignments:
+        value = (row.attribute_value or "").strip()
+        if not value or value == "*":
+            continue
+        group = value_to_group.get(value) or group_name(settings.group_prefix, value)
+        if group is None:
+            continue
+        # Only plan membership for groups in this plan (or that would be created).
+        if group.lower() not in managed_groups and group.lower() not in {
+            g.name.lower() for g in groups
+        }:
+            # Still allow assignment→group when the value maps to a planned group.
+            if value not in value_to_group:
+                continue
+            group = value_to_group[value]
+        key = (group.lower(), row.principal_name.lower())
+        desired[key] = row
+
+    actual_by_group: dict[str, list[ActualMember]] = {}
+    for member in actual_members:
+        actual_by_group.setdefault(member.group_name.lower(), []).append(member)
+
+    changes: list[MembershipChange] = []
+    for key, row in sorted(desired.items(), key=lambda item: (item[0][0], item[0][1])):
+        group_l, principal_l = key
+        group_name_display = managed_groups.get(group_l) or value_to_group.get(
+            row.attribute_value, group_l
+        )
+        present = any(
+            m.principal_name.lower() == principal_l for m in actual_by_group.get(group_l, [])
+        )
+        if not present:
+            changes.append(
+                MembershipChange(
+                    group=group_name_display,
+                    principal_name=row.principal_name,
+                    principal_type=row.principal_type,
+                    action=MembershipAction.ADD,
+                    reason=f"Identity assignment {row.attribute_value}",
+                )
+            )
+
+    for group in groups:
+        for member in actual_by_group.get(group.name.lower(), []):
+            member_type = (member.principal_type or "UNKNOWN").upper()
+            # Never remove nested parent dac_* groups used for inheritance.
+            if member_type == "GROUP" and (
+                group.name.lower(),
+                member.principal_name.lower(),
+            ) in nested_parents:
+                continue
+            if member_type == "GROUP" and member.principal_name.lower().startswith(
+                (settings.group_prefix if settings.group_prefix.endswith("_") else f"{settings.group_prefix}_").lower()
+            ):
+                # Other managed-group nesting edges are left alone.
+                continue
+            if (group.name.lower(), member.principal_name.lower()) in desired:
+                continue
+            changes.append(
+                MembershipChange(
+                    group=group.name,
+                    principal_name=member.principal_name,
+                    principal_type=member_type,
+                    action=MembershipAction.REMOVE,
+                    reason="no active Identity assignment for this group",
+                )
+            )
+
+    changes.sort(key=lambda m: (m.action.value, m.group.lower(), m.principal_name.lower()))
+    return changes
 
 
 def _descendant_conflicts(
@@ -450,10 +587,22 @@ def _restore_desired_grants(
     return out
 
 
-def _fingerprint(desired: set[tuple[str, str, str, str]], groups: list[PlannedGroup]) -> str:
-    """Hash the desired grant set and group nesting so later runs can detect drift."""
+def _fingerprint(
+    desired: set[tuple[str, str, str, str]],
+    groups: list[PlannedGroup],
+    membership: list[MembershipChange] | None = None,
+) -> str:
+    """Hash the desired grant set, group nesting, and membership so later runs can detect drift."""
     parts = [f"g:{g.name}:{g.parent_group or ''}" for g in sorted(groups, key=lambda x: x.name)]
     parts.extend(f"{a}|{b}|{c}|{d}" for a, b, c, d in sorted(desired))
+    for change in sorted(
+        membership or [],
+        key=lambda m: (m.action.value, m.group.lower(), m.principal_name.lower()),
+    ):
+        if change.action == MembershipAction.ADD:
+            parts.append(
+                f"m:{change.group.lower()}|{change.principal_name.lower()}|{change.principal_type}"
+            )
     digest = hashlib.sha256("\n".join(parts).encode()).hexdigest()
     return digest[:16]
 
@@ -474,6 +623,8 @@ def _drift(
         ("eligible objects", previous.eligible_objects, current.eligible_objects),
         ("grants to add", previous.grants_to_add, current.grants_to_add),
         ("grants to revoke", previous.grants_to_revoke, current.grants_to_revoke),
+        ("members to add", previous.members_to_add, current.members_to_add),
+        ("members to remove", previous.members_to_remove, current.members_to_remove),
         ("conflicts", previous.conflicts, current.conflicts),
         ("groups to create", previous.groups_to_create, current.groups_to_create),
     ]

@@ -17,6 +17,7 @@ from backend.app.repositories.factory import build_storage
 from backend.app.services.access_explorer import AccessExplorerService
 from backend.app.services.access_requests import AccessRequestService
 from backend.app.services.app_info import AppInfoService
+from backend.app.services.attribute_explorer import AttributeExplorerService
 from backend.app.services.data_access import DataAccessService
 from backend.app.services.governed_tags import GovernedTagService
 from backend.app.services.identity import IdentityService
@@ -53,8 +54,9 @@ class ServiceContainer:
         row_filters: Row-filter dimensions and their policy pack.
         mask_rules: Mask rules and their policy pack.
         access_explorer: Per-table access analysis.
+        attribute_explorer: Attribute path holders and unlocked tables.
         policy_exceptions: Principals exempted from the app-managed policies.
-        data_access: Tag-driven group grant dry-run (settings, readiness, sync).
+        data_access: Tag-driven group grant sync (settings, readiness, dry-run/apply).
         identity_uc_sync: Mirrors identity attributes to Unity Catalog Delta; only set for
             the Lakebase backend, otherwise None.
     """
@@ -73,6 +75,7 @@ class ServiceContainer:
     row_filters: RowFilterService
     mask_rules: MaskRuleService
     access_explorer: AccessExplorerService
+    attribute_explorer: AttributeExplorerService
     policy_exceptions: PolicyExceptionService
     data_access: DataAccessService
     identity_uc_sync: IdentityUcSync | None = None
@@ -129,6 +132,9 @@ class ServiceContainer:
         policy_exceptions._row_filters = row_filters  # noqa: SLF001
         access_requests = AccessRequestService(storage, identity_attributes)
         data_access = DataAccessService(storage, sql, workspace, identity_attributes)
+        attribute_explorer = AttributeExplorerService(
+            storage, identity_attributes, access_requests, data_access
+        )
         return cls(
             config=config,
             workspace=workspace,
@@ -152,6 +158,7 @@ class ServiceContainer:
                 access_requests,
                 data_access,
             ),
+            attribute_explorer=attribute_explorer,
             policy_exceptions=policy_exceptions,
             data_access=data_access,
             identity_uc_sync=uc_sync,

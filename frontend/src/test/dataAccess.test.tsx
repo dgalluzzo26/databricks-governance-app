@@ -14,6 +14,7 @@ describe("Data access dry-run", () => {
     expect(screen.getByRole("table", { name: "Would grant" })).toBeInTheDocument();
     expect(screen.getByText("sandbox.finance.budget")).toBeInTheDocument();
     expect(screen.getByText("Run history / logs")).toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "Membership" })).toBeInTheDocument();
   });
 
   it("shows an empty state when no run exists", async () => {
@@ -29,12 +30,12 @@ describe("Data access dry-run", () => {
     expect(screen.getByRole("table", { name: "Would grant" })).toBeInTheDocument();
   });
 
-  it("shows Live tab with apply locked messaging", async () => {
+  it("shows Live tab with apply ready and Run apply", async () => {
     const user = userEvent.setup();
     renderApp("/data-access");
     await user.click(await screen.findByRole("tab", { name: "Live" }));
-    expect(await screen.findByText("Apply mode is locked")).toBeInTheDocument();
-    expect(screen.getByText("Before live sync")).toBeInTheDocument();
+    expect(await screen.findByText("Apply ready")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run apply" })).toBeEnabled();
     expect(screen.getByText("Sync logs (all modes)")).toBeInTheDocument();
   });
 });

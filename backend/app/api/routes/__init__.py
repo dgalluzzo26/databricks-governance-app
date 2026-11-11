@@ -10,6 +10,7 @@ from backend.app.api.routes import (
     access_explorer,
     access_requests,
     app_info,
+    attribute_explorer,
     data_access,
     directory,
     health,
@@ -37,4 +38,5 @@ api_router.include_router(access_requests.router)
 api_router.include_router(row_filters.router)
 api_router.include_router(mask_rules.router)
 api_router.include_router(access_explorer.router)
+api_router.include_router(attribute_explorer.router)
 api_router.include_router(data_access.router)
