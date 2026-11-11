@@ -224,3 +224,51 @@ def test_api_list_and_ensure(client: TestClient, container) -> None:  # noqa: AN
     )
     assert bad.status_code in {400, 422}
     assert "single statement" in bad.text or "invalid" in bad.text.lower()
+
+
+def test_ensure_pack_owns_geo_policies_with_enrollment_scope(container) -> None:  # noqa: ANN001
+    service, sql = _service(container)
+    service.ensure_pack(_admin())  # type: ignore[arg-type]
+
+    policies = [s for s in sql.executed if "CREATE OR REPLACE POLICY" in s]
+    names = {
+        "mask_sensitivity_variant",
+        "mask_sensitivity_geometry",
+        "mask_sensitivity_geography",
+    }
+    assert {n for n in names if any(f"POLICY {n} " in s for s in policies)} == names
+    for statement in policies:
+        assert "has_tag_value('data_access_controlled', 'true')" in statement
+        assert "ON METASTORE" in statement
+
+    geometry = next(s for s in policies if "POLICY mask_sensitivity_geometry " in s)
+    assert "mask_geometry_4326" in geometry
+    assert "has_tag_value('data_type', 'geometry')" in geometry
+    geography = next(s for s in policies if "POLICY mask_sensitivity_geography " in s)
+    assert "mask_geography_4326" in geography
+    assert "has_tag_value('data_type', 'geography')" in geography
+
+    functions = [s for s in sql.executed if "mask_geo" in s and "CREATE OR REPLACE FUNCTION" in s]
+    assert len(functions) == 2
+    assert any("RETURNS GEOMETRY(4326)" in s for s in functions)
+    assert any("RETURNS GEOGRAPHY(4326)" in s for s in functions)
+    assert not any("g GEOMETRY," in s or "g GEOGRAPHY," in s for s in functions)
+
+
+
+
+def test_ensure_pack_creates_auth_functions_before_policies(container) -> None:  # noqa: ANN001
+    service, sql = _service(container)
+    service.ensure_pack(_admin())  # type: ignore[arg-type]
+
+    def first(predicate: str) -> int:
+        return next(i for i, s in enumerate(sql.executed) if predicate in s)
+
+    has_sensitivity = next(
+        i for i, s in enumerate(sql.executed) if "`has_sensitivity`(required_path" in s
+    )
+    mask_variant = next(i for i, s in enumerate(sql.executed) if "`mask_variant`(" in s)
+    variant_policy = first("POLICY mask_sensitivity_variant ")
+    geo_policy = first("POLICY mask_sensitivity_geometry ")
+    assert has_sensitivity < mask_variant < variant_policy
+    assert mask_variant < geo_policy

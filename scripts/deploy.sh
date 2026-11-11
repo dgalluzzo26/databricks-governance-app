@@ -3,7 +3,7 @@
 #
 #   ./scripts/deploy.sh                 # target "dev"
 #   ./scripts/deploy.sh dev-delta       # Delta storage backend
-#   ./scripts/deploy.sh dev --skip-setup --var seed_demo=false
+#   ./scripts/deploy.sh dev --skip-setup
 #
 # Extra --var name=value flags are passed to every bundle command.
 set -euo pipefail
@@ -47,7 +47,7 @@ step "Deploying bundle"
 databricks bundle deploy -t "$TARGET" ${BUNDLE_ARGS[@]+"${BUNDLE_ARGS[@]}"}
 
 if [[ $RUN_SETUP -eq 1 ]]; then
-  step "Running setup job (tables, demo domain, app grants)"
+  step "Running setup job (catalog, tables, UDFs, app grants)"
   databricks bundle run setup_job -t "$TARGET" ${BUNDLE_ARGS[@]+"${BUNDLE_ARGS[@]}"}
 fi
 

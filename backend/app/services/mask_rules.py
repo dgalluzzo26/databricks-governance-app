@@ -44,6 +44,7 @@ from backend.app.models.mask_rule import (
 )
 from backend.app.models.user import CurrentUser
 from backend.app.repositories.base import StorageProvider
+from backend.app.services import abac_udfs
 from backend.app.services.governed_tags import GovernedTagService
 from backend.app.services.mask_handler_sql import (
     build_apply_mask_rule_sql,
@@ -610,9 +611,10 @@ class MaskRuleService:
     def ensure_pack(self, actor: CurrentUser) -> MaskRulePackStatus:
         """Seed defaults if empty, ensure salt/tag values, sync UC, recreate policy + UDF.
 
-        Also recreates the metastore ``COLUMN MASK`` policy with the current EXCEPT
-        principals, invalidates cached ABAC policy definitions, and records a
-        ``mask_rule.pack_ensured`` audit event. Called after policy exception changes.
+        Also (re)creates ``has_sensitivity``, ``mask_variant`` and the geo UDFs, then the
+        metastore ``COLUMN MASK`` policies (variant, geometry, geography) with the current
+        EXCEPT principals and enrollment scope. Invalidates cached ABAC policy definitions
+        and records a ``mask_rule.pack_ensured`` audit event. Called after policy exception changes.
 
         Args:
             actor: The admin applying the pack.
@@ -632,25 +634,37 @@ class MaskRuleService:
             )
             self.sync_to_uc()
             self.regenerate_apply_mask_rule()
+        self._ensure_auth_functions()
+        self._ensure_geo_functions()
         self._recreate_variant_policy()
+        self._recreate_geo_policies()
         if self._metadata_cache is not None:
             self._metadata_cache.invalidate(("abac-policy-definitions",))
         self._audit("mask_rule.pack_ensured", actor.user_name, {})
         return self.pack_status()
 
-    def _recreate_variant_policy(self) -> None:
-        """Recreate the metastore column-mask policy for non-geo sensitivity-tagged columns.
+    def _geo_function_name(self, kind: str) -> str:
+        """Return the quoted FQN of the ``mask_<kind>_4326`` geo mask UDF."""
+        return ".".join(
+            quote_identifier(p)
+            for p in (
+                self._config.app_catalog,
+                self._config.abac_function_schema,
+                f"mask_{kind}_4326",
+            )
+        )
 
-        Applies ``mask_variant`` to ``account users`` (minus EXCEPT principals) on columns
-        tagged with ``sensitivity_category``, ``sensitivity``, and a non-geo ``data_type``,
-        only within catalogs carrying the enrollment tag.
+    def _policy_scope_clauses(self) -> tuple[str, str]:
+        """Return the ``(WHEN, EXCEPT)`` SQL fragments shared by every mask policy.
+
+        The ``WHEN`` fragment restricts the policy to catalogs carrying the enrollment tag;
+        the ``EXCEPT`` fragment lists the exempt principals (empty string when none).
         """
         from backend.app.services.catalog_enrollment import (
             enrollment_tag_from_storage,
             enrollment_when_clause,
         )
 
-        name = self._config.mask_variant_policy_name
         except_clause = ""
         principals = self._except_principals()
         if principals:
@@ -670,7 +684,17 @@ class MaskRuleService:
                 enrollment_value,
                 exc,
             )
-        when_clause = enrollment_when_clause(enrollment_key, enrollment_value)
+        return enrollment_when_clause(enrollment_key, enrollment_value), except_clause
+
+    def _recreate_variant_policy(self) -> None:
+        """Recreate the metastore column-mask policy for non-geo sensitivity-tagged columns.
+
+        Applies ``mask_variant`` to ``account users`` (minus EXCEPT principals) on columns
+        tagged with ``sensitivity_category``, ``sensitivity``, and a non-geo ``data_type``,
+        only within catalogs carrying the enrollment tag.
+        """
+        name = self._config.mask_variant_policy_name
+        when_clause, except_clause = self._policy_scope_clauses()
         self._sql.execute(
             f"""
             CREATE OR REPLACE POLICY {name} ON METASTORE
@@ -694,6 +718,85 @@ class MaskRuleService:
             )
             """
         )
+
+    @property
+    def has_sensitivity_function_name(self) -> str:
+        """Quoted FQN of the ``has_sensitivity`` authorization UDF."""
+        return abac_udfs.fqn(
+            self._config.app_catalog, self._config.abac_function_schema, "has_sensitivity"
+        )
+
+    @property
+    def identity_mirror_table(self) -> str:
+        """Quoted FQN of the UC identity-attribute mirror read by ``has_sensitivity``."""
+        return abac_udfs.fqn(
+            self._config.app_catalog, self._config.app_schema, "identity_attributes"
+        )
+
+    def _ensure_auth_functions(self) -> None:
+        """Create or replace ``has_sensitivity`` and ``mask_variant`` from the app builders.
+
+        Both are app-owned: ``has_sensitivity`` reads the identity mirror, and
+        ``mask_variant`` delegates to the freshly regenerated ``apply_mask_rule``.
+        """
+        self._sql.execute(
+            abac_udfs.build_has_sensitivity_sql(
+                self.has_sensitivity_function_name, self.identity_mirror_table
+            )
+        )
+        self._sql.execute(
+            abac_udfs.build_mask_variant_sql(
+                self.function_name,
+                self.has_sensitivity_function_name,
+                self.apply_function_name,
+            )
+        )
+
+    def _ensure_geo_functions(self) -> None:
+        """Create or replace the ``mask_geometry_4326`` / ``mask_geography_4326`` UDFs.
+
+        Each returns the value when the caller holds the required sensitivity path,
+        otherwise ``NULL``. Types are SRID-qualified (see ``abac_udfs.GEO_KINDS``).
+        """
+        for kind in abac_udfs.GEO_KINDS:
+            self._sql.execute(
+                abac_udfs.build_geo_mask_sql(
+                    kind, self._geo_function_name(kind), self.has_sensitivity_function_name
+                )
+            )
+
+    def _recreate_geo_policies(self) -> None:
+        """Recreate the geometry and geography metastore column-mask policies.
+
+        Matches columns tagged with ``sensitivity_category``, ``sensitivity`` and the
+        corresponding ``data_type``; denied callers (``account users`` minus EXCEPT
+        principals) get ``NULL``. Scoped to enrolled catalogs like the variant policy.
+        """
+        when_clause, except_clause = self._policy_scope_clauses()
+        for kind, name in (
+            ("geometry", self._config.mask_geometry_policy_name),
+            ("geography", self._config.mask_geography_policy_name),
+        ):
+            self._sql.execute(
+                f"""
+                CREATE OR REPLACE POLICY {name} ON METASTORE
+                COMMENT 'Mask sensitivity {kind} columns; NULL unless sensitivity path granted'
+                COLUMN MASK {self._geo_function_name(kind)}
+                TO `account users`{except_clause}
+                FOR TABLES
+                {when_clause}
+                MATCH COLUMNS (
+                  has_tag('sensitivity_category')
+                  AND has_tag('sensitivity')
+                  AND has_tag_value('data_type', '{kind}')
+                ) AS c
+                ON COLUMN c
+                USING COLUMNS (
+                  get_column_tag_value(c, 'sensitivity_category'),
+                  get_column_tag_value(c, 'sensitivity')
+                )
+                """
+            )
 
     def _except_principals(self) -> list[str]:
         """Return EXCEPT principals from policy exceptions, else the app and admin SP ids."""

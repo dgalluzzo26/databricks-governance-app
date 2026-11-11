@@ -14,7 +14,7 @@ class GrantAppPermissionsStep(ProvisioningStep):
     """Grants the app's service principal what it needs in Unity Catalog.
 
     - App schema: read/write for the Delta storage backend.
-    - Demo catalog: BROWSE (metadata) and MANAGE (read ABAC policies).
+    - Masking functions schema: USE SCHEMA so ABAC policies and Access Explorer can resolve UDFs.
     """
 
     name = "app_permissions"
@@ -30,11 +30,13 @@ class GrantAppPermissionsStep(ProvisioningStep):
         grants = [
             f"GRANT USE CATALOG ON CATALOG `{ctx.app_catalog}` TO `{principal}`",
             f"GRANT USE SCHEMA, SELECT, MODIFY ON SCHEMA {ctx.app_schema_fqn} TO `{principal}`",
+            # Pack sync recreates geo mask UDFs via the Account Admin SP; the app SP still
+            # needs USE SCHEMA so runtime checks and Access Explorer can resolve them.
+            (
+                f"GRANT USE SCHEMA ON SCHEMA `{ctx.app_catalog}`.`masking_functions` "
+                f"TO `{principal}`"
+            ),
         ]
-        if ctx.seed_demo:
-            grants += [
-                f"GRANT USE CATALOG, BROWSE, MANAGE ON CATALOG `{ctx.demo_catalog}` TO `{principal}`",
-            ]
         for statement in grants:
             ctx.sql.execute(statement)
         logger.info("Granted app service principal %s access", principal)

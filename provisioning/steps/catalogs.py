@@ -9,7 +9,7 @@ logger = logging.getLogger("provisioning")
 
 
 class CatalogsStep(ProvisioningStep):
-    """Creates the app catalog and schema, and the demo catalog when seeding.
+    """Creates the app catalog and schema.
 
     Catalogs are created through SQL rather than as bundle resources: SQL CREATE CATALOG picks
     up the account's Default Storage, while the catalogs API needs an explicit managed location
@@ -23,8 +23,6 @@ class CatalogsStep(ProvisioningStep):
         ctx.sql.execute(
             f"CREATE SCHEMA IF NOT EXISTS {ctx.app_schema_fqn} COMMENT 'Data Governance App Delta tables'"
         )
-        if ctx.seed_demo:
-            self._create_catalog(ctx, ctx.demo_catalog, "Demo domain for the Data Governance App")
         logger.info("Catalogs ready")
 
     @staticmethod

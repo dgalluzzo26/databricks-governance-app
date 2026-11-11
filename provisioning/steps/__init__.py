@@ -2,16 +2,12 @@ from provisioning.steps.app_permissions import GrantAppPermissionsStep
 from provisioning.steps.app_storage import DeltaStorageStep
 from provisioning.steps.base import ProvisioningStep
 from provisioning.steps.catalogs import CatalogsStep
-from provisioning.steps.demo_domain import DemoDomainStep
-from provisioning.steps.demo_policies import DemoPoliciesStep
-from provisioning.steps.governed_tags import GovernedTagsStep
+from provisioning.steps.masking_functions import MaskingFunctionsStep
 
 ALL_STEPS: list[type[ProvisioningStep]] = [
     CatalogsStep,
     DeltaStorageStep,
-    GovernedTagsStep,
-    DemoDomainStep,
-    DemoPoliciesStep,
+    MaskingFunctionsStep,
     GrantAppPermissionsStep,
 ]
 

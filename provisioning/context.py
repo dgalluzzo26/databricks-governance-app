@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.sql import Disposition, Format, StatementState
@@ -44,9 +44,6 @@ class ProvisioningContext:
     app_name: str
     app_catalog: str
     app_schema: str
-    demo_catalog: str
-    seed_demo: bool
-    demo_except_principals: list[str] = field(default_factory=list)
     catalog_managed_location: str | None = None
 
     @property

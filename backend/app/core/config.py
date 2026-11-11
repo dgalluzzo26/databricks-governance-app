@@ -61,7 +61,6 @@ class AppConfig(BaseSettings):
         storage_backend: Where app state is persisted (``STORAGE_BACKEND``).
         app_catalog: Catalog for app-owned objects (``APP_CATALOG``).
         app_schema: Schema for app-owned tables (``APP_SCHEMA``).
-        demo_catalog: Optional catalog holding demo data (``DEMO_CATALOG``).
         abac_function_schema: Schema in ``app_catalog`` holding ABAC UDFs
             (``ABAC_FUNCTION_SCHEMA``).
         row_filter_tag_key: Governed tag that attaches row-filter dimensions to columns
@@ -70,6 +69,10 @@ class AppConfig(BaseSettings):
         mask_rule_tag_key: Governed tag that selects mask rules on columns
             (``MASK_RULE_TAG_KEY``).
         mask_variant_policy_name: Metastore mask policy name (``MASK_VARIANT_POLICY_NAME``).
+        mask_geometry_policy_name: Metastore geometry mask policy name
+            (``MASK_GEOMETRY_POLICY_NAME``).
+        mask_geography_policy_name: Metastore geography mask policy name
+            (``MASK_GEOGRAPHY_POLICY_NAME``).
         mask_handler_llm_endpoint: Model serving endpoint that drafts custom mask expressions
             (``MASK_HANDLER_LLM_ENDPOINT``).
         mask_handler_validation_secret: HMAC secret for mask validation tokens
@@ -110,7 +113,6 @@ class AppConfig(BaseSettings):
     storage_backend: StorageBackend = Field(StorageBackend.MEMORY, alias="STORAGE_BACKEND")
     app_catalog: str = Field("data_governance_app", alias="APP_CATALOG")
     app_schema: str = Field("app", alias="APP_SCHEMA")
-    demo_catalog: str | None = Field(None, alias="DEMO_CATALOG")
     # ABAC functions live in {app_catalog}.{abac_function_schema}.
     abac_function_schema: str = Field("masking_functions", alias="ABAC_FUNCTION_SCHEMA")
     row_filter_tag_key: str = Field("row_filter", alias="ROW_FILTER_TAG_KEY")
@@ -118,6 +120,12 @@ class AppConfig(BaseSettings):
     mask_rule_tag_key: str = Field("mask_rule", alias="MASK_RULE_TAG_KEY")
     mask_variant_policy_name: str = Field(
         "mask_sensitivity_variant", alias="MASK_VARIANT_POLICY_NAME"
+    )
+    mask_geometry_policy_name: str = Field(
+        "mask_sensitivity_geometry", alias="MASK_GEOMETRY_POLICY_NAME"
+    )
+    mask_geography_policy_name: str = Field(
+        "mask_sensitivity_geography", alias="MASK_GEOGRAPHY_POLICY_NAME"
     )
     mask_handler_llm_endpoint: str = Field(
         "databricks-meta-llama-3-3-70b-instruct", alias="MASK_HANDLER_LLM_ENDPOINT"

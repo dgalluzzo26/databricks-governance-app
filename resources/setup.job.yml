@@ -2,7 +2,7 @@ resources:
   jobs:
     setup_job:
       name: ${var.app_name}-setup
-      description: Idempotent setup for the Data Governance App (Delta tables, demo domain, grants)
+      description: Idempotent setup for the Data Governance App (app catalog, Delta tables, UDFs, grants)
       max_concurrent_runs: 1
       tasks:
         - task_key: provision
@@ -18,10 +18,6 @@ resources:
               - ${var.app_catalog}
               - --app-schema
               - ${var.app_schema}
-              - --demo-catalog
-              - ${var.demo_catalog}
-              - --seed-demo
-              - ${var.seed_demo}
               - --catalog-managed-location
               - ${var.catalog_managed_location}
       environments:

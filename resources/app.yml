@@ -20,8 +20,6 @@ resources:
             value: ${var.app_catalog}
           - name: APP_SCHEMA
             value: ${var.app_schema}
-          - name: DEMO_CATALOG
-            value: ${var.demo_catalog}
           - name: APP_ADMIN_GROUP
             value: ${var.admin_group}
           # Account Admin SP for metastore-level ABAC (from secret scope).
