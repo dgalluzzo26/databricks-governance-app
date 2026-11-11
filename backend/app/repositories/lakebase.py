@@ -179,12 +179,8 @@ CREATE TABLE IF NOT EXISTS {schema}.sensitivity_category_approvers (
   created_by      TEXT,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE UNIQUE INDEX IF NOT EXISTS sensitivity_category_approvers_uniq
-  ON {schema}.sensitivity_category_approvers (
-    lower(attribute_key), lower(category_path), lower(principal_name), principal_type
-  );
-CREATE INDEX IF NOT EXISTS sensitivity_category_approvers_path_idx
-  ON {schema}.sensitivity_category_approvers (lower(attribute_key), lower(category_path));
+-- Indexes on sensitivity_category_approvers.attribute_key are created in initialize(),
+-- after the column is guaranteed to exist on pre-existing tables.
 
 CREATE TABLE IF NOT EXISTS {schema}.access_requests (
   request_id             TEXT PRIMARY KEY,
@@ -1457,11 +1453,18 @@ class LakebaseStorageProvider(StorageProvider):
             "ALTER TABLE {schema}.sensitivity_category_approvers "
             "ADD COLUMN IF NOT EXISTS attribute_key TEXT NOT NULL DEFAULT 'sensitivity'"
         )
+        # Indexes are (re)built here, not in _DDL: Postgres resolves index columns before the
+        # IF NOT EXISTS check, so referencing attribute_key in _DDL breaks older tables.
         self._pg.run("DROP INDEX IF EXISTS {schema}.sensitivity_category_approvers_uniq")
+        self._pg.run("DROP INDEX IF EXISTS {schema}.sensitivity_category_approvers_path_idx")
         self._pg.run(
             "CREATE UNIQUE INDEX IF NOT EXISTS sensitivity_category_approvers_uniq "
             "ON {schema}.sensitivity_category_approvers ("
             "lower(attribute_key), lower(category_path), lower(principal_name), principal_type)"
+        )
+        self._pg.run(
+            "CREATE INDEX IF NOT EXISTS sensitivity_category_approvers_path_idx "
+            "ON {schema}.sensitivity_category_approvers (lower(attribute_key), lower(category_path))"
         )
         logger.info("Lakebase schema %s ready", self._location)
 
