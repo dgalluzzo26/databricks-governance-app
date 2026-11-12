@@ -388,9 +388,7 @@ class LakebaseIdentityAttributeRepository(IdentityAttributeRepository):
         Returns:
             Definitions sorted by ``attribute_key``.
         """
-        rows = self._pg.fetch(
-            "SELECT * FROM {schema}.identity_attribute_definitions ORDER BY attribute_key"
-        )
+        rows = self._pg.fetch("SELECT * FROM {schema}.identity_attribute_definitions ORDER BY attribute_key")
         return [self._definition_from_row(r) for r in rows]
 
     def get_definition(self, key: str) -> AttributeDefinition | None:
@@ -403,8 +401,7 @@ class LakebaseIdentityAttributeRepository(IdentityAttributeRepository):
             The definition, or ``None`` if missing.
         """
         rows = self._pg.fetch(
-            "SELECT * FROM {schema}.identity_attribute_definitions "
-            "WHERE attribute_key = %(key)s",
+            "SELECT * FROM {schema}.identity_attribute_definitions WHERE attribute_key = %(key)s",
             {"key": key},
         )
         return self._definition_from_row(rows[0]) if rows else None
@@ -500,8 +497,7 @@ class LakebaseIdentityAttributeRepository(IdentityAttributeRepository):
             clauses.append("(expires_at IS NULL OR expires_at > now())")
         where = " AND ".join(clauses)
         rows = self._pg.fetch(
-            f"SELECT * FROM {{schema}}.identity_attributes WHERE {where} "
-            "ORDER BY created_at DESC",
+            f"SELECT * FROM {{schema}}.identity_attributes WHERE {where} ORDER BY created_at DESC",
             params,
         )
         return [self._assignment_from_row(r) for r in rows]
@@ -851,8 +847,7 @@ class LakebasePolicyExceptionRepository(PolicyExceptionRepository):
             Exceptions ordered by principal type and name.
         """
         rows = self._pg.fetch(
-            "SELECT * FROM {schema}.policy_exceptions "
-            "ORDER BY principal_type, principal_name"
+            "SELECT * FROM {schema}.policy_exceptions ORDER BY principal_type, principal_name"
         )
         return [self._from_row(r) for r in rows]
 
@@ -1036,8 +1031,7 @@ class LakebaseAccessRequestRepository(AccessRequestRepository):
             Matching requests ordered by ``created_at`` descending.
         """
         rows = self._pg.fetch(
-            "SELECT * FROM {schema}.access_requests WHERE status = %(status)s "
-            "ORDER BY created_at DESC",
+            "SELECT * FROM {schema}.access_requests WHERE status = %(status)s ORDER BY created_at DESC",
             {"status": status.value},
         )
         return [self._from_row(r) for r in rows]
@@ -1068,9 +1062,7 @@ class LakebaseAccessRequestRepository(AccessRequestRepository):
         )
         return request
 
-    def has_pending_for(
-        self, *, requester_name: str, attribute_key: str, attribute_value: str
-    ) -> bool:
+    def has_pending_for(self, *, requester_name: str, attribute_key: str, attribute_value: str) -> bool:
         """Return whether a PENDING request already exists for this triple.
 
         Args:
@@ -1094,9 +1086,7 @@ class LakebaseAccessRequestRepository(AccessRequestRepository):
         )
         return bool(rows)
 
-    def dismiss_renewal(
-        self, assignment_id: str, expires_at: datetime, actor: str, at: datetime
-    ) -> None:
+    def dismiss_renewal(self, assignment_id: str, expires_at: datetime, actor: str, at: datetime) -> None:
         """Record that a renewal reminder for an assignment expiry was dismissed.
 
         Args:
@@ -1190,9 +1180,7 @@ class LakebaseMaskRuleRepository(MaskRuleRepository):
         Returns:
             Rules sorted by ``rule_key``.
         """
-        rows = self._pg.fetch(
-            "SELECT * FROM {schema}.mask_rule_definitions ORDER BY rule_key"
-        )
+        rows = self._pg.fetch("SELECT * FROM {schema}.mask_rule_definitions ORDER BY rule_key")
         return [self._from_row(r) for r in rows]
 
     def get_rule(self, rule_key: str) -> MaskRuleDefinition | None:
@@ -1420,52 +1408,60 @@ class LakebaseStorageProvider(StorageProvider):
 
         Idempotent: safe to call on every process start. Adds columns that older
         deployments may lack (governed tag keys, value source/SQL, mask kind/expression).
+
+        When the caller is not the table owner (e.g. the sync Job running as the
+        Account Admin SP while the app SP owns the tables), DDL that requires
+        ownership (CREATE INDEX, ALTER TABLE) is skipped — the schema already
+        exists and the statements are idempotent no-ops.
         """
         self._pool.open(wait=True, timeout=30)
-        self._pg.run(_DDL)
-        # Existing workspaces created the table before governed_tag_keys existed.
-        self._pg.run(
-            "ALTER TABLE {schema}.identity_attribute_definitions "
-            "ADD COLUMN IF NOT EXISTS governed_tag_keys JSONB NOT NULL DEFAULT '[]'::jsonb"
-        )
-        self._pg.run(
-            "ALTER TABLE {schema}.identity_attribute_definitions "
-            "ADD COLUMN IF NOT EXISTS value_source TEXT NOT NULL DEFAULT 'governed_tags'"
-        )
-        self._pg.run(
-            "ALTER TABLE {schema}.identity_attribute_definitions "
-            "ADD COLUMN IF NOT EXISTS value_sql TEXT"
-        )
-        self._pg.run(
-            "ALTER TABLE {schema}.mask_rule_definitions "
-            "ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'builtin'"
-        )
-        self._pg.run(
-            "ALTER TABLE {schema}.mask_rule_definitions "
-            "ADD COLUMN IF NOT EXISTS expression TEXT"
-        )
-        self._pg.run(
-            "ALTER TABLE {schema}.mask_rule_definitions "
-            "ADD COLUMN IF NOT EXISTS validated_at TIMESTAMPTZ"
-        )
-        # Approvers gained attribute_key so row-filter dimensions can have their own reviewers.
-        self._pg.run(
-            "ALTER TABLE {schema}.sensitivity_category_approvers "
-            "ADD COLUMN IF NOT EXISTS attribute_key TEXT NOT NULL DEFAULT 'sensitivity'"
-        )
-        # Indexes are (re)built here, not in _DDL: Postgres resolves index columns before the
-        # IF NOT EXISTS check, so referencing attribute_key in _DDL breaks older tables.
-        self._pg.run("DROP INDEX IF EXISTS {schema}.sensitivity_category_approvers_uniq")
-        self._pg.run("DROP INDEX IF EXISTS {schema}.sensitivity_category_approvers_path_idx")
-        self._pg.run(
-            "CREATE UNIQUE INDEX IF NOT EXISTS sensitivity_category_approvers_uniq "
-            "ON {schema}.sensitivity_category_approvers ("
-            "lower(attribute_key), lower(category_path), lower(principal_name), principal_type)"
-        )
-        self._pg.run(
-            "CREATE INDEX IF NOT EXISTS sensitivity_category_approvers_path_idx "
-            "ON {schema}.sensitivity_category_approvers (lower(attribute_key), lower(category_path))"
-        )
+        try:
+            self._pg.run(_DDL)
+            # Existing workspaces created the table before governed_tag_keys existed.
+            self._pg.run(
+                "ALTER TABLE {schema}.identity_attribute_definitions "
+                "ADD COLUMN IF NOT EXISTS governed_tag_keys JSONB NOT NULL DEFAULT '[]'::jsonb"
+            )
+            self._pg.run(
+                "ALTER TABLE {schema}.identity_attribute_definitions "
+                "ADD COLUMN IF NOT EXISTS value_source TEXT NOT NULL DEFAULT 'governed_tags'"
+            )
+            self._pg.run(
+                "ALTER TABLE {schema}.identity_attribute_definitions ADD COLUMN IF NOT EXISTS value_sql TEXT"
+            )
+            self._pg.run(
+                "ALTER TABLE {schema}.mask_rule_definitions "
+                "ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'builtin'"
+            )
+            self._pg.run(
+                "ALTER TABLE {schema}.mask_rule_definitions ADD COLUMN IF NOT EXISTS expression TEXT"
+            )
+            self._pg.run(
+                "ALTER TABLE {schema}.mask_rule_definitions ADD COLUMN IF NOT EXISTS validated_at TIMESTAMPTZ"
+            )
+            # Approvers gained attribute_key so row-filter dimensions can have their own reviewers.
+            self._pg.run(
+                "ALTER TABLE {schema}.sensitivity_category_approvers "
+                "ADD COLUMN IF NOT EXISTS attribute_key TEXT NOT NULL DEFAULT 'sensitivity'"
+            )
+            # Indexes are (re)built here, not in _DDL: Postgres resolves index columns before the
+            # IF NOT EXISTS check, so referencing attribute_key in _DDL breaks older tables.
+            self._pg.run("DROP INDEX IF EXISTS {schema}.sensitivity_category_approvers_uniq")
+            self._pg.run("DROP INDEX IF EXISTS {schema}.sensitivity_category_approvers_path_idx")
+            self._pg.run(
+                "CREATE UNIQUE INDEX IF NOT EXISTS sensitivity_category_approvers_uniq "
+                "ON {schema}.sensitivity_category_approvers ("
+                "lower(attribute_key), lower(category_path), lower(principal_name), principal_type)"
+            )
+            self._pg.run(
+                "CREATE INDEX IF NOT EXISTS sensitivity_category_approvers_path_idx "
+                "ON {schema}.sensitivity_category_approvers (lower(attribute_key), lower(category_path))"
+            )
+        except psycopg.errors.InsufficientPrivilege:
+            logger.warning(
+                "Skipping Lakebase DDL: caller is not the table owner "
+                "(tables/indexes already exist); continuing with existing schema"
+            )
         logger.info("Lakebase schema %s ready", self._location)
 
     def health(self) -> StorageHealth:
