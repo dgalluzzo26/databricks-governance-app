@@ -19,8 +19,10 @@ import type {
   RowFilterInsight,
   SuggestedAttribute,
   TableAccessInsight,
+  TableSearchHit,
 } from "@/api/types";
-import { Alert, Badge, Card, ErrorAlert, PageHeader, Spinner } from "@/components/ui";
+import { Alert, Badge, Card, ErrorAlert, PageHeader, Spinner, TablePager } from "@/components/ui";
+import { useClientPagination } from "@/hooks/useClientPagination";
 import styles from "../identity/IdentityPage.module.css";
 import { AccessExplorerTree } from "./AccessExplorerTree";
 import layout from "./AccessExplorerPage.module.css";
@@ -196,37 +198,7 @@ export function AccessExplorerPage() {
         {hits.isFetching && <Spinner label="Searching tables" />}
         {hits.error && <ErrorAlert error={hits.error} title="Search failed" />}
         {hits.data && hits.data.tables.length > 0 && (
-          <div className={styles.tableWrap} style={{ marginTop: "var(--space-3)" }}>
-            <table className={styles.table} aria-label="Table search results">
-              <thead>
-                <tr>
-                  <th>Table</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {hits.data.tables.map((hit) => {
-                  const full = `${hit.catalogName}.${hit.schemaName}.${hit.tableName}`;
-                  return (
-                    <tr key={full}>
-                      <td>
-                        <code>{full}</code>
-                      </td>
-                      <td>
-                        <button
-                          type="button"
-                          className={styles.button}
-                          onClick={() => void runAnalyze(full)}
-                        >
-                          Analyze
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          <SearchResultsTable tables={hits.data.tables} resetKey={search} onAnalyze={(full) => void runAnalyze(full)} />
         )}
         {analyze.error && <ErrorAlert error={analyze.error} title="Analyze failed" />}
       </Card>
@@ -234,6 +206,68 @@ export function AccessExplorerPage() {
       {insight && <InsightView insight={insight} />}
       </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Paginated list of table search hits with an Analyze action per row.
+ *
+ * @param props.tables - Search hits from `useTableSearch`.
+ * @param props.resetKey - Search text; changing it returns to the first page.
+ * @param props.onAnalyze - Called with the three-part table name.
+ */
+function SearchResultsTable({
+  tables,
+  resetKey,
+  onAnalyze,
+}: {
+  tables: TableSearchHit[];
+  resetKey: string;
+  onAnalyze: (fullName: string) => void;
+}) {
+  const pager = useClientPagination(tables, { resetKey });
+
+  return (
+    <div style={{ marginTop: "var(--space-3)" }}>
+  <div className={styles.tableWrap}>
+    <table className={styles.table} aria-label="Table search results">
+      <thead>
+        <tr>
+          <th>Table</th>
+          <th />
+        </tr>
+      </thead>
+      <tbody>
+        {pager.rows.map((hit) => {
+          const full = `${hit.catalogName}.${hit.schemaName}.${hit.tableName}`;
+          return (
+            <tr key={full}>
+              <td>
+                <code>{full}</code>
+              </td>
+              <td>
+                <button
+                  type="button"
+                  className={styles.button}
+                  onClick={() => onAnalyze(full)}
+                >
+                  Analyze
+                </button>
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  </div>
+        <TablePager
+          total={pager.total}
+          page={pager.page}
+          pageSize={pager.pageSize}
+          onPageChange={pager.setPage}
+          onPageSizeChange={pager.setPageSize}
+        />
     </div>
   );
 }
@@ -301,65 +335,94 @@ function InsightView({ insight }: { insight: TableAccessInsight }) {
       </Card>
 
       <Card title="Columns">
-        <div className={styles.tableWrap}>
-          <table className={styles.table} aria-label="Column access">
-            <thead>
-              <tr>
-                <th>Column</th>
-                <th>State</th>
-                <th>Required path</th>
-                <th>Mask rule</th>
-                <th>Handler</th>
-                <th>Notes</th>
-              </tr>
-            </thead>
-            <tbody>
-              {insight.columns.map((col) => (
-                <tr key={col.columnName}>
-                  <td>
-                    <code>{col.columnName}</code>
-                    {col.dataType && (
-                      <div className={styles.muted} style={{ fontSize: "0.85em" }}>
-                        {col.dataType}
-                      </div>
-                    )}
-                  </td>
-                  <td>
-                    <Badge tone={stateTone(col.accessState)}>{stateLabel(col.accessState)}</Badge>
-                  </td>
-                  <td>
-                    {col.requiredSensitivityPath ? (
-                      <code>{col.requiredSensitivityPath}</code>
-                    ) : (
-                      "—"
-                    )}
-                  </td>
-                  <td>{col.maskRuleKey ? <code>{col.maskRuleKey}</code> : "—"}</td>
-                  <td>
-                    {col.maskHandler ? (
-                      <>
-                        <code>{col.maskHandler}</code>
-                        {col.maskKind && (
-                          <div className={styles.muted} style={{ fontSize: "0.85em" }}>
-                            {col.maskKind}
-                          </div>
-                        )}
-                      </>
-                    ) : (
-                      "—"
-                    )}
-                  </td>
-                  <td className={styles.muted}>{col.notes ?? col.maskDescription ?? ""}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <ColumnAccessTable columns={insight.columns} resetKey={insight.tableFullName} />
       </Card>
     </>
   );
 }
 
+
+/**
+ * Paginated per-column access table for one analyzed table.
+ *
+ * @param props.columns - Column insights from the analyze response.
+ * @param props.resetKey - Changes when a different table is analyzed so the pager resets.
+ */
+function ColumnAccessTable({
+  columns,
+  resetKey,
+}: {
+  columns: ColumnAccessInsight[];
+  resetKey: string;
+}) {
+  const pager = useClientPagination(columns, { resetKey });
+
+  return (
+    <>
+      <div className={styles.tableWrap}>
+        <table className={styles.table} aria-label="Column access">
+          <thead>
+            <tr>
+              <th>Column</th>
+              <th>State</th>
+              <th>Required path</th>
+              <th>Mask rule</th>
+              <th>Handler</th>
+              <th>Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            {pager.rows.map((col) => (
+              <tr key={col.columnName}>
+                <td>
+                  <code>{col.columnName}</code>
+                  {col.dataType && (
+                    <div className={styles.muted} style={{ fontSize: "0.85em" }}>
+                      {col.dataType}
+                    </div>
+                  )}
+                </td>
+                <td>
+                  <Badge tone={stateTone(col.accessState)}>{stateLabel(col.accessState)}</Badge>
+                </td>
+                <td>
+                  {col.requiredSensitivityPath ? (
+                    <code>{col.requiredSensitivityPath}</code>
+                  ) : (
+                    "—"
+                  )}
+                </td>
+                <td>{col.maskRuleKey ? <code>{col.maskRuleKey}</code> : "—"}</td>
+                <td>
+                  {col.maskHandler ? (
+                    <>
+                      <code>{col.maskHandler}</code>
+                      {col.maskKind && (
+                        <div className={styles.muted} style={{ fontSize: "0.85em" }}>
+                          {col.maskKind}
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    "—"
+                  )}
+                </td>
+                <td className={styles.muted}>{col.notes ?? col.maskDescription ?? ""}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <TablePager
+        total={pager.total}
+        page={pager.page}
+        pageSize={pager.pageSize}
+        onPageChange={pager.setPage}
+        onPageSizeChange={pager.setPageSize}
+      />
+    </>
+  );
+}
 
 /**
  * Stable selection key for a suggested attribute (`key:value`).

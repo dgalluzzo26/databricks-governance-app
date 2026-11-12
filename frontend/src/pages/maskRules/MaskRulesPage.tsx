@@ -23,7 +23,8 @@ import type {
   MaskRuleDefinition,
   MaskRuleKind,
 } from "@/api/types";
-import { Alert, Badge, Card, ErrorAlert, PageHeader, Spinner } from "@/components/ui";
+import { Alert, Badge, Card, ErrorAlert, PageHeader, Spinner, TablePager } from "@/components/ui";
+import { useClientPagination } from "@/hooks/useClientPagination";
 import styles from "../identity/IdentityPage.module.css";
 
 /** Builtin mask handlers offered in the rule form, with human-readable labels. */
@@ -198,69 +199,112 @@ function RulesCard({ isAdmin }: { isAdmin: boolean }) {
         <div className={styles.empty}>No mask rules yet. Seed defaults or create one.</div>
       )}
       {data && data.rules.length > 0 && (
-        <div className={styles.tableWrap}>
-          <table className={styles.table} aria-label="Mask rules">
-            <thead>
-              <tr>
-                <th>Rule</th>
-                <th>Kind</th>
-                <th>Handler</th>
-                <th>Expression / params</th>
-                {isAdmin && <th />}
-              </tr>
-            </thead>
-            <tbody>
-              {data.rules.map((rule) => (
-                <tr key={rule.ruleKey}>
-                  <td>
-                    <code>{rule.ruleKey}</code>
-                    {rule.description && <div className={styles.muted}>{rule.description}</div>}
-                  </td>
-                  <td>
-                    <Badge>{rule.kind}</Badge>
-                  </td>
-                  <td>
-                    <Badge>{rule.handler}</Badge>
-                  </td>
-                  <td>
-                    <code>
-                      {rule.kind === "custom"
-                        ? rule.expression ?? ""
-                        : JSON.stringify(rule.params ?? {})}
-                    </code>
-                  </td>
-                  {isAdmin && (
-                    <td>
-                      <div className={styles.buttonRow}>
-                        <button
-                          type="button"
-                          className={styles.button}
-                          onClick={() => {
-                            setEditing(rule);
-                            setFormOpen(true);
-                          }}
-                        >
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          className={`${styles.button} ${styles.buttonDanger}`}
-                          disabled={remove.isPending || rule.ruleKey === "full"}
-                          onClick={() => void remove.mutateAsync(rule.ruleKey)}
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </td>
-                  )}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <RulesTable
+          rules={data.rules}
+          isAdmin={isAdmin}
+          deleting={remove.isPending}
+          onEdit={(rule) => {
+            setEditing(rule);
+            setFormOpen(true);
+          }}
+          onDelete={(ruleKey) => void remove.mutateAsync(ruleKey)}
+        />
       )}
       {remove.error && <ErrorAlert error={remove.error} title="Delete failed" />}
     </Card>
+  );
+}
+
+/**
+ * Paginated table of named mask rules with optional edit/delete actions.
+ */
+function RulesTable({
+  rules,
+  isAdmin,
+  deleting,
+  onEdit,
+  onDelete,
+}: {
+  /** All mask rules from the API. */
+  rules: MaskRuleDefinition[];
+  /** When true, shows the edit/delete action column. */
+  isAdmin: boolean;
+  /** True while a delete mutation is in flight. */
+  deleting: boolean;
+  /** Opens the rule form for the given rule. */
+  onEdit: (rule: MaskRuleDefinition) => void;
+  /** Deletes the rule with the given key. */
+  onDelete: (ruleKey: string) => void;
+}) {
+  const pager = useClientPagination(rules);
+
+  return (
+    <>
+      <div className={styles.tableWrap}>
+        <table className={styles.table} aria-label="Mask rules">
+          <thead>
+            <tr>
+              <th>Rule</th>
+              <th>Kind</th>
+              <th>Handler</th>
+              <th>Expression / params</th>
+              {isAdmin && <th />}
+            </tr>
+          </thead>
+          <tbody>
+            {pager.rows.map((rule) => (
+              <tr key={rule.ruleKey}>
+                <td>
+                  <code>{rule.ruleKey}</code>
+                  {rule.description && <div className={styles.muted}>{rule.description}</div>}
+                </td>
+                <td>
+                  <Badge>{rule.kind}</Badge>
+                </td>
+                <td>
+                  <Badge>{rule.handler}</Badge>
+                </td>
+                <td>
+                  <code>
+                    {rule.kind === "custom"
+                      ? rule.expression ?? ""
+                      : JSON.stringify(rule.params ?? {})}
+                  </code>
+                </td>
+                {isAdmin && (
+                  <td>
+                    <div className={styles.buttonRow}>
+                      <button
+                        type="button"
+                        className={styles.button}
+                        onClick={() => onEdit(rule)}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        className={`${styles.button} ${styles.buttonDanger}`}
+                        disabled={deleting || rule.ruleKey === "full"}
+                        onClick={() => onDelete(rule.ruleKey)}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <TablePager
+        total={pager.total}
+        page={pager.page}
+        pageSize={pager.pageSize}
+        onPageChange={pager.setPage}
+        onPageSizeChange={pager.setPageSize}
+      />
+    </>
   );
 }
 

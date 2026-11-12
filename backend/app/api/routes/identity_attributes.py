@@ -1,8 +1,9 @@
 """Identity attribute definitions and assignments under ``/api/identity``.
 
 Any signed-in user may list governed tags, definitions, and their own
-assignments. Creating/updating definitions, managing assignments, and UC sync
-require app admin.
+assignments. Creating/updating definitions, assigning attributes, and UC sync
+require app admin. Revoking an assignment is allowed for app admins and for
+approvers of that attribute path.
 """
 
 from __future__ import annotations
@@ -173,25 +174,30 @@ def assign_attribute(
 
 @router.post("/assignments/{assignment_id}/revoke", response_model=IdentityAttributeAssignment)
 def revoke_assignment(
-    assignment_id: str, admin: Admin, container: Container
+    assignment_id: str, user: User, container: Container
 ) -> IdentityAttributeAssignment:
     """Revoke an identity attribute assignment.
 
-    Requires app admin.
+    App admins may revoke any assignment. Category / data-access / dimension approvers may
+    revoke assignments for paths they are authorized to decide (same scope as Attribute Explorer).
 
     Args:
         assignment_id: Assignment identifier to revoke.
-        admin: Authenticated app administrator (dependency injection).
+        user: Signed-in user (dependency injection).
         container: Process-scoped service container (dependency injection).
 
     Returns:
         The revoked assignment record.
 
     Raises:
-        ForbiddenError: If the caller is not an app admin (HTTP 403).
+        ForbiddenError: If the caller is not an admin or an approver for this path (HTTP 403).
         NotFoundError: If the assignment does not exist (HTTP 404).
     """
-    return container.identity_attributes.revoke(assignment_id, admin)
+    current = container.identity_attributes.get_assignment(assignment_id)
+    container.access_requests._require_can_decide(  # noqa: SLF001
+        user, current.attribute_value, attribute_key=current.attribute_key
+    )
+    return container.identity_attributes.revoke(assignment_id, user)
 
 
 @router.post("/sync-uc")

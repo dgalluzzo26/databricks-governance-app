@@ -388,7 +388,9 @@ export function useAssignAttribute() {
 /**
  * Revokes an attribute assignment (`POST /identity/assignments/{id}/revoke`).
  *
- * @remarks Invalidates every `["identity-assignments", ...]` query on success.
+ * Admins and path approvers may revoke. Invalidates every `["identity-assignments", ...]`
+ * query on success.
+ *
  * @returns A mutation taking the assignment id.
  */
 export function useRevokeAttribute() {

@@ -14,13 +14,87 @@ import {
   usePolicyExceptions,
   useUpsertPolicyException,
 } from "@/api/queries";
-import type { PrincipalKind } from "@/api/types";
+import type { PolicyException, PrincipalKind } from "@/api/types";
 import { PrincipalPicker } from "@/components/PrincipalPicker";
-import { Alert, Badge, Card, ErrorAlert, PageHeader, Spinner } from "@/components/ui";
+import { Alert, Badge, Card, ErrorAlert, PageHeader, Spinner, TablePager } from "@/components/ui";
+import { useClientPagination } from "@/hooks/useClientPagination";
 import styles from "../identity/IdentityPage.module.css";
 
 /** Principal kinds selectable when adding a configured policy exception. */
 const PRINCIPAL_TYPES: PrincipalKind[] = ["USER", "GROUP", "SERVICE_PRINCIPAL"];
+
+/**
+ * Table of configured and system policy exceptions with client-side pagination.
+ */
+function ExceptionsTable({
+  exceptions,
+  removing,
+  onRemove,
+}: {
+  /** All exceptions returned by the API. */
+  exceptions: PolicyException[];
+  /** True while a remove mutation is in flight. */
+  removing: boolean;
+  /** Called with the exception id when the user clicks Remove. */
+  onRemove: (exceptionId: string) => void;
+}) {
+  const pager = useClientPagination(exceptions);
+
+  return (
+    <>
+      <div className={styles.tableWrap}>
+        <table className={styles.table} aria-label="Policy exceptions">
+          <thead>
+            <tr>
+              <th>Principal</th>
+              <th>Type</th>
+              <th>Note</th>
+              <th>Source</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {pager.rows.map((item) => (
+              <tr key={item.exceptionId}>
+                <td>
+                  <code>{item.principalName}</code>
+                </td>
+                <td>
+                  <Badge>{item.principalType}</Badge>
+                </td>
+                <td className={styles.muted}>{item.note ?? "—"}</td>
+                <td>
+                  <Badge tone={item.system ? "info" : "neutral"}>
+                    {item.system ? "system" : "configured"}
+                  </Badge>
+                </td>
+                <td>
+                  {!item.system && (
+                    <button
+                      type="button"
+                      className={styles.button}
+                      disabled={removing}
+                      onClick={() => onRemove(item.exceptionId)}
+                    >
+                      Remove
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <TablePager
+        total={pager.total}
+        page={pager.page}
+        pageSize={pager.pageSize}
+        onPageChange={pager.setPage}
+        onPageSizeChange={pager.setPageSize}
+      />
+    </>
+  );
+}
 
 /**
  * Admin UI to add/remove policy exceptions and re-apply them to ABAC packs.
@@ -155,49 +229,11 @@ export function PolicyExceptionsPage() {
           <div className={styles.empty}>No exceptions configured yet.</div>
         )}
         {list.data && list.data.exceptions.length > 0 && (
-          <div className={styles.tableWrap}>
-            <table className={styles.table} aria-label="Policy exceptions">
-              <thead>
-                <tr>
-                  <th>Principal</th>
-                  <th>Type</th>
-                  <th>Note</th>
-                  <th>Source</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {list.data.exceptions.map((item) => (
-                  <tr key={item.exceptionId}>
-                    <td>
-                      <code>{item.principalName}</code>
-                    </td>
-                    <td>
-                      <Badge>{item.principalType}</Badge>
-                    </td>
-                    <td className={styles.muted}>{item.note ?? "—"}</td>
-                    <td>
-                      <Badge tone={item.system ? "info" : "neutral"}>
-                        {item.system ? "system" : "configured"}
-                      </Badge>
-                    </td>
-                    <td>
-                      {!item.system && (
-                        <button
-                          type="button"
-                          className={styles.button}
-                          disabled={remove.isPending}
-                          onClick={() => void remove.mutateAsync(item.exceptionId)}
-                        >
-                          Remove
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <ExceptionsTable
+            exceptions={list.data.exceptions}
+            removing={remove.isPending}
+            onRemove={(id) => void remove.mutateAsync(id)}
+          />
         )}
         {remove.error && <ErrorAlert error={remove.error} title="Could not remove exception" />}
       </Card>

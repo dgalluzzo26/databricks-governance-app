@@ -309,3 +309,66 @@ def test_find_sensitivity_definition(container) -> None:  # noqa: ANN001
     found = service.find_sensitivity_definition()
     assert found is not None
     assert found.key == "sensitivity"
+
+
+def test_approver_can_revoke_assignment_for_their_path(
+    client: TestClient, container
+) -> None:  # noqa: ANN001
+    """Path approvers may revoke; unrelated users may not."""
+    from backend.app.models.access_request import UpsertCategoryApproverRequest
+    from backend.app.services.access_requests import AccessRequestService
+    from backend.tests.conftest import FakeWorkspaceFactory
+
+    fake = FakeWorkspaceFactory(
+        {
+            "admin@example.com": ["admins", "users"],
+            "analyst@example.com": ["users"],
+            "finance.lead@example.com": ["finance-owners", "users"],
+            "outsider@example.com": ["users"],
+        },
+        admin_configured=True,
+    )
+    container.workspace = fake
+    container.identity._factory = fake
+    container.request_context._factory = fake
+
+    identity = _service(container)
+    access = AccessRequestService(container.storage, identity)
+    actor = _admin()
+    identity.upsert_definition(
+        UpsertAttributeDefinitionRequest(
+            key="sensitivity",
+            governed_tag_keys=["sensitivity_category", "sensitivity"],
+        ),
+        actor,  # type: ignore[arg-type]
+    )
+    access.upsert_approver(
+        UpsertCategoryApproverRequest(
+            category_path="finance",
+            principal_name="finance-owners",
+            principal_type=PrincipalKind.GROUP,
+        ),
+        actor,  # type: ignore[arg-type]
+    )
+    assigned = identity.assign(
+        AssignAttributeRequest(
+            principal_name="analyst@example.com",
+            principal_type=PrincipalKind.USER,
+            attribute_key="sensitivity",
+            attribute_value="finance.budget.PII.Name",
+        ),
+        actor,  # type: ignore[arg-type]
+    )
+
+    denied = client.post(
+        f"/api/identity/assignments/{assigned.assignment_id}/revoke",
+        headers=headers_for("outsider@example.com"),
+    )
+    assert denied.status_code == 403
+
+    revoked = client.post(
+        f"/api/identity/assignments/{assigned.assignment_id}/revoke",
+        headers=headers_for("finance.lead@example.com"),
+    )
+    assert revoked.status_code == 200
+    assert revoked.json()["active"] is False

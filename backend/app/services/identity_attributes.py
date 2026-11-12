@@ -289,6 +289,23 @@ class IdentityAttributeService:
             self._uc_sync.repo.delete_definition(key)
         self._audit("identity_attribute_definition.deleted", actor.user_name, {"key": key})
 
+    def get_assignment(self, assignment_id: str) -> IdentityAttributeAssignment:
+        """Return one assignment by id.
+
+        Args:
+            assignment_id: Assignment identifier.
+
+        Returns:
+            The assignment.
+
+        Raises:
+            NotFoundError: If the assignment does not exist.
+        """
+        current = self._storage.identity_attributes.get_assignment(assignment_id)
+        if current is None:
+            raise NotFoundError(f"Assignment {assignment_id} was not found")
+        return current
+
     def list_assignments(
         self,
         *,

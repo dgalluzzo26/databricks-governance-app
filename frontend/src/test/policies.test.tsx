@@ -56,12 +56,12 @@ describe("Policies explorer", () => {
     expect(within(table).getByText("Table")).toBeInTheDocument();
     expect(within(table).getByText("Column")).toBeInTheDocument();
     expect(within(table).getByText("col_0")).toBeInTheDocument();
-    expect(within(table).queryByText("col_25")).not.toBeInTheDocument();
-    expect(screen.getByText("1–25 of 30")).toBeInTheDocument();
+    expect(within(table).queryByText("col_10")).not.toBeInTheDocument();
+    expect(screen.getByText("1–10 of 30")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Next" }));
-    expect(within(table).getByText("col_25")).toBeInTheDocument();
-    expect(screen.getByText("26–30 of 30")).toBeInTheDocument();
+    expect(within(table).getByText("col_10")).toBeInTheDocument();
+    expect(screen.getByText("11–20 of 30")).toBeInTheDocument();
   });
 
   it("shows an error when policies fail to load", async () => {

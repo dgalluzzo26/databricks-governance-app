@@ -7,7 +7,8 @@ import { useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { usePolicies } from "@/api/queries";
 import type { PolicyScopeKind, PolicySummary } from "@/api/types";
-import { Badge, Card, ErrorAlert, PageHeader, Spinner } from "@/components/ui";
+import { Badge, Card, ErrorAlert, PageHeader, Spinner, TablePager } from "@/components/ui";
+import { useClientPagination } from "@/hooks/useClientPagination";
 import { formatPolicyType, formatTag, policyTypeTone } from "./policyLabels";
 import styles from "./PoliciesPage.module.css";
 
@@ -22,6 +23,7 @@ function PolicyTable({
   emptyTitle,
   emptyBody,
   showCatalog,
+  resetKey,
 }: {
   /** Policy summaries to render as rows. */
   policies: PolicySummary[];
@@ -31,7 +33,11 @@ function PolicyTable({
   emptyBody: string;
   /** When true, the scope column header reads "Catalog / scope". */
   showCatalog: boolean;
+  /** Changes when filters or scope change so the pager returns to the first page. */
+  resetKey: string;
 }) {
+  const pager = useClientPagination(policies, { resetKey });
+
   if (!policies.length) {
     return (
       <div className={styles.empty}>
@@ -42,72 +48,81 @@ function PolicyTable({
   }
 
   return (
-    <div className={styles.tableWrap}>
-      <table className={styles.table}>
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Type</th>
-            <th>{showCatalog ? "Catalog / scope" : "Scope"}</th>
-            <th>Principals</th>
-            <th>Tags</th>
-            <th>Condition</th>
-          </tr>
-        </thead>
-        <tbody>
-          {policies.map((policy) => (
-            <tr key={policy.id}>
-              <td>
-                <Link className={styles.rowLink} to={`/policies/${policy.id}`}>
-                  {policy.name}
-                </Link>
-              </td>
-              <td>
-                <Badge tone={policyTypeTone(policy.policyType)}>{formatPolicyType(policy.policyType)}</Badge>
-              </td>
-              <td>
-                <div>
-                  <Badge>{policy.onSecurableType}</Badge>
-                </div>
-                <code>{policy.onSecurableFullname}</code>
-              </td>
-              <td>
-                <div className={styles.chipRow}>
-                  {policy.toPrincipals.length ? (
-                    policy.toPrincipals.map((principal) => <Badge key={principal}>{principal}</Badge>)
-                  ) : (
-                    <span className={styles.muted}>None</span>
+    <>
+      <div className={styles.tableWrap}>
+        <table className={styles.table}>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Type</th>
+              <th>{showCatalog ? "Catalog / scope" : "Scope"}</th>
+              <th>Principals</th>
+              <th>Tags</th>
+              <th>Condition</th>
+            </tr>
+          </thead>
+          <tbody>
+            {pager.rows.map((policy) => (
+              <tr key={policy.id}>
+                <td>
+                  <Link className={styles.rowLink} to={`/policies/${policy.id}`}>
+                    {policy.name}
+                  </Link>
+                </td>
+                <td>
+                  <Badge tone={policyTypeTone(policy.policyType)}>{formatPolicyType(policy.policyType)}</Badge>
+                </td>
+                <td>
+                  <div>
+                    <Badge>{policy.onSecurableType}</Badge>
+                  </div>
+                  <code>{policy.onSecurableFullname}</code>
+                </td>
+                <td>
+                  <div className={styles.chipRow}>
+                    {policy.toPrincipals.length ? (
+                      policy.toPrincipals.map((principal) => <Badge key={principal}>{principal}</Badge>)
+                    ) : (
+                      <span className={styles.muted}>None</span>
+                    )}
+                  </div>
+                  {policy.exceptPrincipals.length > 0 && (
+                    <div className={styles.muted}>except {policy.exceptPrincipals.join(", ")}</div>
                   )}
-                </div>
-                {policy.exceptPrincipals.length > 0 && (
-                  <div className={styles.muted}>except {policy.exceptPrincipals.join(", ")}</div>
-                )}
-              </td>
-              <td>
-                <div className={styles.chipRow}>
-                  {policy.governedTags.length ? (
-                    policy.governedTags.map((tag) => (
-                      <Badge key={`${tag.key}:${tag.value ?? ""}`}>{formatTag(tag)}</Badge>
-                    ))
+                </td>
+                <td>
+                  <div className={styles.chipRow}>
+                    {policy.governedTags.length ? (
+                      policy.governedTags.map((tag) => (
+                        <Badge key={`${tag.key}:${tag.value ?? ""}`}>{formatTag(tag)}</Badge>
+                      ))
+                    ) : (
+                      <span className={styles.muted}>—</span>
+                    )}
+                  </div>
+                </td>
+                <td>
+                  {policy.whenCondition ? (
+                    <div className={styles.condition} title={policy.whenCondition}>
+                      {policy.whenCondition}
+                    </div>
                   ) : (
                     <span className={styles.muted}>—</span>
                   )}
-                </div>
-              </td>
-              <td>
-                {policy.whenCondition ? (
-                  <div className={styles.condition} title={policy.whenCondition}>
-                    {policy.whenCondition}
-                  </div>
-                ) : (
-                  <span className={styles.muted}>—</span>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <TablePager
+        total={pager.total}
+        page={pager.page}
+        pageSize={pager.pageSize}
+        onPageChange={pager.setPage}
+        onPageSizeChange={pager.setPageSize}
+      />
+    </>
   );
 }
 
@@ -242,6 +257,7 @@ export function PoliciesPage() {
             <PolicyTable
               policies={visible}
               showCatalog={scope === "catalog"}
+              resetKey={`${scope}|${policyType}|${q}|${catalog}`}
               emptyTitle={scope === "metastore" ? "No metastore-level policies" : "No catalog policies"}
               emptyBody={
                 scope === "metastore"

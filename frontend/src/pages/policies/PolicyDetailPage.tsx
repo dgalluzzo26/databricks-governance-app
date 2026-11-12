@@ -3,16 +3,13 @@
  * Shows scope, principals, WHEN condition, governed tags, mask/filter actions, and tagged assets.
  * The route is wrapped in `RequireAdmin`.
  */
-import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { usePolicy } from "@/api/queries";
 import type { AffectedAsset } from "@/api/types";
-import { Alert, Badge, Card, DescriptionList, ErrorAlert, PageHeader, Spinner } from "@/components/ui";
+import { Alert, Badge, Card, DescriptionList, ErrorAlert, PageHeader, Spinner, TablePager } from "@/components/ui";
+import { useClientPagination } from "@/hooks/useClientPagination";
 import { formatPolicyType, formatTag, policyTypeTone } from "./policyLabels";
 import styles from "./PolicyDetailPage.module.css";
-
-/** Allowed page sizes for the affected-assets table. */
-const PAGE_SIZES = [25, 50, 100] as const;
 
 /**
  * Loads one ABAC policy via {@link usePolicy} from the `policyId` route param and renders its
@@ -205,7 +202,7 @@ function cell(value: string | null | undefined): string {
 /**
  * Paginated table of assets that match the policy's governed tags.
  *
- * Warns when the server truncated the list. Page size resets to the first page when changed.
+ * Warns when the server truncated the list.
  */
 function AffectedAssetsCard({
   assets,
@@ -219,18 +216,7 @@ function AffectedAssetsCard({
   /** Optional informational note from the API, shown above the table. */
   note: string | null;
 }) {
-  const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState<(typeof PAGE_SIZES)[number]>(25);
-
-  const pageCount = Math.max(1, Math.ceil(assets.length / pageSize));
-  const safePage = Math.min(page, pageCount - 1);
-  const rows = useMemo(() => {
-    const start = safePage * pageSize;
-    return assets.slice(start, start + pageSize);
-  }, [assets, pageSize, safePage]);
-
-  const from = assets.length === 0 ? 0 : safePage * pageSize + 1;
-  const to = Math.min(assets.length, (safePage + 1) * pageSize);
+  const pager = useClientPagination(assets);
 
   return (
     <Card title="Affected assets" actions={assets.length ? <Badge>{assets.length}</Badge> : null}>
@@ -256,7 +242,7 @@ function AffectedAssetsCard({
                 </tr>
               </thead>
               <tbody>
-                {rows.map((asset) => (
+                {pager.rows.map((asset) => (
                   <tr key={`${asset.assetType}:${asset.fullName}:${asset.matchedTagKey}:${asset.matchedTagValue}`}>
                     <td>
                       <Badge>{asset.assetType}</Badge>
@@ -284,50 +270,13 @@ function AffectedAssetsCard({
               </tbody>
             </table>
           </div>
-          <div className={styles.pager}>
-            <div className={styles.pagerMeta}>
-              {from}–{to} of {assets.length}
-            </div>
-            <div className={styles.pagerControls}>
-              <label>
-                <span className={styles.muted}>Rows</span>{" "}
-                <select
-                  className={styles.select}
-                  aria-label="Rows per page"
-                  value={pageSize}
-                  onChange={(event) => {
-                    setPageSize(Number(event.target.value) as (typeof PAGE_SIZES)[number]);
-                    setPage(0);
-                  }}
-                >
-                  {PAGE_SIZES.map((size) => (
-                    <option key={size} value={size}>
-                      {size}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <button
-                type="button"
-                className={styles.button}
-                disabled={safePage === 0}
-                onClick={() => setPage((current) => Math.max(0, current - 1))}
-              >
-                Previous
-              </button>
-              <span className={styles.pagerMeta}>
-                Page {safePage + 1} of {pageCount}
-              </span>
-              <button
-                type="button"
-                className={styles.button}
-                disabled={safePage >= pageCount - 1}
-                onClick={() => setPage((current) => Math.min(pageCount - 1, current + 1))}
-              >
-                Next
-              </button>
-            </div>
-          </div>
+          <TablePager
+            total={pager.total}
+            page={pager.page}
+            pageSize={pager.pageSize}
+            onPageChange={pager.setPage}
+            onPageSizeChange={pager.setPageSize}
+          />
         </>
       )}
     </Card>

@@ -390,7 +390,10 @@ export class IdentityAttributesApi {
   }
 
   /**
-   * `POST /identity/assignments/{assignmentId}/revoke` — revoke an assignment (admin only).
+   * `POST /identity/assignments/{assignmentId}/revoke` — revoke an assignment.
+   *
+   * App admins may revoke any assignment. Approvers may revoke assignments for paths they
+   * can decide (same scope as Attribute Explorer).
    *
    * @param assignmentId - Assignment id.
    * @returns The assignment with `revokedAt`/`revokedBy` set.

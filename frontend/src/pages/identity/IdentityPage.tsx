@@ -29,9 +29,17 @@ import {
   useUpsertAttributeDefinition,
   useUpsertCategoryApprover,
 } from "@/api/queries";
-import type { AttributeDefinition, PrincipalKind, ValueSource } from "@/api/types";
+import type {
+  AccessRequest,
+  AttributeDefinition,
+  CategoryApprover,
+  IdentityAttributeAssignment,
+  PrincipalKind,
+  ValueSource,
+} from "@/api/types";
 import { PrincipalPicker } from "@/components/PrincipalPicker";
-import { Alert, Badge, Card, ErrorAlert, PageHeader, Spinner } from "@/components/ui";
+import { Alert, Badge, Card, ErrorAlert, PageHeader, Spinner, TablePager } from "@/components/ui";
+import { useClientPagination } from "@/hooks/useClientPagination";
 import styles from "./IdentityPage.module.css";
 
 /**
@@ -213,36 +221,56 @@ function MyAttributesPanel() {
         <div className={styles.empty}>No active attributes are assigned to you or your groups.</div>
       )}
       {data && data.assignments.length > 0 && (
-        <div className={styles.tableWrap}>
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th>Attribute</th>
-                <th>Value</th>
-                <th>Via</th>
-                <th>Expires</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.assignments.map((item) => (
-                <tr key={item.assignmentId}>
-                  <td>
-                    <code>{item.attributeKey}</code>
-                  </td>
-                  <td>
-                    <Badge tone="info">{item.attributeValue}</Badge>
-                  </td>
-                  <td>
-                    <Badge>{item.principalType}</Badge> <code>{item.principalName}</code>
-                  </td>
-                  <td className={styles.muted}>{formatWhen(item.expiresAt)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <MyAttributesTable assignments={data.assignments} />
       )}
     </Card>
+  );
+}
+
+/**
+ * Paginated table of the signed-in user's effective attribute assignments.
+ */
+function MyAttributesTable({ assignments }: { assignments: IdentityAttributeAssignment[] }) {
+  const pager = useClientPagination(assignments);
+
+  return (
+    <>
+      <div className={styles.tableWrap}>
+        <table className={styles.table}>
+          <thead>
+            <tr>
+              <th>Attribute</th>
+              <th>Value</th>
+              <th>Via</th>
+              <th>Expires</th>
+            </tr>
+          </thead>
+          <tbody>
+            {pager.rows.map((item) => (
+              <tr key={item.assignmentId}>
+                <td>
+                  <code>{item.attributeKey}</code>
+                </td>
+                <td>
+                  <Badge tone="info">{item.attributeValue}</Badge>
+                </td>
+                <td>
+                  <Badge>{item.principalType}</Badge> <code>{item.principalName}</code>
+                </td>
+                <td className={styles.muted}>{formatWhen(item.expiresAt)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <TablePager
+        total={pager.total}
+        page={pager.page}
+        pageSize={pager.pageSize}
+        onPageChange={pager.setPage}
+        onPageSizeChange={pager.setPageSize}
+      />
+    </>
   );
 }
 
@@ -423,62 +451,94 @@ function MyRequestsPanel() {
       {error && <ErrorAlert error={error} title="Could not load requests" />}
       {data && data.requests.length === 0 && <div className={styles.empty}>No access requests yet.</div>}
       {data && data.requests.length > 0 && (
-        <div className={styles.tableWrap}>
-          <table className={styles.table} aria-label="My access requests">
-            <thead>
-              <tr>
-                <th>Attribute</th>
-                <th>Value</th>
-                <th>Routed to</th>
-                <th>Status</th>
-                <th>Requested expiry</th>
-                <th>Submitted</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {data.requests.map((item) => (
-                <tr key={item.requestId}>
-                  <td>
-                    <code>{item.attributeKey}</code>
-                  </td>
-                  <td>
-                    <code>{item.attributeValue}</code>
-                  </td>
-                  <td className={styles.muted}>
-                    {item.routedTo === "category_approvers"
-                      ? item.resolvedCategory
-                        ? `category ${item.resolvedCategory}`
-                        : "category approvers"
-                      : "app admins"}
-                  </td>
-                  <td>
-                    <Badge tone={item.status === "APPROVED" ? "success" : item.status === "DENIED" ? "danger" : "neutral"}>
-                      {item.status}
-                    </Badge>
-                  </td>
-                  <td className={styles.muted}>{formatWhen(item.requestedExpiresAt)}</td>
-                  <td className={styles.muted}>{formatWhen(item.createdAt)}</td>
-                  <td>
-                    {item.status === "PENDING" && (
-                      <button
-                        type="button"
-                        className={styles.button}
-                        disabled={cancel.isPending}
-                        aria-busy={cancel.isPending}
-                        onClick={() => void cancel.mutateAsync(item.requestId)}
-                      >
-                        {cancel.isPending ? "Cancelling…" : "Cancel"}
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <MyRequestsTable
+          requests={data.requests}
+          cancelling={cancel.isPending}
+          onCancel={(requestId) => void cancel.mutateAsync(requestId)}
+        />
       )}
     </Card>
+  );
+}
+
+/**
+ * Paginated table of the signed-in user's access requests with a cancel action for pending rows.
+ */
+function MyRequestsTable({
+  requests,
+  cancelling,
+  onCancel,
+}: {
+  requests: AccessRequest[];
+  cancelling: boolean;
+  onCancel: (requestId: string) => void;
+}) {
+  const pager = useClientPagination(requests);
+
+  return (
+    <>
+      <div className={styles.tableWrap}>
+        <table className={styles.table} aria-label="My access requests">
+          <thead>
+            <tr>
+              <th>Attribute</th>
+              <th>Value</th>
+              <th>Routed to</th>
+              <th>Status</th>
+              <th>Requested expiry</th>
+              <th>Submitted</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {pager.rows.map((item) => (
+              <tr key={item.requestId}>
+                <td>
+                  <code>{item.attributeKey}</code>
+                </td>
+                <td>
+                  <code>{item.attributeValue}</code>
+                </td>
+                <td className={styles.muted}>
+                  {item.routedTo === "category_approvers"
+                    ? item.resolvedCategory
+                      ? `category ${item.resolvedCategory}`
+                      : "category approvers"
+                    : "app admins"}
+                </td>
+                <td>
+                  <Badge tone={item.status === "APPROVED" ? "success" : item.status === "DENIED" ? "danger" : "neutral"}>
+                    {item.status}
+                  </Badge>
+                </td>
+                <td className={styles.muted}>{formatWhen(item.requestedExpiresAt)}</td>
+                <td className={styles.muted}>{formatWhen(item.createdAt)}</td>
+                <td>
+                  {item.status === "PENDING" && (
+                    <button
+                      type="button"
+                      className={styles.button}
+                      disabled={cancelling}
+                      aria-busy={cancelling}
+                      onClick={() => onCancel(item.requestId)}
+                    >
+                      {cancelling ? "Cancelling…" : "Cancel"}
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <TablePager
+        total={pager.total}
+        page={pager.page}
+        pageSize={pager.pageSize}
+        onPageChange={pager.setPage}
+        onPageSizeChange={pager.setPageSize}
+      />
+    </>
   );
 }
 
@@ -674,51 +734,83 @@ function CategoryApproversPanel() {
           <div className={styles.empty}>No approvers configured yet.</div>
         )}
         {data && data.approvers.length > 0 && (
-          <div className={styles.tableWrap}>
-            <table className={styles.table} aria-label="Approvers">
-              <thead>
-                <tr>
-                  <th>Attribute</th>
-                  <th>Path / dimension</th>
-                  <th>Principal</th>
-                  <th>Type</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {data.approvers.map((item) => (
-                  <tr key={item.approverId}>
-                    <td>
-                      <code>{item.attributeKey}</code>
-                    </td>
-                    <td>
-                      <code>{item.categoryPath}</code>
-                    </td>
-                    <td>
-                      <code>{item.principalName}</code>
-                    </td>
-                    <td>
-                      <Badge>{item.principalType}</Badge>
-                    </td>
-                    <td>
-                      <button
-                        type="button"
-                        className={styles.button}
-                        disabled={remove.isPending}
-                        aria-busy={remove.isPending}
-                        onClick={() => void remove.mutateAsync(item.approverId)}
-                      >
-                        {remove.isPending ? "Removing…" : "Remove"}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <ApproversTable
+            approvers={data.approvers}
+            removing={remove.isPending}
+            onRemove={(approverId) => void remove.mutateAsync(approverId)}
+          />
         )}
       </Card>
     </div>
+  );
+}
+
+/**
+ * Paginated table of configured request approvers with a remove action.
+ */
+function ApproversTable({
+  approvers,
+  removing,
+  onRemove,
+}: {
+  approvers: CategoryApprover[];
+  removing: boolean;
+  onRemove: (approverId: string) => void;
+}) {
+  const pager = useClientPagination(approvers);
+
+  return (
+    <>
+      <div className={styles.tableWrap}>
+        <table className={styles.table} aria-label="Approvers">
+          <thead>
+            <tr>
+              <th>Attribute</th>
+              <th>Path / dimension</th>
+              <th>Principal</th>
+              <th>Type</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {pager.rows.map((item) => (
+              <tr key={item.approverId}>
+                <td>
+                  <code>{item.attributeKey}</code>
+                </td>
+                <td>
+                  <code>{item.categoryPath}</code>
+                </td>
+                <td>
+                  <code>{item.principalName}</code>
+                </td>
+                <td>
+                  <Badge>{item.principalType}</Badge>
+                </td>
+                <td>
+                  <button
+                    type="button"
+                    className={styles.button}
+                    disabled={removing}
+                    aria-busy={removing}
+                    onClick={() => onRemove(item.approverId)}
+                  >
+                    {removing ? "Removing…" : "Remove"}
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <TablePager
+        total={pager.total}
+        page={pager.page}
+        pageSize={pager.pageSize}
+        onPageChange={pager.setPage}
+        onPageSizeChange={pager.setPageSize}
+      />
+    </>
   );
 }
 
@@ -757,6 +849,10 @@ function AssignmentsPanel() {
   const { data, isPending, error } = useAttributeAssignments(params);
   const assign = useAssignAttribute();
   const revoke = useRevokeAttribute();
+  const assignments = data?.assignments ?? [];
+  const pager = useClientPagination(assignments, {
+    resetKey: `${principalName}|${principalType}|${attributeKey}|${includeInactive}`,
+  });
 
   const [formPrincipal, setFormPrincipal] = useState("");
   const [formType, setFormType] = useState<PrincipalKind>("USER");
@@ -941,66 +1037,75 @@ function AssignmentsPanel() {
 
         {isPending && <Spinner label="Loading assignments" />}
         {error && <ErrorAlert error={error} title="Could not load assignments" />}
-        {data && data.assignments.length === 0 && (
+        {data && assignments.length === 0 && (
           <div className={styles.empty}>No assignments match the current filters.</div>
         )}
-        {data && data.assignments.length > 0 && (
-          <div className={styles.tableWrap}>
-            <table className={styles.table}>
-              <thead>
-                <tr>
-                  <th>Principal</th>
-                  <th>Attribute</th>
-                  <th>Value</th>
-                  <th>Status</th>
-                  <th>Granted</th>
-                  <th>Expires</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {data.assignments.map((item) => (
-                  <tr key={item.assignmentId}>
-                    <td>
-                      <div>
-                        <Badge>{item.principalType}</Badge>
-                      </div>
-                      <code>{item.principalName}</code>
-                    </td>
-                    <td>
-                      <code>{item.attributeKey}</code>
-                    </td>
-                    <td>
-                      <Badge tone="info">{item.attributeValue}</Badge>
-                    </td>
-                    <td>
-                      <Badge tone={item.active ? "success" : "neutral"}>
-                        {item.active ? "Active" : "Inactive"}
-                      </Badge>
-                    </td>
-                    <td className={styles.muted}>
-                      {item.grantedBy ?? "—"}
-                      <div>{formatWhen(item.createdAt)}</div>
-                    </td>
-                    <td className={styles.muted}>{formatWhen(item.expiresAt)}</td>
-                    <td>
-                      {item.active && (
-                        <button
-                          type="button"
-                          className={`${styles.button} ${styles.buttonDanger}`}
-                          disabled={revoke.isPending}
-                          aria-busy={revoke.isPending}
-                          onClick={() => void revoke.mutateAsync(item.assignmentId)}
-                        >
-                          {revoke.isPending ? "Revoking…" : "Revoke"}
-                        </button>
-                      )}
-                    </td>
+        {data && assignments.length > 0 && (
+          <>
+            <div className={styles.tableWrap}>
+              <table className={styles.table} aria-label="Assignments">
+                <thead>
+                  <tr>
+                    <th>Principal</th>
+                    <th>Attribute</th>
+                    <th>Value</th>
+                    <th>Status</th>
+                    <th>Granted</th>
+                    <th>Expires</th>
+                    <th />
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {pager.rows.map((item) => (
+                    <tr key={item.assignmentId}>
+                      <td>
+                        <div>
+                          <Badge>{item.principalType}</Badge>
+                        </div>
+                        <code>{item.principalName}</code>
+                      </td>
+                      <td>
+                        <code>{item.attributeKey}</code>
+                      </td>
+                      <td>
+                        <Badge tone="info">{item.attributeValue}</Badge>
+                      </td>
+                      <td>
+                        <Badge tone={item.active ? "success" : "neutral"}>
+                          {item.active ? "Active" : "Inactive"}
+                        </Badge>
+                      </td>
+                      <td className={styles.muted}>
+                        {item.grantedBy ?? "—"}
+                        <div>{formatWhen(item.createdAt)}</div>
+                      </td>
+                      <td className={styles.muted}>{formatWhen(item.expiresAt)}</td>
+                      <td>
+                        {item.active && (
+                          <button
+                            type="button"
+                            className={`${styles.button} ${styles.buttonDanger}`}
+                            disabled={revoke.isPending}
+                            aria-busy={revoke.isPending}
+                            onClick={() => void revoke.mutateAsync(item.assignmentId)}
+                          >
+                            {revoke.isPending ? "Revoking…" : "Revoke"}
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <TablePager
+              total={pager.total}
+              page={pager.page}
+              pageSize={pager.pageSize}
+              onPageChange={pager.setPage}
+              onPageSizeChange={pager.setPageSize}
+            />
+          </>
         )}
         {revoke.error && <ErrorAlert error={revoke.error} title="Revoke failed" />}
       </Card>
@@ -1016,6 +1121,127 @@ type DefinitionPurpose = "sensitivity" | "data_access";
 const SENSITIVITY_KEY = "sensitivity";
 const SENSITIVITY_TAGS = ["sensitivity_category", "sensitivity"];
 const DEFAULT_DATA_ACCESS_KEY = "data_access";
+
+/**
+ * Paginated table of attribute definitions with edit and delete actions.
+ */
+function DefinitionsTable({
+  definitions,
+  accessTagKey,
+  deleting,
+  onEdit,
+  onDelete,
+}: {
+  definitions: AttributeDefinition[];
+  accessTagKey: string;
+  deleting: boolean;
+  onEdit: (key: string) => void;
+  onDelete: (key: string) => void;
+}) {
+  const pager = useClientPagination(definitions);
+
+  return (
+    <>
+      <div className={styles.tableWrap}>
+        <table className={styles.table} aria-label="Attribute definitions">
+          <thead>
+            <tr>
+              <th>Key</th>
+              <th>Purpose</th>
+              <th>Value source</th>
+              <th>Allowed values</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {pager.rows.map((item) => {
+              const purposeLabel = definitionPurpose(item, accessTagKey);
+              return (
+                <tr key={item.key}>
+                  <td>
+                    <code>{item.key}</code>
+                    {item.description && <div className={styles.muted}>{item.description}</div>}
+                  </td>
+                  <td>
+                    <Badge
+                      tone={
+                        purposeLabel === "sensitivity" || purposeLabel === "data_access"
+                          ? "info"
+                          : "neutral"
+                      }
+                    >
+                      {purposeLabel.replaceAll("_", " ")}
+                    </Badge>
+                  </td>
+                  <td>
+                    <div className={styles.chipRow}>
+                      {item.valueSource !== "governed_tags" ? (
+                        <Badge>{VALUE_SOURCE_LABELS[item.valueSource]}</Badge>
+                      ) : item.governedTagKeys.length ? (
+                        item.governedTagKeys.map((tagKey) => <Badge key={tagKey}>{tagKey}</Badge>)
+                      ) : (
+                        <span className={styles.muted}>Not linked</span>
+                      )}
+                    </div>
+                  </td>
+                  <td>
+                    {item.allowedValues.length ? (
+                      <div className={styles.chipRow}>
+                        {item.allowedValues.slice(0, MAX_VALUE_CHIPS).map((value) => (
+                          <Badge key={value}>{value}</Badge>
+                        ))}
+                        {item.allowedValues.length > MAX_VALUE_CHIPS && (
+                          <span className={styles.muted}>
+                            +{item.allowedValues.length - MAX_VALUE_CHIPS} more
+                          </span>
+                        )}
+                      </div>
+                    ) : (
+                      <span className={styles.muted}>Any value</span>
+                    )}
+                  </td>
+                  <td>
+                    <div className={styles.buttonRow}>
+                      {item.valueSource === "governed_tags" ? (
+                        <button
+                          type="button"
+                          className={styles.button}
+                          onClick={() => onEdit(item.key)}
+                        >
+                          Edit
+                        </button>
+                      ) : (
+                        <Link className={styles.button} to="/row-filters">
+                          Edit in Row filters
+                        </Link>
+                      )}
+                      <button
+                        type="button"
+                        className={`${styles.button} ${styles.buttonDanger}`}
+                        disabled={deleting}
+                        aria-busy={deleting}
+                        onClick={() => onDelete(item.key)}
+                      >
+                        {deleting ? "Deleting…" : "Delete"}
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <TablePager
+        total={pager.total}
+        page={pager.page}
+        pageSize={pager.pageSize}
+        onPageChange={pager.setPage}
+        onPageSizeChange={pager.setPageSize}
+      />
+    </>
+  );
+}
 
 /**
  * Classify a definition for list badges: sensitivity, data access, row filter, or other.
@@ -1224,96 +1450,13 @@ function DefinitionsPanel() {
             </div>
           )}
           {data && data.definitions.length > 0 && (
-            <div className={styles.tableWrap}>
-              <table className={styles.table} aria-label="Attribute definitions">
-                <thead>
-                  <tr>
-                    <th>Key</th>
-                    <th>Purpose</th>
-                    <th>Value source</th>
-                    <th>Allowed values</th>
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.definitions.map((item) => {
-                    const purposeLabel = definitionPurpose(item, accessTagKey);
-                    return (
-                      <tr key={item.key}>
-                        <td>
-                          <code>{item.key}</code>
-                          {item.description && <div className={styles.muted}>{item.description}</div>}
-                        </td>
-                        <td>
-                          <Badge
-                            tone={
-                              purposeLabel === "sensitivity" || purposeLabel === "data_access"
-                                ? "info"
-                                : "neutral"
-                            }
-                          >
-                            {purposeLabel.replaceAll("_", " ")}
-                          </Badge>
-                        </td>
-                        <td>
-                          <div className={styles.chipRow}>
-                            {item.valueSource !== "governed_tags" ? (
-                              <Badge>{VALUE_SOURCE_LABELS[item.valueSource]}</Badge>
-                            ) : item.governedTagKeys.length ? (
-                              item.governedTagKeys.map((tagKey) => <Badge key={tagKey}>{tagKey}</Badge>)
-                            ) : (
-                              <span className={styles.muted}>Not linked</span>
-                            )}
-                          </div>
-                        </td>
-                        <td>
-                          {item.allowedValues.length ? (
-                            <div className={styles.chipRow}>
-                              {item.allowedValues.slice(0, MAX_VALUE_CHIPS).map((value) => (
-                                <Badge key={value}>{value}</Badge>
-                              ))}
-                              {item.allowedValues.length > MAX_VALUE_CHIPS && (
-                                <span className={styles.muted}>
-                                  +{item.allowedValues.length - MAX_VALUE_CHIPS} more
-                                </span>
-                              )}
-                            </div>
-                          ) : (
-                            <span className={styles.muted}>Any value</span>
-                          )}
-                        </td>
-                        <td>
-                          <div className={styles.buttonRow}>
-                            {item.valueSource === "governed_tags" ? (
-                              <button
-                                type="button"
-                                className={styles.button}
-                                onClick={() => startEdit(item.key)}
-                              >
-                                Edit
-                              </button>
-                            ) : (
-                              <Link className={styles.button} to="/row-filters">
-                                Edit in Row filters
-                              </Link>
-                            )}
-                            <button
-                              type="button"
-                              className={`${styles.button} ${styles.buttonDanger}`}
-                              disabled={remove.isPending}
-                              aria-busy={remove.isPending}
-                              onClick={() => void remove.mutateAsync(item.key)}
-                            >
-                              {remove.isPending ? "Deleting…" : "Delete"}
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            <DefinitionsTable
+              definitions={data.definitions}
+              accessTagKey={accessTagKey}
+              deleting={remove.isPending}
+              onEdit={startEdit}
+              onDelete={(definitionKey) => void remove.mutateAsync(definitionKey)}
+            />
           )}
           {remove.error && <ErrorAlert error={remove.error} title="Delete failed" />}
         </Card>

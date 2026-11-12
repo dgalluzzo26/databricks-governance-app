@@ -19,8 +19,9 @@ import {
   useRowFilterPack,
   useUpsertRowFilterDimension,
 } from "@/api/queries";
-import type { RowFilterDimension } from "@/api/types";
-import { Alert, Badge, Card, ErrorAlert, PageHeader, Spinner } from "@/components/ui";
+import type { RowFilterAttachment, RowFilterDimension } from "@/api/types";
+import { Alert, Badge, Card, ErrorAlert, PageHeader, Spinner, TablePager } from "@/components/ui";
+import { useClientPagination } from "@/hooks/useClientPagination";
 import styles from "../identity/IdentityPage.module.css";
 
 /** How a dimension's allowed values are sourced: a typed list or a seed SQL query. */
@@ -176,83 +177,134 @@ function DimensionsCard({ isAdmin }: { isAdmin: boolean }) {
         <div className={styles.empty}>No row filter dimensions yet.</div>
       )}
       {data && data.dimensions.length > 0 && (
-        <div className={styles.tableWrap}>
-          <table className={styles.table} aria-label="Row filter dimensions">
-            <thead>
-              <tr>
-                <th>Dimension</th>
-                <th>Values</th>
-                <th>Columns</th>
-                {isAdmin && <th />}
-              </tr>
-            </thead>
-            <tbody>
-              {data.dimensions.map((dim) => (
-                <tr key={dim.key}>
-                  <td>
-                    <code>{dim.key}</code>
-                    {dim.description && <div className={styles.muted}>{dim.description}</div>}
-                    <div className={styles.muted}>
-                      {dim.valueSource === "sql" ? "SQL seed query" : "Free-form list"}
-                    </div>
-                  </td>
-                  <td>
-                    <div className={styles.chipRow}>
-                      <Badge>*</Badge>
-                      {dim.sampleValues.map((value) => (
-                        <Badge key={value}>{value}</Badge>
-                      ))}
-                      {dim.allowedValueCount > dim.sampleValues.length && (
-                        <span className={styles.muted}>
-                          +{dim.allowedValueCount - dim.sampleValues.length} more
-                        </span>
-                      )}
-                    </div>
-                  </td>
-                  <td>{dim.attachmentCount}</td>
-                  {isAdmin && (
-                    <td>
-                      <div className={styles.buttonRow}>
-                        <button
-                          type="button"
-                          className={styles.button}
-                          onClick={() => {
-                            setEditing(dim);
-                            setFormOpen(true);
-                          }}
-                        >
-                          Edit
-                        </button>
-                        {dim.valueSource === "sql" && (
-                          <button
-                            type="button"
-                            className={styles.button}
-                            disabled={refresh.isPending}
-                            onClick={() => void refresh.mutateAsync(dim.key)}
-                          >
-                            Refresh values
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          className={`${styles.button} ${styles.buttonDanger}`}
-                          disabled={remove.isPending}
-                          onClick={() => void remove.mutateAsync(dim.key)}
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </td>
-                  )}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <DimensionsTable
+          dimensions={data.dimensions}
+          isAdmin={isAdmin}
+          refreshing={refresh.isPending}
+          deleting={remove.isPending}
+          onEdit={(dim) => {
+            setEditing(dim);
+            setFormOpen(true);
+          }}
+          onRefresh={(key) => void refresh.mutateAsync(key)}
+          onDelete={(key) => void remove.mutateAsync(key)}
+        />
       )}
       {refresh.error && <ErrorAlert error={refresh.error} title="Refresh failed" />}
       {remove.error && <ErrorAlert error={remove.error} title="Delete failed" />}
     </Card>
+  );
+}
+
+/**
+ * Paginated table of row-filter dimensions with optional admin actions.
+ */
+function DimensionsTable({
+  dimensions,
+  isAdmin,
+  refreshing,
+  deleting,
+  onEdit,
+  onRefresh,
+  onDelete,
+}: {
+  /** All dimensions from the API. */
+  dimensions: RowFilterDimension[];
+  /** When true, shows the action column. */
+  isAdmin: boolean;
+  /** True while a refresh mutation is in flight. */
+  refreshing: boolean;
+  /** True while a delete mutation is in flight. */
+  deleting: boolean;
+  /** Opens the dimension form for editing. */
+  onEdit: (dimension: RowFilterDimension) => void;
+  /** Re-runs the seed query for a SQL-backed dimension. */
+  onRefresh: (key: string) => void;
+  /** Deletes the dimension. */
+  onDelete: (key: string) => void;
+}) {
+  const pager = useClientPagination(dimensions);
+
+  return (
+    <>
+      <div className={styles.tableWrap}>
+        <table className={styles.table} aria-label="Row filter dimensions">
+          <thead>
+            <tr>
+              <th>Dimension</th>
+              <th>Values</th>
+              <th>Columns</th>
+              {isAdmin && <th />}
+            </tr>
+          </thead>
+          <tbody>
+            {pager.rows.map((dim) => (
+              <tr key={dim.key}>
+                <td>
+                  <code>{dim.key}</code>
+                  {dim.description && <div className={styles.muted}>{dim.description}</div>}
+                  <div className={styles.muted}>
+                    {dim.valueSource === "sql" ? "SQL seed query" : "Free-form list"}
+                  </div>
+                </td>
+                <td>
+                  <div className={styles.chipRow}>
+                    <Badge>*</Badge>
+                    {dim.sampleValues.map((value) => (
+                      <Badge key={value}>{value}</Badge>
+                    ))}
+                    {dim.allowedValueCount > dim.sampleValues.length && (
+                      <span className={styles.muted}>
+                        +{dim.allowedValueCount - dim.sampleValues.length} more
+                      </span>
+                    )}
+                  </div>
+                </td>
+                <td>{dim.attachmentCount}</td>
+                {isAdmin && (
+                  <td>
+                    <div className={styles.buttonRow}>
+                      <button
+                        type="button"
+                        className={styles.button}
+                        onClick={() => onEdit(dim)}
+                      >
+                        Edit
+                      </button>
+                      {dim.valueSource === "sql" && (
+                        <button
+                          type="button"
+                          className={styles.button}
+                          disabled={refreshing}
+                          onClick={() => onRefresh(dim.key)}
+                        >
+                          Refresh values
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className={`${styles.button} ${styles.buttonDanger}`}
+                        disabled={deleting}
+                        onClick={() => onDelete(dim.key)}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <TablePager
+        total={pager.total}
+        page={pager.page}
+        pageSize={pager.pageSize}
+        onPageChange={pager.setPage}
+        onPageSizeChange={pager.setPageSize}
+      />
+    </>
   );
 }
 
@@ -512,52 +564,92 @@ function AttachmentsCard({ isAdmin }: { isAdmin: boolean }) {
       {error && <ErrorAlert error={error} title="Could not load filtered columns" />}
       {data && data.attachments.length === 0 && <div className={styles.empty}>No filtered columns yet.</div>}
       {data && data.attachments.length > 0 && (
-        <div className={styles.tableWrap}>
-          <table className={styles.table} aria-label="Filtered columns">
-            <thead>
-              <tr>
-                <th>Table</th>
-                <th>Column</th>
-                <th>Dimension</th>
-                {isAdmin && <th />}
-              </tr>
-            </thead>
-            <tbody>
-              {data.attachments.map((item) => (
-                <tr key={`${item.tableFullName}.${item.columnName}`}>
-                  <td>
-                    <code>{item.tableFullName}</code>
-                  </td>
-                  <td>
-                    <code>{item.columnName}</code>
-                  </td>
-                  <td>
-                    <Badge>{item.dimension}</Badge>
-                  </td>
-                  {isAdmin && (
-                    <td>
-                      <button
-                        type="button"
-                        className={`${styles.button} ${styles.buttonDanger}`}
-                        disabled={detach.isPending}
-                        onClick={() =>
-                          void detach.mutateAsync({
-                            tableFullName: item.tableFullName,
-                            columnName: item.columnName,
-                          })
-                        }
-                      >
-                        Detach
-                      </button>
-                    </td>
-                  )}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <AttachmentsTable
+          attachments={data.attachments}
+          isAdmin={isAdmin}
+          detaching={detach.isPending}
+          onDetach={(item) =>
+            void detach.mutateAsync({
+              tableFullName: item.tableFullName,
+              columnName: item.columnName,
+            })
+          }
+        />
       )}
       {detach.error && <ErrorAlert error={detach.error} title="Detach failed" />}
     </Card>
   );
 }
+
+/**
+ * Paginated table of columns tagged with a row-filter dimension.
+ */
+function AttachmentsTable({
+  attachments,
+  isAdmin,
+  detaching,
+  onDetach,
+}: {
+  /** All attachments from the API. */
+  attachments: RowFilterAttachment[];
+  /** When true, shows the detach action column. */
+  isAdmin: boolean;
+  /** True while a detach mutation is in flight. */
+  detaching: boolean;
+  /** Removes the row-filter tag from the given column. */
+  onDetach: (attachment: RowFilterAttachment) => void;
+}) {
+  const pager = useClientPagination(attachments);
+
+  return (
+    <>
+      <div className={styles.tableWrap}>
+        <table className={styles.table} aria-label="Filtered columns">
+          <thead>
+            <tr>
+              <th>Table</th>
+              <th>Column</th>
+              <th>Dimension</th>
+              {isAdmin && <th />}
+            </tr>
+          </thead>
+          <tbody>
+            {pager.rows.map((item) => (
+              <tr key={`${item.tableFullName}.${item.columnName}`}>
+                <td>
+                  <code>{item.tableFullName}</code>
+                </td>
+                <td>
+                  <code>{item.columnName}</code>
+                </td>
+                <td>
+                  <Badge>{item.dimension}</Badge>
+                </td>
+                {isAdmin && (
+                  <td>
+                    <button
+                      type="button"
+                      className={`${styles.button} ${styles.buttonDanger}`}
+                      disabled={detaching}
+                      onClick={() => onDetach(item)}
+                    >
+                      Detach
+                    </button>
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <TablePager
+        total={pager.total}
+        page={pager.page}
+        pageSize={pager.pageSize}
+        onPageChange={pager.setPage}
+        onPageSizeChange={pager.setPageSize}
+      />
+    </>
+  );
+}
+
