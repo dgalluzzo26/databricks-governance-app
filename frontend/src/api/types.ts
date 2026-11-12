@@ -1105,3 +1105,14 @@ export interface RecoveryPreview {
   files: RecoveryFile[];
   warnings: string[];
 }
+
+/** Result of pushing the export to Git (`POST /recovery/export/push`). The token is never included. */
+export interface RecoveryPushResult {
+  pushedAt: string;
+  pushedBy: string;
+  target: string;
+  commitSha: string;
+  committed: boolean;
+  branchCreated: boolean;
+  files: number;
+}

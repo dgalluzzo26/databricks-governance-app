@@ -1,16 +1,15 @@
 /**
- * @file Recovery export page: Git target settings and a dry-run preview of the YAML files.
- *
- * Phase 1 writes nothing to Git. The preview shows exactly what a push would commit, so an
- * admin can review values and redactions before the push is enabled.
+ * @file Recovery export page: Git target settings, a dry-run preview of the YAML files, and the
+ * push that commits those files to the saved repository and branch.
  */
 import { useEffect, useState } from "react";
 import {
   usePreviewRecoveryExport,
+  usePushRecoveryExport,
   useRecoverySettings,
   useSaveRecoverySettings,
 } from "@/api/queries";
-import type { RecoveryGitSettings, RecoveryPreview } from "@/api/types";
+import type { RecoveryGitSettings, RecoveryPreview, RecoveryPushResult } from "@/api/types";
 import { Alert, Card, ErrorAlert, PageHeader, Spinner } from "@/components/ui";
 import styles from "./RecoveryPage.module.css";
 
@@ -23,6 +22,8 @@ export function RecoveryPage() {
   const settings = useRecoverySettings();
   const save = useSaveRecoverySettings();
   const preview = usePreviewRecoveryExport();
+  const push = usePushRecoveryExport();
+  const repoConfigured = Boolean(settings.data?.repoUrl);
 
   return (
     <>
@@ -43,20 +44,35 @@ export function RecoveryPage() {
       <Card
         title="Export preview"
         actions={
-          <button
-            type="button"
-            className={`${styles.button} ${styles.buttonPrimary}`}
-            disabled={preview.isPending}
-            onClick={() => void preview.mutateAsync()}
-          >
-            {preview.isPending ? "Building…" : "Preview export"}
-          </button>
+          <div className={styles.actions}>
+            <button
+              type="button"
+              className={`${styles.button} ${styles.buttonPrimary}`}
+              disabled={preview.isPending}
+              onClick={() => void preview.mutateAsync()}
+            >
+              {preview.isPending ? "Building…" : "Preview export"}
+            </button>
+            <button
+              type="button"
+              className={`${styles.button} ${styles.buttonPrimary}`}
+              disabled={!preview.data || !repoConfigured || push.isPending}
+              onClick={() => void push.mutateAsync()}
+            >
+              {push.isPending ? "Pushing…" : "Push to Git"}
+            </button>
+          </div>
         }
       >
         <p className={styles.muted}>
-          Builds the files without writing to Git. Secret values are never included.
+          Preview builds the files without writing to Git. Push commits the same files to the saved repository
+          and branch, using the saved settings and the token in the secret scope. Secret values are never
+          included.
         </p>
+        {!repoConfigured && <p className={styles.muted}>Save a repository URL above before pushing.</p>}
         {preview.error && <ErrorAlert error={preview.error} title="Preview failed" />}
+        {push.error && <ErrorAlert error={push.error} title="Push to Git failed" />}
+        {push.data && <PushReport result={push.data} />}
         {preview.data && <PreviewReport preview={preview.data} />}
       </Card>
     </>
@@ -133,17 +149,38 @@ function GitTargetCard(props: {
           </label>
         </div>
         <p className={styles.muted}>
-          The token itself lives in the admin secret scope under this key name. It is not stored in
-          the app.
+          The token itself lives in the admin secret scope under this key name. It is not stored in the app.
         </p>
         {props.error && <ErrorAlert error={props.error} title="Could not save settings" />}
         <div className={styles.actions}>
-          <button type="submit" className={`${styles.button} ${styles.buttonPrimary}`} disabled={props.saving}>
+          <button
+            type="submit"
+            className={`${styles.button} ${styles.buttonPrimary}`}
+            disabled={props.saving}
+          >
             {props.saving ? "Saving…" : "Save settings"}
           </button>
         </div>
       </form>
     </Card>
+  );
+}
+
+/**
+ * Summarizes a completed push: where it went and whether a commit was created.
+ *
+ * @param props - The push result returned by the API.
+ * @returns A status banner.
+ */
+function PushReport({ result }: { result: RecoveryPushResult }) {
+  const commit = result.commitSha.slice(0, 12);
+  return (
+    <Alert tone="success" title={result.committed ? "Pushed to Git" : "Git already up to date"}>
+      {result.committed
+        ? `Committed ${commit} to ${result.target} (${result.files} files).`
+        : `${result.target} already matches this export at ${commit}; nothing was pushed.`}
+      {result.branchCreated ? " The branch was created." : ""}
+    </Alert>
   );
 }
 

@@ -1,7 +1,7 @@
 """Recovery export API under ``/api/recovery``.
 
-Requires app admin. Phase 1 exposes the Git target settings and a dry-run preview of the YAML
-files a recovery push would commit. Nothing is written to Git yet.
+Requires app admin. Exposes the Git target settings, a dry-run preview of the YAML files, and
+the push that commits those files to the configured Git branch.
 """
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from backend.app.api.deps import Admin, Container
-from backend.app.models.recovery import RecoveryGitSettings, RecoveryPreview
+from backend.app.models.recovery import RecoveryGitSettings, RecoveryPreview, RecoveryPushResult
 
 router = APIRouter(prefix="/recovery", tags=["recovery"])
 
@@ -66,3 +66,25 @@ def preview_export(admin: Admin, container: Container) -> RecoveryPreview:
         ForbiddenError: If the caller is not an app admin (HTTP 403).
     """
     return container.recovery.build_preview(admin)
+
+
+@router.post("/export/push", response_model=RecoveryPushResult)
+def push_export(admin: Admin, container: Container) -> RecoveryPushResult:
+    """Commit the export files to the saved Git repository and branch.
+
+    Requires app admin. Reads the token from the admin secret scope at push time; the token is
+    never returned. Pushes nothing when the branch already matches the export.
+
+    Args:
+        admin: Authenticated app administrator (dependency injection).
+        container: Process-scoped service container (dependency injection).
+
+    Returns:
+        The commit reference and whether a new commit was pushed.
+
+    Raises:
+        ForbiddenError: If the caller is not an app admin (HTTP 403).
+        InvalidRequestError: If the repository, path, or token secret is not configured (HTTP 422).
+        UpstreamError: If a Git step failed (HTTP 502).
+    """
+    return container.recovery.push(admin)

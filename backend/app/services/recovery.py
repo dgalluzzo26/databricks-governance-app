@@ -1,8 +1,10 @@
 """Recovery export: snapshot app-owned state as YAML for Git-backed disaster recovery.
 
-Phase 1 is preview-only. ``build_preview`` returns the files a future push would commit so an
-admin can inspect them. Nothing is written to Git, and no secret values are read: the joinable
-salt is reported as configured but never exported, and secret-looking keys are redacted.
+``build_preview`` returns the files an export would commit so an admin can inspect them without
+writing anything. ``push`` commits the same files to the configured Git branch. The joinable
+salt is reported as configured but never exported, and secret-looking keys are redacted. The Git
+token is read from the admin secret scope at push time only; it is never stored, logged, or
+returned.
 """
 
 from __future__ import annotations
@@ -15,10 +17,19 @@ from typing import Any
 
 import yaml
 
+from backend.app.clients.git_publisher import GitPublisher, GitPublishError
+from backend.app.clients.secrets import admin_secret_scope, decode_secret_value
+from backend.app.clients.workspace import WorkspaceClientFactory
 from backend.app.core.config import AppConfig
+from backend.app.core.errors import InvalidRequestError, UpstreamError
 from backend.app.models.audit import AuditEvent
 from backend.app.models.identity_attribute import AttributeAssignmentFilter
-from backend.app.models.recovery import RecoveryFile, RecoveryGitSettings, RecoveryPreview
+from backend.app.models.recovery import (
+    RecoveryFile,
+    RecoveryGitSettings,
+    RecoveryPreview,
+    RecoveryPushResult,
+)
 from backend.app.models.user import CurrentUser
 from backend.app.repositories.base import StorageProvider
 from backend.app.services.mask_rules import JOINABLE_SALT_KEY
@@ -56,9 +67,17 @@ class RecoveryService:
         config: Deployment configuration (catalog, schema, secret scope, storage backend).
     """
 
-    def __init__(self, config: AppConfig, storage: StorageProvider) -> None:
+    def __init__(
+        self,
+        config: AppConfig,
+        storage: StorageProvider,
+        workspace: WorkspaceClientFactory,
+        publisher: GitPublisher | None = None,
+    ) -> None:
         self._config = config
         self._storage = storage
+        self._workspace = workspace
+        self._publisher = publisher or GitPublisher()
 
     def get_settings(self) -> RecoveryGitSettings:
         """Return the saved Git target settings, or defaults when none are saved."""
@@ -101,6 +120,95 @@ class RecoveryService:
             files=files,
             warnings=warnings,
         )
+
+    def push(self, actor: CurrentUser) -> RecoveryPushResult:
+        """Commit the current export to the configured Git branch.
+
+        Replaces the files under ``path_prefix`` with the export and pushes one commit when
+        anything changed. Only the saved settings are used, so save them before pushing.
+
+        Args:
+            actor: Admin running the push; recorded as the commit author and in the audit log.
+
+        Returns:
+            The commit reference and whether a commit was pushed.
+
+        Raises:
+            InvalidRequestError: Repository, path, or token secret is not configured or readable.
+            UpstreamError: A Git step failed (the message never contains the token).
+        """
+        git = self.get_settings()
+        if not git.repo_url:
+            raise InvalidRequestError("Save a Git repository URL on this page before pushing.")
+        if not git.path_prefix:
+            raise InvalidRequestError("Save a path in the repository before pushing.")
+
+        generated_at = datetime.now(UTC)
+        files, _warnings = self._collect(generated_at, actor, git)
+        token = self._read_token(git.token_secret_key)
+        message = f"Recovery export {generated_at:%Y-%m-%d %H:%M:%S} UTC by {actor.user_name}"
+        try:
+            outcome = self._publisher.push_files(
+                repo_url=git.repo_url,
+                branch=git.branch,
+                path_prefix=git.path_prefix,
+                files={f.path: f.content for f in files},
+                username=git.username or "governance-app",
+                token=token,
+                author_name=git.username or "governance-app",
+                author_email=actor.user_name,
+                message=message,
+            )
+        except GitPublishError as exc:
+            logger.warning("Recovery push to %s@%s failed: %s", git.repo_url, git.branch, exc)
+            raise UpstreamError(str(exc)) from exc
+
+        pushed_at = datetime.now(UTC)
+        self._storage.audit.record(
+            AuditEvent(
+                event_id=str(uuid.uuid4()),
+                event_type="recovery.export_pushed",
+                actor=actor.user_name,
+                payload={
+                    "repo_url": git.repo_url,
+                    "branch": git.branch,
+                    "path_prefix": git.path_prefix,
+                    "commit_sha": outcome.commit_sha,
+                    "committed": outcome.committed,
+                    "files": len(files),
+                },
+                created_at=pushed_at,
+            )
+        )
+        return RecoveryPushResult(
+            pushed_at=pushed_at,
+            pushed_by=actor.user_name,
+            target=f"{git.repo_url}@{git.branch}:{git.path_prefix}",
+            commit_sha=outcome.commit_sha,
+            committed=outcome.committed,
+            branch_created=outcome.branch_created,
+            files=len(files),
+        )
+
+    def _read_token(self, secret_key: str) -> str:
+        """Read the Git token from the admin secret scope. The value is returned to the caller only.
+
+        Raises:
+            InvalidRequestError: The key is missing, empty, or not readable by the app.
+        """
+        scope = admin_secret_scope()
+        try:
+            resp = self._workspace.app().secrets.get_secret(scope=scope, key=secret_key)
+        except Exception as exc:  # noqa: BLE001 - SDK raises several not-found / permission types
+            logger.info("Git token %s/%s not readable: %s", scope, secret_key, type(exc).__name__)
+            raise InvalidRequestError(
+                f"Could not read the Git token from secret scope '{scope}', key '{secret_key}'. "
+                "Add it with the Databricks CLI and make sure the app service principal can read the scope."
+            ) from None
+        token = decode_secret_value(getattr(resp, "value", None))
+        if not token:
+            raise InvalidRequestError(f"The Git token under key '{secret_key}' in scope '{scope}' is empty.")
+        return token
 
     def _collect(
         self, generated_at: datetime, actor: CurrentUser, git: RecoveryGitSettings

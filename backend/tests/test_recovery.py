@@ -1,15 +1,20 @@
-"""Tests for the recovery export preview and Git target settings."""
+"""Tests for the recovery export preview, Git target settings, and push."""
 
 from __future__ import annotations
 
+import base64
+import json
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 import yaml
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
+from backend.app.clients.git_publisher import GitPublishError, PushOutcome
 from backend.app.core.container import ServiceContainer
+from backend.app.core.errors import InvalidRequestError, UpstreamError
 from backend.app.models.access_request import CategoryApprover
 from backend.app.models.identity_attribute import AttributeDefinition, IdentityAttributeAssignment
 from backend.app.models.mask_rule import MaskRuleDefinition
@@ -177,3 +182,134 @@ def test_preview_api_is_admin_only(client: TestClient, container: ServiceContain
     assert "generatedAt" in body
 
     assert client.get("/api/recovery/settings", headers=headers_for("analyst@example.com")).status_code == 403
+
+
+class _FakeSecrets:
+    """Stands in for ``workspace.app().secrets``; values are stored base64-encoded like the API."""
+
+    def __init__(self, values: dict[str, str]) -> None:
+        self._values = values
+        self.calls: list[tuple[str, str]] = []
+
+    def get_secret(self, scope: str, key: str) -> SimpleNamespace:
+        self.calls.append((scope, key))
+        if key not in self._values:
+            raise RuntimeError("secret does not exist")
+        return SimpleNamespace(value=base64.b64encode(self._values[key].encode()).decode())
+
+
+class _FakePublisher:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.calls: list[dict] = []
+        self._error = error
+
+    def push_files(self, **kwargs) -> PushOutcome:  # noqa: ANN003
+        self.calls.append(kwargs)
+        if self._error is not None:
+            raise self._error
+        return PushOutcome(commit_sha="c0ffee1234", committed=True, branch_created=False)
+
+
+def _configure_git(container: ServiceContainer, secret_key: str = "git-token-dev") -> None:
+    container.recovery.save_settings(
+        RecoveryGitSettings(
+            repo_url="https://github.com/acme/gov-backup.git",
+            branch="main",
+            path_prefix="exports/dev",
+            username="svc-git",
+            token_secret_key=secret_key,
+        ),
+        _admin(),  # type: ignore[arg-type]
+    )
+
+
+def _wire_push(container: ServiceContainer, secrets: _FakeSecrets, publisher: _FakePublisher) -> None:
+    container.recovery._workspace = SimpleNamespace(app=lambda: SimpleNamespace(secrets=secrets))  # noqa: SLF001
+    container.recovery._publisher = publisher  # noqa: SLF001
+
+
+def test_push_reads_token_at_push_time_and_commits_export(container: ServiceContainer) -> None:
+    _seed(container)
+    _configure_git(container)
+    secrets = _FakeSecrets({"git-token-dev": "tok-value-123"})
+    publisher = _FakePublisher()
+    _wire_push(container, secrets, publisher)
+
+    result = container.recovery.push(_admin())  # type: ignore[arg-type]
+
+    assert secrets.calls == [("databricks-governance-app", "git-token-dev")]
+    (call,) = publisher.calls
+    assert call["repo_url"] == "https://github.com/acme/gov-backup.git"
+    assert call["branch"] == "main"
+    assert call["path_prefix"] == "exports/dev"
+    assert call["username"] == "svc-git"
+    assert call["token"] == "tok-value-123"
+    assert call["author_email"] == "admin@example.com"
+    assert "manifest.yaml" in call["files"]
+    assert "super-secret-salt" not in json.dumps(call["files"])
+
+    assert result.commit_sha == "c0ffee1234"
+    assert result.committed is True
+    assert result.branch_created is False
+    assert result.files == len(call["files"])
+    assert result.target == "https://github.com/acme/gov-backup.git@main:exports/dev"
+    assert "tok-value-123" not in result.model_dump_json()
+
+    events = [e for e in container.storage.audit.list_recent(10) if e.event_type == "recovery.export_pushed"]
+    assert len(events) == 1
+    assert events[0].payload["commit_sha"] == "c0ffee1234"
+    assert "tok-value-123" not in json.dumps(events[0].payload)
+
+
+def test_push_requires_repository_and_path(container: ServiceContainer) -> None:
+    publisher = _FakePublisher()
+    _wire_push(container, _FakeSecrets({}), publisher)
+    with pytest.raises(InvalidRequestError, match="repository URL"):
+        container.recovery.push(_admin())  # type: ignore[arg-type]
+
+    container.recovery.save_settings(
+        RecoveryGitSettings(repo_url="https://github.com/acme/x.git", path_prefix=""),
+        _admin(),  # type: ignore[arg-type]
+    )
+    with pytest.raises(InvalidRequestError, match="path"):
+        container.recovery.push(_admin())  # type: ignore[arg-type]
+    assert publisher.calls == []
+
+
+def test_push_stops_when_token_secret_is_missing(container: ServiceContainer) -> None:
+    _seed(container)
+    _configure_git(container, secret_key="git-token-missing")
+    publisher = _FakePublisher()
+    _wire_push(container, _FakeSecrets({}), publisher)
+
+    with pytest.raises(InvalidRequestError, match="git-token-missing"):
+        container.recovery.push(_admin())  # type: ignore[arg-type]
+    assert publisher.calls == []
+
+
+def test_push_maps_git_failure_to_upstream_error(container: ServiceContainer) -> None:
+    _seed(container)
+    _configure_git(container)
+    publisher = _FakePublisher(error=GitPublishError("git push failed (exit 1): rejected"))
+    _wire_push(container, _FakeSecrets({"git-token-dev": "tok-value-123"}), publisher)
+
+    with pytest.raises(UpstreamError, match="rejected"):
+        container.recovery.push(_admin())  # type: ignore[arg-type]
+    events = container.storage.audit.list_recent(10)
+    assert not any(e.event_type == "recovery.export_pushed" for e in events)
+
+
+def test_push_api_is_admin_only_and_returns_commit(client: TestClient, container: ServiceContainer) -> None:
+    _seed(container)
+    _configure_git(container)
+    _wire_push(container, _FakeSecrets({"git-token-dev": "tok-value-123"}), _FakePublisher())
+
+    denied = client.post("/api/recovery/export/push", headers=headers_for("analyst@example.com"))
+    assert denied.status_code == 403
+
+    allowed = client.post("/api/recovery/export/push", headers=headers_for("admin@example.com"))
+    assert allowed.status_code == 200
+    body = allowed.json()
+    assert body["commitSha"] == "c0ffee1234"
+    assert body["committed"] is True
+    assert "tok-value-123" not in allowed.text

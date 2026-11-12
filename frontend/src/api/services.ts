@@ -8,6 +8,7 @@ import { HttpClient } from "./httpClient";
 import type {
   RecoveryGitSettings,
   RecoveryPreview,
+  RecoveryPushResult,
   AccessRequest,
   AccessRequestList,
   AnalyzeAttributeRequest,
@@ -1006,6 +1007,15 @@ export class RecoveryApi {
    */
   previewExport(): Promise<RecoveryPreview> {
     return this.http.post<RecoveryPreview>("/recovery/export/preview", {});
+  }
+
+  /**
+   * `POST /recovery/export/push` — commit the export to the saved repository and branch.
+   *
+   * @returns The commit reference and whether a new commit was pushed.
+   */
+  pushExport(): Promise<RecoveryPushResult> {
+    return this.http.post<RecoveryPushResult>("/recovery/export/push", {});
   }
 }
 

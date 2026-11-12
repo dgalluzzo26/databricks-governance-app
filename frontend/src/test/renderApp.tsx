@@ -7,6 +7,7 @@ import type {
   AccessRequestList,
   RecoveryGitSettings,
   RecoveryPreview,
+  RecoveryPushResult,
   AppInfo,
   ApprovalInbox,
   AssignAttributeRequest,
@@ -75,6 +76,16 @@ export const testRecoveryPreview: RecoveryPreview = {
     },
   ],
   warnings: ["The joinable salt is not exported (value redacted)."],
+};
+
+export const testRecoveryPushResult: RecoveryPushResult = {
+  pushedAt: "2026-11-11T23:05:00Z",
+  pushedBy: "admin@example.com",
+  target: "https://github.com/acme/gov-backup.git@main:governance-export",
+  commitSha: "c0ffee1234567890",
+  committed: true,
+  branchCreated: false,
+  files: 8,
 };
 
 export const testDataAccessSettings: DataAccessSettingsView = {
@@ -685,6 +696,7 @@ export function fakeServices(
       getSettings: async () => testRecoverySettings,
       saveSettings: async (body: RecoveryGitSettings) => body,
       previewExport: async () => testRecoveryPreview,
+      pushExport: async () => testRecoveryPushResult,
     },
     dataAccess: {
       getSettings: () =>

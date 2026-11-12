@@ -164,7 +164,7 @@ class ServiceContainer:
             attribute_explorer=attribute_explorer,
             policy_exceptions=policy_exceptions,
             data_access=data_access,
-            recovery=RecoveryService(config, storage),
+            recovery=RecoveryService(config, storage, workspace),
             identity_uc_sync=uc_sync,
         )
 

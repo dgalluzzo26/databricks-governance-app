@@ -1187,3 +1187,17 @@ export function usePreviewRecoveryExport() {
     mutationFn: () => api.recovery.previewExport(),
   });
 }
+
+/**
+ * Commits the recovery export to the saved Git repository (`POST /recovery/export/push`).
+ *
+ * @remarks Uses the saved settings and the token stored in the secret scope.
+ * @returns A mutation returning {@link RecoveryPushResult}.
+ */
+export function usePushRecoveryExport() {
+  const api = useApi();
+  return useMutation({
+    meta: { busyMessage: "Pushing recovery export to Git…" },
+    mutationFn: () => api.recovery.pushExport(),
+  });
+}

@@ -1,7 +1,7 @@
 """Models for the recovery export: Git target settings and the dry-run preview.
 
-Phase 1 only previews. The Git token is never stored here: ``token_secret_key`` names a key
-in the admin secret scope that holds it, and is only read when a push is implemented.
+The Git token is never stored here: ``token_secret_key`` names a key in the admin secret scope
+that holds it, and is only read at push time.
 """
 
 from __future__ import annotations
@@ -82,3 +82,25 @@ class RecoveryPreview(ApiModel):
     git: RecoveryGitSettings
     files: list[RecoveryFile]
     warnings: list[str]
+
+
+class RecoveryPushResult(ApiModel):
+    """Result of pushing the export to Git.
+
+    Attributes:
+        pushed_at: When the push finished.
+        pushed_by: Admin who ran the push.
+        target: Human-readable destination, e.g. ``repo@branch:prefix``.
+        commit_sha: Commit at the branch tip after the push.
+        committed: False when the branch already matched the export and nothing was pushed.
+        branch_created: True when the push created the branch.
+        files: Number of files written under the path prefix.
+    """
+
+    pushed_at: datetime
+    pushed_by: str
+    target: str
+    commit_sha: str
+    committed: bool
+    branch_created: bool
+    files: int
