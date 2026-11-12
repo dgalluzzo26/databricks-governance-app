@@ -45,6 +45,9 @@ class ProvisioningContext:
     app_catalog: str
     app_schema: str
     catalog_managed_location: str | None = None
+    admin_sp_client_id: str | None = None
+    lakebase_project_id: str | None = None
+    lakebase_database_id: str | None = None
 
     @property
     def app_schema_fqn(self) -> str:

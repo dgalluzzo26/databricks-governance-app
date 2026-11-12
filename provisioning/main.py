@@ -36,6 +36,21 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default="",
         help="Storage location for new catalogs; leave empty to use the metastore root or Default Storage",
     )
+    parser.add_argument(
+        "--admin-sp-client-id",
+        default="",
+        help="Application ID of the Account Admin SP (sync Job run-as / UC grants)",
+    )
+    parser.add_argument(
+        "--lakebase-project-id",
+        default="",
+        help="Lakebase project ID used when STORAGE_BACKEND=lakebase",
+    )
+    parser.add_argument(
+        "--lakebase-database-id",
+        default="governance",
+        help="Lakebase database ID inside the production branch",
+    )
     parser.add_argument("--steps", default="all", help="Comma-separated step names, or 'all'")
     return parser.parse_args(argv)
 
@@ -49,6 +64,9 @@ def build_context(args: argparse.Namespace) -> ProvisioningContext:
         app_catalog=args.app_catalog,
         app_schema=args.app_schema,
         catalog_managed_location=args.catalog_managed_location.strip() or None,
+        admin_sp_client_id=args.admin_sp_client_id.strip() or None,
+        lakebase_project_id=args.lakebase_project_id.strip() or None,
+        lakebase_database_id=args.lakebase_database_id.strip() or None,
     )
 
 

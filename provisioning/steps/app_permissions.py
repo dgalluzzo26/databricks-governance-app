@@ -32,10 +32,7 @@ class GrantAppPermissionsStep(ProvisioningStep):
             f"GRANT USE SCHEMA, SELECT, MODIFY ON SCHEMA {ctx.app_schema_fqn} TO `{principal}`",
             # Pack sync recreates geo mask UDFs via the Account Admin SP; the app SP still
             # needs USE SCHEMA so runtime checks and Access Explorer can resolve them.
-            (
-                f"GRANT USE SCHEMA ON SCHEMA `{ctx.app_catalog}`.`masking_functions` "
-                f"TO `{principal}`"
-            ),
+            (f"GRANT USE SCHEMA ON SCHEMA `{ctx.app_catalog}`.`masking_functions` TO `{principal}`"),
         ]
         for statement in grants:
             ctx.sql.execute(statement)

@@ -27,5 +27,7 @@ class CatalogsStep(ProvisioningStep):
 
     @staticmethod
     def _create_catalog(ctx: ProvisioningContext, name: str, comment: str) -> None:
-        location = f" MANAGED LOCATION '{ctx.catalog_managed_location}'" if ctx.catalog_managed_location else ""
+        location = (
+            f" MANAGED LOCATION '{ctx.catalog_managed_location}'" if ctx.catalog_managed_location else ""
+        )
         ctx.sql.execute(f"CREATE CATALOG IF NOT EXISTS `{name}`{location} COMMENT '{comment}'")

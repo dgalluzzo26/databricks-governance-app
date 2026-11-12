@@ -20,9 +20,16 @@ resources:
               - ${var.app_schema}
               - --catalog-managed-location
               - ${var.catalog_managed_location}
+              - --admin-sp-client-id
+              - ${var.sync_job_run_as_sp}
+              - --lakebase-project-id
+              - ${var.lakebase_project_id}
+              - --lakebase-database-id
+              - ${var.lakebase_database_id}
       environments:
         - environment_key: default
           spec:
             environment_version: "4"
             dependencies:
               - databricks-sdk==0.163.0
+              - psycopg[binary]==3.2.9

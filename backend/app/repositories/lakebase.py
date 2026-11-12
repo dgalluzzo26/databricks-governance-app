@@ -1345,6 +1345,9 @@ class LakebaseStorageProvider(StorageProvider):
 
         self._schema = config.lakebase_schema
         self._location = f"{config.pg_database}.{self._schema}"
+        self._database = config.pg_database or ""
+        # Account Admin SP (sync Job run-as) needs DML on tables the app SP owns.
+        self._admin_sp = (config.admin_client_id or "").strip() or None
         tokens = LakebaseTokenProvider(factory, config.lakebase_endpoint or "")
         self._pool = ConnectionPool(
             conninfo=(
@@ -1457,12 +1460,52 @@ class LakebaseStorageProvider(StorageProvider):
                 "CREATE INDEX IF NOT EXISTS sensitivity_category_approvers_path_idx "
                 "ON {schema}.sensitivity_category_approvers (lower(attribute_key), lower(category_path))"
             )
+            self._grant_admin_sp_access()
         except psycopg.errors.InsufficientPrivilege:
             logger.warning(
                 "Skipping Lakebase DDL: caller is not the table owner "
                 "(tables/indexes already exist); continuing with existing schema"
             )
         logger.info("Lakebase schema %s ready", self._location)
+
+    def _grant_admin_sp_access(self) -> None:
+        """Grant the Account Admin SP DML on the app schema (for the sync Job).
+
+        The app SP owns the tables after DDL. The sync Job runs as the Admin SP and
+        needs SELECT/INSERT/UPDATE/DELETE. Idempotent; no-ops when Admin SP is unset.
+        """
+        if not self._admin_sp:
+            return
+        from psycopg import sql
+
+        role = sql.Identifier(self._admin_sp)
+        try:
+            with self._pool.connection() as conn, conn.cursor() as cur:
+                if self._database:
+                    cur.execute(
+                        sql.SQL("GRANT CREATE ON DATABASE {} TO {}").format(
+                            sql.Identifier(self._database), role
+                        )
+                    )
+                cur.execute(
+                    sql.SQL("GRANT USAGE, CREATE ON SCHEMA {} TO {}").format(
+                        sql.Identifier(self._schema), role
+                    )
+                )
+                cur.execute(
+                    sql.SQL("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA {} TO {}").format(
+                        sql.Identifier(self._schema), role
+                    )
+                )
+                cur.execute(
+                    sql.SQL(
+                        "ALTER DEFAULT PRIVILEGES IN SCHEMA {} "
+                        "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO {}"
+                    ).format(sql.Identifier(self._schema), role)
+                )
+            logger.info("Granted Lakebase DML on %s to Admin SP %s", self._schema, self._admin_sp)
+        except Exception as exc:  # noqa: BLE001 - best-effort; Job may already have grants
+            logger.warning("Could not grant Lakebase DML to Admin SP %s: %s", self._admin_sp, exc)
 
     def health(self) -> StorageHealth:
         """Probe connectivity with ``SELECT 1``.

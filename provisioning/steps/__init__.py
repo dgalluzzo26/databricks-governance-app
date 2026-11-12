@@ -1,3 +1,4 @@
+from provisioning.steps.admin_sp_permissions import GrantAdminSpPermissionsStep
 from provisioning.steps.app_permissions import GrantAppPermissionsStep
 from provisioning.steps.app_storage import DeltaStorageStep
 from provisioning.steps.base import ProvisioningStep
@@ -9,6 +10,7 @@ ALL_STEPS: list[type[ProvisioningStep]] = [
     DeltaStorageStep,
     MaskingFunctionsStep,
     GrantAppPermissionsStep,
+    GrantAdminSpPermissionsStep,
 ]
 
 __all__ = ["ALL_STEPS", "ProvisioningStep"]
