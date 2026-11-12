@@ -873,6 +873,29 @@ def test_release_lock_only_clears_its_own_run() -> None:
     assert storage.settings.get_all()["data_access_lock"] == {}
 
 
+def test_list_runs_closes_orphan_running_history() -> None:
+    """A cancelled Job leaves status=running with no lock; list_runs marks it failed."""
+    storage = InMemoryStorageProvider()
+    svc = _service(storage=storage)
+    started = datetime.now(UTC) - timedelta(minutes=5)
+    orphan = DataAccessRun(
+        run_id="cancelled",
+        status=SyncRunStatus.RUNNING,
+        trigger=SyncTrigger.SCHEDULE,
+        mode="dry_run",
+        started_at=started,
+        triggered_by="scheduler",
+    )
+    svc._write_run(orphan)  # noqa: SLF001
+    storage.settings.put_many({"data_access_lock": {}}, "t")
+
+    listed = svc.list_runs()
+    assert listed.total == 1
+    assert listed.runs[0].status == SyncRunStatus.FAILED
+    assert listed.runs[0].finished_at is not None
+    assert "Cancelled or interrupted" in (listed.runs[0].error or "")
+
+
 def test_run_sync_rejects_unknown_mode() -> None:
     with pytest.raises(InvalidRequestError, match="dry_run or apply"):
         _service().run_sync(actor="admin@example.com", trigger=SyncTrigger.USER, mode="preview")

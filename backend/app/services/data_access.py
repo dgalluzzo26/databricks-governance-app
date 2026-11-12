@@ -96,6 +96,8 @@ _SETTINGS_KEY = "data_access"
 _RUNS_KEY = "data_access_runs"
 _LOCK_KEY = "data_access_lock"
 _LOCK_STALE = timedelta(minutes=30)
+# Orphan RUNNING rows (Job cancelled mid-flight) can be closed once the lock is gone.
+_ORPHAN_RUNNING = timedelta(minutes=2)
 _EXCLUDED_CATALOGS = ("system", "samples", "__databricks_internal")
 
 
@@ -192,8 +194,7 @@ class DataAccessService:
             {
                 str(row["catalog_name"])
                 for row in rows
-                if row.get("catalog_name")
-                and str(row["catalog_name"]).lower() not in _EXCLUDED_CATALOGS
+                if row.get("catalog_name") and str(row["catalog_name"]).lower() not in _EXCLUDED_CATALOGS
             }
         )
         return names
@@ -281,6 +282,7 @@ class DataAccessService:
         mode_filter = self._normalize_mode_filter(mode)
         page = max(1, page)
         page_size = min(max(1, page_size), RUN_HISTORY_PAGE_SIZE_MAX)
+        self._reconcile_stale_runs()
         filtered = self._filtered_runs(mode=mode_filter)
         total = len(filtered)
         start = (page - 1) * page_size
@@ -371,9 +373,7 @@ class DataAccessService:
                     "Apply is not ready — fix failing Account Admin SP / warehouse checks"
                 )
             if not readiness.setup_ready:
-                raise InvalidRequestError(
-                    "Apply requires sensitivity and data-access Identity definitions"
-                )
+                raise InvalidRequestError("Apply requires sensitivity and data-access Identity definitions")
         run_id = str(uuid.uuid4())
         job_id = int(self._sync_job_id)
         try:
@@ -483,11 +483,10 @@ class DataAccessService:
                     "Apply is not ready — fix failing Account Admin SP / warehouse checks"
                 )
             if not readiness.setup_ready:
-                raise InvalidRequestError(
-                    "Apply requires sensitivity and data-access Identity definitions"
-                )
+                raise InvalidRequestError("Apply requires sensitivity and data-access Identity definitions")
         run_id = (run_id or "").strip() or str(uuid.uuid4())
         started = datetime.now(UTC)
+        self._reconcile_stale_runs()
         if not self._acquire_lock(run_id, started):
             raise InvalidRequestError("A data-access sync is already running")
         running = DataAccessRun(
@@ -507,11 +506,7 @@ class DataAccessService:
             assignments = self._assignment_loader(settings)
             members = self._member_loader(settings, groups)
             previous = next(
-                (
-                    r
-                    for r in self._filtered_runs(mode=mode)
-                    if r.status == SyncRunStatus.SUCCESS
-                ),
+                (r for r in self._filtered_runs(mode=mode) if r.status == SyncRunStatus.SUCCESS),
                 None,
             )
             plan = plan_data_access(
@@ -585,6 +580,46 @@ class DataAccessService:
             runs = [r for r in runs if (r.mode or "dry_run").lower() == mode]
         return runs
 
+    def _reconcile_stale_runs(self) -> None:
+        """Close RUNNING history rows left behind when a Job is cancelled mid-flight.
+
+        ``run_sync`` writes RUNNING then SUCCESS/FAILED. A cancel kills the process before
+        the final write, so the UI can show a stuck running row. Mark those failed when the
+        lock is gone (or stale) and the row is older than ``_ORPHAN_RUNNING``.
+        """
+        now = datetime.now(UTC)
+        lock = self._storage.settings.get_all().get(_LOCK_KEY) or {}
+        lock_run_id = lock.get("run_id") if isinstance(lock, dict) else None
+        lock_started = None
+        if isinstance(lock, dict) and lock.get("started_at"):
+            try:
+                lock_started = datetime.fromisoformat(str(lock["started_at"]).replace("Z", "+00:00"))
+            except ValueError:
+                lock_started = None
+        lock_stale = lock_started is None or (now - lock_started) >= _LOCK_STALE
+        changed = False
+        for run in self._runs():
+            if run.status != SyncRunStatus.RUNNING or run.finished_at is not None:
+                continue
+            age = now - run.started_at
+            held_by_this = lock_run_id == run.run_id and not lock_stale
+            if held_by_this:
+                continue
+            if age < _ORPHAN_RUNNING and not lock_stale:
+                continue
+            self._write_run(
+                run.model_copy(
+                    update={
+                        "status": SyncRunStatus.FAILED,
+                        "finished_at": now,
+                        "error": ("Cancelled or interrupted before the Job finished writing a final status"),
+                    }
+                )
+            )
+            changed = True
+        if changed and (lock_stale or not lock_run_id):
+            self._storage.settings.put_many({_LOCK_KEY: {}}, "system")
+
     def _settings(self) -> DataAccessSettings:
         """Load settings from storage, or defaults when missing/invalid."""
         raw = self._storage.settings.get_all().get(_SETTINGS_KEY)
@@ -614,11 +649,7 @@ class DataAccessService:
         """Upsert ``run`` at the front; prune by retention days and hard cap."""
         with self._lock:
             cutoff = self._retention_cutoff()
-            existing = [
-                r
-                for r in self._runs()
-                if r.run_id != run.run_id and r.started_at >= cutoff
-            ]
+            existing = [r for r in self._runs() if r.run_id != run.run_id and r.started_at >= cutoff]
             blob = [
                 run.model_dump(mode="json", exclude={"duration_seconds"}),
                 *[r.model_dump(mode="json", exclude={"duration_seconds"}) for r in existing],
@@ -873,9 +904,7 @@ class DataAccessService:
         names: set[str] = set()
         try:
             escaped = prefix.replace('"', '\\"')
-            for group in self._account_scim_list_groups(
-                filter_expr=f'displayName sw "{escaped}"'
-            ):
+            for group in self._account_scim_list_groups(filter_expr=f'displayName sw "{escaped}"'):
                 name = group.get("displayName")
                 if name:
                     names.add(str(name))
@@ -902,9 +931,7 @@ class DataAccessService:
             for item in items
         ]
 
-    def _load_members(
-        self, settings: DataAccessSettings, existing_groups: set[str]
-    ) -> list[ActualMember]:
+    def _load_members(self, settings: DataAccessSettings, existing_groups: set[str]) -> list[ActualMember]:
         """Load current members of managed account groups via Account SCIM.
 
         Group member entries often expose ``display`` as the person's display name
@@ -940,7 +967,9 @@ class DataAccessService:
                     else:
                         principal_type = (
                             "GROUP"
-                            if str(display).lower().startswith(
+                            if str(display)
+                            .lower()
+                            .startswith(
                                 settings.group_prefix.lower()
                                 if settings.group_prefix.endswith("_")
                                 else f"{settings.group_prefix}_".lower()
@@ -952,9 +981,7 @@ class DataAccessService:
                         if member_id not in user_names:
                             user = self._account_scim_get_user(member_id)
                             user_names[member_id] = (
-                                str(user.get("userName") or display)
-                                if user
-                                else str(display)
+                                str(user.get("userName") or display) if user else str(display)
                             )
                         principal_name = user_names[member_id]
                     members.append(
@@ -977,9 +1004,7 @@ class DataAccessService:
         self._apply_grants(plan.grants_to_add, plan.grants_to_revoke, errors)
         return plan.model_copy(update={"apply_errors": errors})
 
-    def _ensure_groups(
-        self, groups: list[PlannedGroup], errors: list[str]
-    ) -> dict[str, str]:
+    def _ensure_groups(self, groups: list[PlannedGroup], errors: list[str]) -> dict[str, str]:
         """Create missing account groups; return display-name(lower) → SCIM id map."""
         ids: dict[str, str] = {}
         try:
@@ -1029,9 +1054,7 @@ class DataAccessService:
             child_id = group_ids.get(planned.name.lower())
             parent_id = group_ids.get(planned.parent_group.lower())
             if not child_id or not parent_id:
-                errors.append(
-                    f"nest {planned.parent_group} → {planned.name}: missing group id"
-                )
+                errors.append(f"nest {planned.parent_group} → {planned.name}: missing group id")
                 continue
             try:
                 self._account_scim_patch_group(
@@ -1061,9 +1084,7 @@ class DataAccessService:
             if not group_id:
                 errors.append(f"membership {change.action.value} {change.principal_name}: missing group")
                 continue
-            member_id = self._resolve_principal_id(
-                change.principal_name, change.principal_type, errors
-            )
+            member_id = self._resolve_principal_id(change.principal_name, change.principal_type, errors)
             if not member_id:
                 continue
             resolved.append((group_id, member_id, change))
@@ -1082,18 +1103,13 @@ class DataAccessService:
                     )
             except Exception as exc:  # noqa: BLE001
                 message = str(exc).lower()
-                if change.action == MembershipAction.ADD and (
-                    "already" in message or "exists" in message
-                ):
+                if change.action == MembershipAction.ADD and ("already" in message or "exists" in message):
                     continue
                 errors.append(
-                    f"membership {change.action.value} {change.principal_name} "
-                    f"on {change.group}: {exc}"
+                    f"membership {change.action.value} {change.principal_name} on {change.group}: {exc}"
                 )
 
-    def _resolve_principal_id(
-        self, name: str, principal_type: str, errors: list[str]
-    ) -> str | None:
+    def _resolve_principal_id(self, name: str, principal_type: str, errors: list[str]) -> str | None:
         """Resolve a user/group/SP display name to a SCIM id."""
         admin = self._factory.admin()
         kind = (principal_type or "USER").upper()
@@ -1101,12 +1117,7 @@ class DataAccessService:
         try:
             if kind == "GROUP":
                 found = next(
-                    (
-                        g
-                        for g in self._account_scim_list_groups(
-                            filter_expr=f'displayName eq "{escaped}"'
-                        )
-                    ),
+                    (g for g in self._account_scim_list_groups(filter_expr=f'displayName eq "{escaped}"')),
                     None,
                 )
                 if found and found.get("id"):
@@ -1179,9 +1190,7 @@ class DataAccessService:
         Fail closed: when no catalogs carry the enrollment tag, the clause matches nothing.
         """
         del settings  # Perimeter is enrollment tags only; kept for call-site consistency.
-        excluded = " AND ".join(
-            f"lower({column}) <> {string_literal(name)}" for name in _EXCLUDED_CATALOGS
-        )
+        excluded = " AND ".join(f"lower({column}) <> {string_literal(name)}" for name in _EXCLUDED_CATALOGS)
         clause = f"AND {excluded}" if excluded else ""
         catalogs = enrolled if enrolled is not None else []
         if not catalogs:
