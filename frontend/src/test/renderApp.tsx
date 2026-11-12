@@ -5,7 +5,9 @@ import { ApiProvider } from "@/api/ApiProvider";
 import type { ApiServices } from "@/api/services";
 import type {
   AccessRequestList,
+  RecoveryApplyResult,
   RecoveryGitSettings,
+  RecoveryImportPreview,
   RecoveryPreview,
   RecoveryPushResult,
   AppInfo,
@@ -86,6 +88,54 @@ export const testRecoveryPushResult: RecoveryPushResult = {
   committed: true,
   branchCreated: false,
   files: 8,
+};
+
+export const testRecoveryImportPreview: RecoveryImportPreview = {
+  importedAt: "2026-11-11T23:10:00Z",
+  importedBy: "admin@example.com",
+  source: "https://github.com/acme/gov-backup.git@main:governance-export",
+  commitSha: "c0ffee1234567890",
+  files: [
+    { path: "manifest.yaml", records: 0, content: "version: 1\n" },
+    {
+      path: "identity/assignments.yaml",
+      records: 1,
+      content: "assignments:\n  - assignment_id: snap-a1\n",
+    },
+  ],
+  warnings: ["Recover writes app storage only."],
+  occupancy: {
+    appHasState: false,
+    definitions: 0,
+    assignments: 0,
+    approvers: 0,
+    maskRules: 0,
+    policyExceptions: 0,
+    dataAccessConfigured: false,
+    summary: "empty",
+  },
+  manifest: {
+    version: 1,
+    generatedAt: "2026-11-11T12:00:00Z",
+    generatedBy: "admin@example.com",
+  },
+};
+
+export const testRecoveryApplyResult: RecoveryApplyResult = {
+  appliedAt: "2026-11-11T23:11:00Z",
+  appliedBy: "admin@example.com",
+  source: "https://github.com/acme/gov-backup.git@main:governance-export",
+  commitSha: "c0ffee1234567890",
+  counts: {
+    definitions: 1,
+    assignments: 1,
+    approvers: 1,
+    maskRules: 1,
+    policyExceptions: 1,
+    dataAccess: 1,
+  },
+  warnings: ["Re-run identity UC sync, mask-rule sync, and data-access apply so Unity Catalog matches."],
+  appHadState: false,
 };
 
 export const testDataAccessSettings: DataAccessSettingsView = {
@@ -697,6 +747,8 @@ export function fakeServices(
       saveSettings: async (body: RecoveryGitSettings) => body,
       previewExport: async () => testRecoveryPreview,
       pushExport: async () => testRecoveryPushResult,
+      importFromGit: async () => testRecoveryImportPreview,
+      recover: async () => testRecoveryApplyResult,
     },
     dataAccess: {
       getSettings: () =>

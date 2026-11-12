@@ -12,15 +12,19 @@ import yaml
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from backend.app.clients.git_publisher import GitPublishError, PushOutcome
+from backend.app.clients.git_publisher import GitPublishError, PullOutcome, PushOutcome
 from backend.app.core.container import ServiceContainer
 from backend.app.core.errors import InvalidRequestError, UpstreamError
 from backend.app.models.access_request import CategoryApprover
-from backend.app.models.identity_attribute import AttributeDefinition, IdentityAttributeAssignment
+from backend.app.models.identity_attribute import (
+    AttributeAssignmentFilter,
+    AttributeDefinition,
+    IdentityAttributeAssignment,
+)
 from backend.app.models.mask_rule import MaskRuleDefinition
 from backend.app.models.policy_exception import PolicyException
 from backend.app.models.principal import PrincipalKind
-from backend.app.models.recovery import RecoveryGitSettings
+from backend.app.models.recovery import RecoveryApplyRequest, RecoveryGitSettings
 from backend.app.services.mask_rules import JOINABLE_SALT_KEY
 from backend.tests.conftest import headers_for
 from backend.tests.test_identity_attributes import _admin
@@ -199,15 +203,32 @@ class _FakeSecrets:
 
 
 class _FakePublisher:
-    def __init__(self, error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        error: Exception | None = None,
+        *,
+        pull_files: dict[str, str] | None = None,
+        pull_sha: str = "c0ffee1234",
+    ) -> None:
         self.calls: list[dict] = []
+        self.pull_calls: list[dict] = []
         self._error = error
+        self._pull_files = pull_files
+        self._pull_sha = pull_sha
 
     def push_files(self, **kwargs) -> PushOutcome:  # noqa: ANN003
         self.calls.append(kwargs)
         if self._error is not None:
             raise self._error
         return PushOutcome(commit_sha="c0ffee1234", committed=True, branch_created=False)
+
+    def pull_files(self, **kwargs) -> PullOutcome:  # noqa: ANN003
+        self.pull_calls.append(kwargs)
+        if self._error is not None:
+            raise self._error
+        if self._pull_files is None:
+            raise GitPublishError("no pull fixture")
+        return PullOutcome(commit_sha=self._pull_sha, files=dict(self._pull_files))
 
 
 def _configure_git(container: ServiceContainer, secret_key: str = "git-token-dev") -> None:
@@ -313,3 +334,229 @@ def test_push_api_is_admin_only_and_returns_commit(client: TestClient, container
     assert body["commitSha"] == "c0ffee1234"
     assert body["committed"] is True
     assert "tok-value-123" not in allowed.text
+
+
+def _snapshot_files(*, salt_configured: bool = True) -> dict[str, str]:
+    """Minimal valid recovery snapshot with one row in each list section."""
+    return {
+        "manifest.yaml": yaml.safe_dump(
+            {
+                "version": 1,
+                "generated_at": "2026-11-11T12:00:00+00:00",
+                "generated_by": "admin@example.com",
+                "files": ["manifest.yaml"],
+            }
+        ),
+        "settings/data_access.yaml": yaml.safe_dump(
+            {
+                "version": 1,
+                "data_access": {"access_tag_key": "access", "client_secret": "<redacted>"},
+            }
+        ),
+        "identity/attribute_definitions.yaml": yaml.safe_dump(
+            {
+                "version": 1,
+                "count": 1,
+                "attribute_definitions": [
+                    {"key": "sensitivity", "description": "from snapshot", "governed_tag_keys": []}
+                ],
+            }
+        ),
+        "identity/assignments.yaml": yaml.safe_dump(
+            {
+                "version": 1,
+                "count": 1,
+                "assignments": [
+                    {
+                        "assignment_id": "snap-a1",
+                        "principal_name": "restored@example.com",
+                        "principal_type": "USER",
+                        "attribute_key": "sensitivity",
+                        "attribute_value": "finance.budget",
+                        "created_at": "2026-11-11T12:00:00+00:00",
+                    }
+                ],
+            }
+        ),
+        "approvals/category_approvers.yaml": yaml.safe_dump(
+            {
+                "version": 1,
+                "count": 1,
+                "category_approvers": [
+                    {
+                        "approver_id": "snap-ap1",
+                        "category_path": "finance.budget",
+                        "principal_name": "steward@example.com",
+                        "principal_type": "USER",
+                        "created_at": "2026-11-11T12:00:00+00:00",
+                    }
+                ],
+            }
+        ),
+        "masking/rules.yaml": yaml.safe_dump(
+            {
+                "version": 1,
+                "count": 1,
+                "mask_rules": [{"rule_key": "full", "handler": "full"}],
+            }
+        ),
+        "masking/config.yaml": yaml.safe_dump(
+            {
+                "version": 1,
+                "joinable_salt": {"configured": salt_configured, "value": "<redacted>"},
+            }
+        ),
+        "exceptions/policy_exceptions.yaml": yaml.safe_dump(
+            {
+                "version": 1,
+                "count": 1,
+                "policy_exceptions": [
+                    {
+                        "exception_id": "snap-e1",
+                        "principal_name": "vip@example.com",
+                        "principal_type": "USER",
+                        "created_at": "2026-11-11T12:00:00+00:00",
+                        "system": False,
+                    }
+                ],
+            }
+        ),
+    }
+
+
+def test_import_parses_snapshot_and_flags_occupancy(container: ServiceContainer) -> None:
+    _seed(container)
+    _configure_git(container)
+    publisher = _FakePublisher(pull_files=_snapshot_files())
+    _wire_push(container, _FakeSecrets({"git-token-dev": "tok"}), publisher)
+
+    preview = container.recovery.import_from_git(_admin())  # type: ignore[arg-type]
+
+    assert preview.commit_sha == "c0ffee1234"
+    assert preview.manifest.generated_by == "admin@example.com"
+    assert {f.path for f in preview.files} >= {"manifest.yaml", "identity/assignments.yaml"}
+    assert preview.occupancy.app_has_state is True
+    assert "assignment" in preview.occupancy.summary
+    assert any("already has governance state" in w for w in preview.warnings)
+    assert publisher.pull_calls and publisher.pull_calls[0]["token"] == "tok"
+
+
+def test_recover_requires_confirm_and_upserts_into_empty_app(container: ServiceContainer) -> None:
+    _configure_git(container)
+    publisher = _FakePublisher(pull_files=_snapshot_files(salt_configured=True))
+    _wire_push(container, _FakeSecrets({"git-token-dev": "tok"}), publisher)
+
+    with pytest.raises(InvalidRequestError, match="confirm"):
+        container.recovery.recover(_admin(), RecoveryApplyRequest(confirm=False))  # type: ignore[arg-type]
+
+    result = container.recovery.recover(_admin(), RecoveryApplyRequest(confirm=True))  # type: ignore[arg-type]
+
+    assert result.app_had_state is False
+    assert result.counts.definitions == 1
+    assert result.counts.assignments == 1
+    assert result.counts.approvers == 1
+    assert result.counts.mask_rules == 1
+    assert result.counts.policy_exceptions == 1
+    assert result.counts.data_access == 1
+    assert any("joinable salt" in w.lower() for w in result.warnings)
+
+    defs = {d.key for d in container.storage.identity_attributes.list_definitions()}
+    assert "sensitivity" in defs
+    assignments = container.storage.identity_attributes.list_assignments(
+        AttributeAssignmentFilter(include_inactive=False)
+    )
+    assert [a.assignment_id for a in assignments] == ["snap-a1"]
+
+    data_access = container.storage.settings.get_all()["data_access"]
+    assert data_access["access_tag_key"] == "access"
+    assert "client_secret" not in data_access
+    assert "<redacted>" not in json.dumps(data_access)
+
+    events = [e for e in container.storage.audit.list_recent(10) if e.event_type == "recovery.imported"]
+    assert len(events) == 1
+    assert events[0].payload["commit_sha"] == "c0ffee1234"
+
+
+def test_recover_keeps_local_extras_and_skips_system_exceptions(container: ServiceContainer) -> None:
+    _seed(container)
+    _configure_git(container)
+    files = _snapshot_files()
+    files["exceptions/policy_exceptions.yaml"] = yaml.safe_dump(
+        {
+            "version": 1,
+            "count": 2,
+            "policy_exceptions": [
+                {
+                    "exception_id": "snap-e1",
+                    "principal_name": "restored-vip@example.com",
+                    "principal_type": "USER",
+                    "created_at": "2026-11-11T12:00:00+00:00",
+                    "system": False,
+                },
+                {
+                    "exception_id": "system:app",
+                    "principal_name": "app-sp",
+                    "principal_type": "SERVICE_PRINCIPAL",
+                    "created_at": "2026-11-11T12:00:00+00:00",
+                    "system": True,
+                },
+            ],
+        }
+    )
+    _wire_push(container, _FakeSecrets({"git-token-dev": "tok"}), _FakePublisher(pull_files=files))
+
+    result = container.recovery.recover(_admin(), RecoveryApplyRequest(confirm=True))  # type: ignore[arg-type]
+
+    assert result.app_had_state is True
+    local_ids = {
+        a.assignment_id
+        for a in container.storage.identity_attributes.list_assignments(
+            AttributeAssignmentFilter(include_inactive=True)
+        )
+    }
+    assert "a-active" in local_ids
+    assert "snap-a1" in local_ids
+    exceptions = {e.exception_id for e in container.storage.policy_exceptions.list_exceptions()}
+    assert "snap-e1" in exceptions
+    assert "system:app" not in exceptions
+    assert "e-sys" in exceptions
+    assert "e-user" in exceptions
+
+
+def test_import_and_recover_api_are_admin_only(client: TestClient, container: ServiceContainer) -> None:
+    _configure_git(container)
+    _wire_push(
+        container,
+        _FakeSecrets({"git-token-dev": "tok"}),
+        _FakePublisher(pull_files=_snapshot_files(salt_configured=False)),
+    )
+
+    assert client.post("/api/recovery/import", headers=headers_for("analyst@example.com")).status_code == 403
+    assert (
+        client.post(
+            "/api/recovery/recover",
+            headers=headers_for("analyst@example.com"),
+            json={"confirm": True},
+        ).status_code
+        == 403
+    )
+
+    imported = client.post("/api/recovery/import", headers=headers_for("admin@example.com"))
+    assert imported.status_code == 200
+    assert imported.json()["commitSha"] == "c0ffee1234"
+    assert "occupancy" in imported.json()
+
+    recovered = client.post(
+        "/api/recovery/recover",
+        headers=headers_for("admin@example.com"),
+        json={"confirm": True},
+    )
+    assert recovered.status_code == 200
+    assert recovered.json()["counts"]["definitions"] == 1
+
+    rejected = client.post(
+        "/api/recovery/recover",
+        headers=headers_for("admin@example.com"),
+        json={"confirm": False},
+    )
+    assert rejected.status_code == 422

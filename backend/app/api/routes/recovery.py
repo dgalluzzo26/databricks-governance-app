@@ -1,7 +1,7 @@
-"""Recovery export API under ``/api/recovery``.
+"""Recovery export / import API under ``/api/recovery``.
 
-Requires app admin. Exposes the Git target settings, a dry-run preview of the YAML files, and
-the push that commits those files to the configured Git branch.
+Requires app admin. Exposes the Git target settings, a dry-run export preview, the push that
+commits those files, an import that reads them back, and recover that upserts into app storage.
 """
 
 from __future__ import annotations
@@ -9,7 +9,14 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from backend.app.api.deps import Admin, Container
-from backend.app.models.recovery import RecoveryGitSettings, RecoveryPreview, RecoveryPushResult
+from backend.app.models.recovery import (
+    RecoveryApplyRequest,
+    RecoveryApplyResult,
+    RecoveryGitSettings,
+    RecoveryImportPreview,
+    RecoveryPreview,
+    RecoveryPushResult,
+)
 
 router = APIRouter(prefix="/recovery", tags=["recovery"])
 
@@ -88,3 +95,48 @@ def push_export(admin: Admin, container: Container) -> RecoveryPushResult:
         UpstreamError: If a Git step failed (HTTP 502).
     """
     return container.recovery.push(admin)
+
+
+@router.post("/import", response_model=RecoveryImportPreview)
+def import_from_git(admin: Admin, container: Container) -> RecoveryImportPreview:
+    """Fetch the recovery snapshot from Git without writing app state.
+
+    Requires app admin. Returns the files, occupancy of the current app, and warnings so the
+    operator can decide whether to recover.
+
+    Args:
+        admin: Authenticated app administrator (dependency injection).
+        container: Process-scoped service container (dependency injection).
+
+    Returns:
+        Parsed files and occupancy warning.
+
+    Raises:
+        ForbiddenError: If the caller is not an app admin (HTTP 403).
+        InvalidRequestError: If the repository, path, token, or snapshot is invalid (HTTP 422).
+        UpstreamError: If a Git step failed (HTTP 502).
+    """
+    return container.recovery.import_from_git(admin)
+
+
+@router.post("/recover", response_model=RecoveryApplyResult)
+def recover(body: RecoveryApplyRequest, admin: Admin, container: Container) -> RecoveryApplyResult:
+    """Pull the snapshot again and upsert it into app storage.
+
+    Requires app admin and ``confirm=true``. Re-reads Git (does not trust a prior browser import).
+    Local rows not in the snapshot are kept. Does not restore the joinable salt or sync UC.
+
+    Args:
+        body: Must set ``confirm`` to True.
+        admin: Authenticated app administrator (dependency injection).
+        container: Process-scoped service container (dependency injection).
+
+    Returns:
+        Counts written per section and follow-up warnings.
+
+    Raises:
+        ForbiddenError: If the caller is not an app admin (HTTP 403).
+        InvalidRequestError: If confirm is missing or the snapshot is invalid (HTTP 422).
+        UpstreamError: If a Git step failed (HTTP 502).
+    """
+    return container.recovery.recover(admin, body)

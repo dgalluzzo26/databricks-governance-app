@@ -134,3 +134,38 @@ def test_failure_message_does_not_echo_the_token(tmp_path: Path) -> None:
             message="m",
         )
     assert "s3cret-token-value" not in str(excinfo.value)
+
+
+def test_pull_returns_files_under_prefix(remote: Path) -> None:
+    pushed = _publish(remote, {"manifest.yaml": "version: 1\n", "identity/a.yaml": "a: 1\n"})
+
+    pulled = GitPublisher().pull_files(
+        repo_url=str(remote),
+        branch="main",
+        path_prefix=PREFIX,
+        username="svc-git",
+        token="",
+    )
+
+    assert pulled.commit_sha == pushed.commit_sha
+    assert pulled.files == {"identity/a.yaml": "a: 1\n", "manifest.yaml": "version: 1\n"}
+    assert "README.md" not in pulled.files
+
+
+def test_pull_rejects_missing_branch_and_prefix(remote: Path) -> None:
+    with pytest.raises(GitPublishError, match="was not found"):
+        GitPublisher().pull_files(
+            repo_url=str(remote),
+            branch="no-such-branch",
+            path_prefix=PREFIX,
+            username="svc-git",
+            token="",
+        )
+    with pytest.raises(GitPublishError, match="was not found"):
+        GitPublisher().pull_files(
+            repo_url=str(remote),
+            branch="main",
+            path_prefix="missing-export",
+            username="svc-git",
+            token="",
+        )

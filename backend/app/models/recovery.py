@@ -1,7 +1,7 @@
 """Models for the recovery export: Git target settings and the dry-run preview.
 
 The Git token is never stored here: ``token_secret_key`` names a key in the admin secret scope
-that holds it, and is only read at push time.
+that holds it, and is only read at push or import time.
 """
 
 from __future__ import annotations
@@ -104,3 +104,108 @@ class RecoveryPushResult(ApiModel):
     committed: bool
     branch_created: bool
     files: int
+
+
+class RecoveryOccupancy(ApiModel):
+    """How much app-owned state already exists before a recover.
+
+    Attributes:
+        app_has_state: True when any counted section is non-empty.
+        definitions: Number of identity attribute definitions.
+        assignments: Number of active identity assignments.
+        approvers: Number of category / dimension approvers.
+        mask_rules: Number of mask rules.
+        policy_exceptions: Number of non-system policy exceptions.
+        data_access_configured: True when a data-access settings blob is stored.
+        summary: Short human-readable summary for the UI warning.
+    """
+
+    app_has_state: bool
+    definitions: int = 0
+    assignments: int = 0
+    approvers: int = 0
+    mask_rules: int = 0
+    policy_exceptions: int = 0
+    data_access_configured: bool = False
+    summary: str = ""
+
+
+class RecoveryManifestSummary(ApiModel):
+    """Fields from the imported ``manifest.yaml`` that are useful to show.
+
+    Attributes:
+        version: Export format version.
+        generated_at: When the snapshot was produced, if present.
+        generated_by: Who produced the snapshot, if present.
+    """
+
+    version: int | None = None
+    generated_at: str | None = None
+    generated_by: str | None = None
+
+
+class RecoveryImportPreview(ApiModel):
+    """Result of importing a recovery snapshot from Git without applying it.
+
+    Attributes:
+        imported_at: When the import finished.
+        imported_by: Admin who ran the import.
+        source: Human-readable source, e.g. ``repo@branch:prefix``.
+        commit_sha: Commit that was read.
+        files: Parsed recovery files with YAML content.
+        warnings: Things the operator should know before recovering.
+        occupancy: Current app state counts used for the non-empty warning.
+        manifest: Summary from ``manifest.yaml`` when present.
+    """
+
+    imported_at: datetime
+    imported_by: str
+    source: str
+    commit_sha: str
+    files: list[RecoveryFile]
+    warnings: list[str]
+    occupancy: RecoveryOccupancy
+    manifest: RecoveryManifestSummary = Field(default_factory=RecoveryManifestSummary)
+
+
+class RecoveryApplyRequest(ApiModel):
+    """Body for applying an imported recovery snapshot.
+
+    Attributes:
+        confirm: Must be True; recovers are rejected without an explicit confirmation.
+    """
+
+    confirm: bool = False
+
+
+class RecoveryApplyCounts(ApiModel):
+    """How many rows were written per section during recover."""
+
+    definitions: int = 0
+    assignments: int = 0
+    approvers: int = 0
+    mask_rules: int = 0
+    policy_exceptions: int = 0
+    data_access: int = 0
+
+
+class RecoveryApplyResult(ApiModel):
+    """Result of applying a recovery snapshot into app storage.
+
+    Attributes:
+        applied_at: When the recover finished.
+        applied_by: Admin who ran the recover.
+        source: Human-readable source, e.g. ``repo@branch:prefix``.
+        commit_sha: Commit that was applied.
+        counts: Rows written per section.
+        warnings: Salt / follow-up reminders.
+        app_had_state: Whether the app already had state before the recover.
+    """
+
+    applied_at: datetime
+    applied_by: str
+    source: str
+    commit_sha: str
+    counts: RecoveryApplyCounts
+    warnings: list[str]
+    app_had_state: bool

@@ -1201,3 +1201,34 @@ export function usePushRecoveryExport() {
     mutationFn: () => api.recovery.pushExport(),
   });
 }
+
+/**
+ * Fetches a recovery snapshot from Git (`POST /recovery/import`). Writes nothing.
+ *
+ * @returns A mutation returning {@link RecoveryImportPreview}.
+ */
+export function useImportRecoveryFromGit() {
+  const api = useApi();
+  return useMutation({
+    meta: { busyMessage: "Importing recovery snapshot from Git…" },
+    mutationFn: () => api.recovery.importFromGit(),
+  });
+}
+
+/**
+ * Applies a recovery snapshot into app storage (`POST /recovery/recover`).
+ *
+ * @remarks Re-reads Git; requires confirm=true. Does not restore the joinable salt or sync UC.
+ * @returns A mutation returning {@link RecoveryApplyResult}.
+ */
+export function useRecoverFromGit() {
+  const api = useApi();
+  const client = useQueryClient();
+  return useMutation({
+    meta: { busyMessage: "Recovering from Git snapshot…" },
+    mutationFn: () => api.recovery.recover({ confirm: true }),
+    onSuccess: () => {
+      void client.invalidateQueries();
+    },
+  });
+}

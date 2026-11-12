@@ -6,7 +6,10 @@
  */
 import { HttpClient } from "./httpClient";
 import type {
+  RecoveryApplyRequest,
+  RecoveryApplyResult,
   RecoveryGitSettings,
+  RecoveryImportPreview,
   RecoveryPreview,
   RecoveryPushResult,
   AccessRequest,
@@ -1016,6 +1019,25 @@ export class RecoveryApi {
    */
   pushExport(): Promise<RecoveryPushResult> {
     return this.http.post<RecoveryPushResult>("/recovery/export/push", {});
+  }
+
+  /**
+   * `POST /recovery/import` — fetch the snapshot from Git without writing app state.
+   *
+   * @returns Parsed files, occupancy warning, and follow-up notes.
+   */
+  importFromGit(): Promise<RecoveryImportPreview> {
+    return this.http.post<RecoveryImportPreview>("/recovery/import", {});
+  }
+
+  /**
+   * `POST /recovery/recover` — pull again and upsert the snapshot into app storage.
+   *
+   * @param body - Must set `confirm` to true.
+   * @returns Counts written per section.
+   */
+  recover(body: RecoveryApplyRequest): Promise<RecoveryApplyResult> {
+    return this.http.post<RecoveryApplyResult>("/recovery/recover", body);
   }
 }
 

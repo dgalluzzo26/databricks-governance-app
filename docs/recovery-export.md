@@ -1,8 +1,8 @@
-# Recovery export
+# Recovery export and import
 
-Snapshot of app-owned governance state as YAML, for restoring the app after a failure.
-The **Recovery** page (admin only) builds the files and shows a preview. **Push to Git** commits
-the same files to the saved repository and branch.
+Snapshot of app-owned governance state as YAML. Use **export / push** to back up a healthy app,
+and **import / recover** to seed a **new** app (different workspace or fresh storage) from that
+snapshot. The **Recovery** page is admin only.
 
 ## Files
 
@@ -37,6 +37,43 @@ Lists are sorted by stable keys so repeated exports diff cleanly.
 The branch is created from the export alone when it does not exist. The commit author is the
 saved Git user name (or `governance-app`) with the admin's email.
 
+## Import and recover
+
+Two steps on the Recovery page:
+
+1. **Import from Git** (`POST /api/recovery/import`) — shallow-fetches the branch, reads files under
+   `path_prefix`, parses YAML, and returns them with an occupancy report for the current app.
+   Writes nothing.
+2. **Recover** (`POST /api/recovery/recover` with `{ "confirm": true }`) — pulls again (does not
+   trust a stale browser payload), then upserts into app storage.
+
+### Apply semantics
+
+- Upsert / merge by stable key (not wipe-and-replace):
+  - Definitions by `key`
+  - Assignments by `assignment_id`
+  - Approvers by `approver_id`
+  - Mask rules by `rule_key`
+  - Policy exceptions by `exception_id` (snapshot rows with `system: true` are skipped)
+  - Data-access settings: overwrite the `data_access` settings blob; redacted secret-looking
+    values are dropped and never written back as placeholders
+- Local rows **not** in the snapshot are **kept**.
+- The joinable salt is never restored from Git. If the snapshot says it was configured and the
+  target app has none, recover warns the operator to set it manually.
+- Recover does **not** run identity UC mirror sync, mask-rule pack sync, or data-access apply.
+  Re-run those from their own pages after recovering so Unity Catalog matches.
+
+### Occupancy warning
+
+Import reports counts of definitions, active assignments, approvers, mask rules, non-system
+exceptions, and whether data-access settings exist. When any are present, the UI warns and the
+confirm dialog for Recover says existing rows will be upserted/merged. Prefer an empty app when
+seeding a new workspace.
+
+Recover requires `confirm=true` and writes audit event `recovery.imported`.
+
+## Git auth
+
 Git runs through the `git` command-line client in the app runtime. The token is passed as an
 `http.extraHeader` via `GIT_CONFIG_*` environment variables: it never appears in the remote URL,
 process arguments, logs, or error messages. Pushes are rejected when the branch moved since the
@@ -50,7 +87,7 @@ databricks secrets put-secret databricks-governance-app git-token --string-value
 
 The app service principal needs READ on the `databricks-governance-app` scope.
 
-## Not exported
+## Not exported / not restored
 
 - Access requests, approval history and audit events (v1).
 - The joinable salt value. Keep a copy outside Git; joinable hashes cannot be reproduced without it.
@@ -61,6 +98,7 @@ The app service principal needs READ on the `databricks-governance-app` scope.
 
 `GET`/`PUT /api/recovery/settings` store the repository URL (https only), branch, path prefix,
 Git user name, and the token secret key name. Path and branch values reject `..` and absolute paths.
+Configure these on the new app before importing; Git settings are not transferred automatically.
 
 ## API
 
@@ -68,6 +106,8 @@ Git user name, and the token secret key name. Path and branch values reject `..`
 - `PUT /api/recovery/settings`
 - `POST /api/recovery/export/preview`: returns the files with their YAML content, target, and warnings.
 - `POST /api/recovery/export/push`: commits the export; returns the commit SHA and whether it changed.
+- `POST /api/recovery/import`: reads the snapshot; returns files, occupancy, and warnings.
+- `POST /api/recovery/recover`: upserts the snapshot; body `{ "confirm": true }`.
 
 Implementation: `backend/app/services/recovery.py`, `backend/app/clients/git_publisher.py`,
 `backend/app/models/recovery.py`, `backend/app/api/routes/recovery.py`.

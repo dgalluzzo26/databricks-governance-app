@@ -1,9 +1,10 @@
-"""Commit a set of files to one directory of a Git branch, using the ``git`` command-line client.
+"""Read and write files under one directory of a Git branch, using the ``git`` command-line client.
 
-The publisher works in a throwaway directory: it fetches only the branch tip (depth 1), replaces
-the files under the export directory, commits when something changed, and pushes. Credentials
-never appear in the remote URL or in process arguments: HTTPS auth is sent as an
-``http.extraHeader`` supplied through ``GIT_CONFIG_*`` environment variables for each command.
+The publisher works in a throwaway directory: it fetches only the branch tip (depth 1). Push
+replaces the files under the export directory, commits when something changed, and pushes.
+Pull returns the current files under that directory. Credentials never appear in the remote URL
+or in process arguments: HTTPS auth is sent as an ``http.extraHeader`` supplied through
+``GIT_CONFIG_*`` environment variables for each command.
 """
 
 from __future__ import annotations
@@ -46,13 +47,85 @@ class PushOutcome:
     branch_created: bool
 
 
-class GitPublisher:
-    """Writes files under ``path_prefix`` on ``branch`` and pushes the commit.
+@dataclass(frozen=True)
+class PullOutcome:
+    """Result of reading files from a branch.
 
-    Only files under ``path_prefix`` are replaced; anything else on the branch is left alone.
-    Files under the prefix that are no longer in ``files`` are removed, so the directory mirrors
-    the export exactly.
+    Attributes:
+        commit_sha: Commit at the branch tip that was read.
+        files: Relative path (inside the prefix) to UTF-8 text content.
     """
+
+    commit_sha: str
+    files: dict[str, str]
+
+
+class GitPublisher:
+    """Reads and writes files under ``path_prefix`` on ``branch``.
+
+    On push, only files under ``path_prefix`` are replaced; anything else on the branch is left
+    alone. Files under the prefix that are no longer in ``files`` are removed, so the directory
+    mirrors the export exactly. On pull, every regular file under the prefix is returned.
+    """
+
+    def pull_files(
+        self,
+        *,
+        repo_url: str,
+        branch: str,
+        path_prefix: str,
+        username: str,
+        token: str,
+    ) -> PullOutcome:
+        """Fetch ``branch`` and return the files under ``path_prefix``.
+
+        Args:
+            repo_url: Repository clone URL (https in production).
+            branch: Branch to read; must already exist.
+            path_prefix: Relative directory that owns the export files. Must not be empty.
+            username: Username for HTTPS basic auth.
+            token: Personal access token or equivalent, sent only as an HTTP header.
+
+        Returns:
+            The commit SHA and the file map (paths relative to the prefix).
+
+        Raises:
+            GitPublishError: git is missing, the branch is missing, a step failed, or the path
+                is unsafe.
+        """
+        git_bin = shutil.which("git")
+        if git_bin is None:
+            raise GitPublishError("The git command is not available in this app runtime; cannot pull.")
+        prefix = _safe_prefix(path_prefix)
+        secrets = _secret_values(username, token)
+        env = _git_environment(username, token, repo_url)
+        head_ref = f"refs/heads/{branch}"
+
+        with tempfile.TemporaryDirectory(prefix="recovery-git-") as tmp:
+            work = Path(tmp)
+            runner = _Runner(git_bin, work, env, secrets)
+            runner("init", "-q")
+            runner("remote", "add", "origin", repo_url)
+            if not runner("ls-remote", "--heads", "origin", head_ref):
+                raise GitPublishError(f"Branch '{branch}' was not found in the repository.")
+            runner("fetch", "-q", "--depth", "1", "origin", head_ref)
+            runner("checkout", "-q", "-B", branch, "FETCH_HEAD")
+            commit = runner("rev-parse", "HEAD")
+            root = work / prefix
+            if not root.is_dir():
+                raise GitPublishError(f"Path '{prefix}' was not found on branch '{branch}'.")
+            files: dict[str, str] = {}
+            for path in sorted(root.rglob("*")):
+                if not path.is_file():
+                    continue
+                relative = path.relative_to(root).as_posix()
+                _safe_relative(relative)
+                try:
+                    files[relative] = path.read_text(encoding="utf-8")
+                except UnicodeDecodeError as exc:
+                    raise GitPublishError(f"File '{relative}' is not valid UTF-8 text.") from exc
+        logger.info("Recovery pull: read %s files from %s under %s", len(files), commit[:12], prefix)
+        return PullOutcome(commit_sha=commit, files=files)
 
     def push_files(
         self,

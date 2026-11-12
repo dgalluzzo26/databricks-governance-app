@@ -1116,3 +1116,60 @@ export interface RecoveryPushResult {
   branchCreated: boolean;
   files: number;
 }
+
+/** Current app occupancy used to warn before recover. */
+export interface RecoveryOccupancy {
+  appHasState: boolean;
+  definitions: number;
+  assignments: number;
+  approvers: number;
+  maskRules: number;
+  policyExceptions: number;
+  dataAccessConfigured: boolean;
+  summary: string;
+}
+
+/** Summary of the imported manifest.yaml. */
+export interface RecoveryManifestSummary {
+  version?: number | null;
+  generatedAt?: string | null;
+  generatedBy?: string | null;
+}
+
+/** Dry-run import from Git (`POST /recovery/import`). Writes nothing. */
+export interface RecoveryImportPreview {
+  importedAt: string;
+  importedBy: string;
+  source: string;
+  commitSha: string;
+  files: RecoveryFile[];
+  warnings: string[];
+  occupancy: RecoveryOccupancy;
+  manifest: RecoveryManifestSummary;
+}
+
+/** Body for `POST /recovery/recover`. */
+export interface RecoveryApplyRequest {
+  confirm: boolean;
+}
+
+/** Counts written by recover. */
+export interface RecoveryApplyCounts {
+  definitions: number;
+  assignments: number;
+  approvers: number;
+  maskRules: number;
+  policyExceptions: number;
+  dataAccess: number;
+}
+
+/** Result of applying an imported snapshot (`POST /recovery/recover`). */
+export interface RecoveryApplyResult {
+  appliedAt: string;
+  appliedBy: string;
+  source: string;
+  commitSha: string;
+  counts: RecoveryApplyCounts;
+  warnings: string[];
+  appHadState: boolean;
+}
