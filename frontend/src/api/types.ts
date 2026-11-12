@@ -796,8 +796,13 @@ export interface TableAccessInsight {
   catalogName: string;
   schemaName: string;
   tableName: string;
+  /** Unity Catalog table type, e.g. `MANAGED`, `EXTERNAL`, or `VIEW`. */
+  tableType?: string;
   columns: ColumnAccessInsight[];
+  /** First row-filter insight (or a not-attached placeholder). */
   rowFilter: RowFilterInsight;
+  /** Every row-filter dimension in effect; views can inherit several from their sources. */
+  rowFilters?: RowFilterInsight[];
   /** Ordered data-access, sensitivity, then row-filter suggestions. */
   suggestions: SuggestedAttribute[];
   /** Human-readable summary of the analysis. */

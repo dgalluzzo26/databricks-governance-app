@@ -1,7 +1,7 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { fakeServices, renderApp } from "./renderApp";
+import { fakeServices, renderApp, testTableAccessInsight } from "./renderApp";
 
 describe("Access explorer", () => {
   it("analyzes a table and shows masks, row filter, and suggestions", async () => {
@@ -146,5 +146,35 @@ describe("Access explorer row-filter selection", () => {
 
     await user.click(screen.getByRole("button", { name: "Clear all row-filter values" }));
     expect(star).not.toBeChecked();
+  });
+});
+
+describe("Access explorer views", () => {
+  it("shows the object type and every row-filter dimension a view inherits", async () => {
+    const user = userEvent.setup();
+    const services = fakeServices();
+    const base = testTableAccessInsight;
+    vi.spyOn(services.accessExplorer, "analyze").mockResolvedValue({
+      ...base,
+      tableType: "VIEW",
+      rowFilters: [
+        { ...base.rowFilter, dimensionKey: "state", columnName: "state" },
+        {
+          ...base.rowFilter,
+          dimensionKey: "region",
+          columnName: "region",
+          notes: "Inherited from demo.default.src_regions.region",
+        },
+      ],
+    });
+    renderApp("/access-explorer", services);
+
+    await user.type(await screen.findByPlaceholderText("catalog.schema.table"), "demo.default.v_people");
+    await user.click(screen.getByRole("button", { name: "Analyze" }));
+
+    expect(await screen.findByText("Row filters (2)")).toBeInTheDocument();
+    expect(screen.getByText("VIEW")).toBeInTheDocument();
+    expect(screen.getAllByText("region").length).toBeGreaterThan(0);
+    expect(screen.getByText("Inherited from demo.default.src_regions.region")).toBeInTheDocument();
   });
 });

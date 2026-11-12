@@ -36,6 +36,9 @@ class ExplorerSql(FakeSql):
     def __init__(self) -> None:
         super().__init__()
         self.tables = [{"ok": 1}]
+        # Lineage rows for views (system.access.column_lineage) and tags per source table name.
+        self.lineage: list[dict[str, Any]] = []
+        self.source_tags: dict[str, list[dict[str, Any]]] = {}
         self.columns = [
             {"column_name": "s_name", "full_data_type": "string"},
             {"column_name": "s_open", "full_data_type": "string"},
@@ -70,6 +73,12 @@ class ExplorerSql(FakeSql):
 
     def query(self, statement: str, parameters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         text = statement
+        if "system.access.column_lineage" in text:
+            return self.lineage
+        if "information_schema.column_tags" in text:
+            for table_name, rows in self.source_tags.items():
+                if f"table_name = '{table_name}'" in text:
+                    return rows
         if "instr(" in text:
             return self.search_rows
         if "information_schema.tables" in text:
@@ -146,6 +155,84 @@ def _explorer(container):  # noqa: ANN001
     )
     container.access_explorer = service
     return service, sql
+
+
+def _analyst() -> CurrentUser:
+    return CurrentUser(
+        user_name="analyst@example.com",
+        email="analyst@example.com",
+        display_name="Analyst",
+        user_id="2",
+        groups=["users"],
+        is_admin=False,
+    )
+
+
+def test_view_inherits_masks_and_row_filters_from_lineage(container) -> None:  # noqa: ANN001
+    service, sql = _explorer(container)
+    sql.tables = [{"ok": 1, "table_type": "VIEW"}]
+    sql.columns = [
+        {"column_name": "name", "full_data_type": "string"},
+        {"column_name": "state", "full_data_type": "string"},
+        {"column_name": "id", "full_data_type": "int"},
+    ]
+    sql.lineage = [
+        {
+            "target_column_name": "name",
+            "source_table_full_name": "demo.default.src_people",
+            "source_column_name": "first_name",
+        },
+        {
+            "target_column_name": "state",
+            "source_table_full_name": "demo.default.src_orders",
+            "source_column_name": "state",
+        },
+        {
+            "target_column_name": "id",
+            "source_table_full_name": "demo.default.src_orders",
+            "source_column_name": "id",
+        },
+    ]
+    sql.source_tags = {
+        "src_people": [
+            {"column_name": "first_name", "tag_name": "sensitivity_category", "tag_value": "finance.budget"},
+            {"column_name": "first_name", "tag_name": "sensitivity", "tag_value": "PII.Name"},
+            {"column_name": "first_name", "tag_name": "data_type", "tag_value": "string"},
+            {"column_name": "first_name", "tag_name": "mask_rule", "tag_value": "full"},
+        ],
+        "src_orders": [
+            {"column_name": "state", "tag_name": "row_filter", "tag_value": "state"},
+        ],
+    }
+
+    insight = service.analyze_table(AnalyzeTableRequest(table_full_name="demo.default.v_people"), _analyst())
+
+    assert insight.table_type == "VIEW"
+    by_name = {c.column_name: c for c in insight.columns}
+    assert by_name["name"].access_state.value == "masked"
+    assert "demo.default.src_people.first_name" in (by_name["name"].notes or "")
+    assert by_name["state"].access_state.value == "not_governed"
+    assert "demo.default.src_orders.state" in (by_name["state"].notes or "")
+    assert insight.row_filter.attached is True
+    assert insight.row_filter.dimension_key == "state"
+    assert [rf.dimension_key for rf in insight.row_filters] == ["state"]
+    kinds = {s.kind.value for s in insight.suggestions}
+    assert "sensitivity" in kinds
+    assert "row_filter" in kinds
+
+
+def test_view_without_lineage_reports_it_instead_of_guessing(container) -> None:  # noqa: ANN001
+    service, sql = _explorer(container)
+    sql.tables = [{"ok": 1, "table_type": "VIEW"}]
+    sql.columns = [{"column_name": "name", "full_data_type": "string"}]
+    sql.lineage = []
+
+    insight = service.analyze_table(AnalyzeTableRequest(table_full_name="demo.default.v_new"), _analyst())
+
+    assert insight.columns[0].access_state.value == "not_governed"
+    assert "No column lineage recorded yet" in (insight.columns[0].notes or "")
+    assert insight.row_filter.attached is False
+    assert insight.row_filters == []
 
 
 def test_analyze_suggests_sensitivity_and_row_filter(container) -> None:  # noqa: ANN001
@@ -446,9 +533,7 @@ def test_analyze_table_suggests_data_access(container) -> None:  # noqa: ANN001
         groups=["users"],
         is_admin=False,
     )
-    insight = service.analyze_table(
-        AnalyzeTableRequest(full_name="demo.default.customers"), user
-    )
+    insight = service.analyze_table(AnalyzeTableRequest(full_name="demo.default.customers"), user)
     assert insight.securable_level == "table"
     dac = next(s for s in insight.suggestions if s.kind.value == "data_access")
     assert dac.attribute_key == "data_access"
@@ -471,9 +556,7 @@ def test_analyze_table_dac_without_definition_does_not_fail(container) -> None: 
         groups=["users"],
         is_admin=False,
     )
-    insight = service.analyze_table(
-        AnalyzeTableRequest(full_name="demo.default.customers"), user
-    )
+    insight = service.analyze_table(AnalyzeTableRequest(full_name="demo.default.customers"), user)
     dac = next(s for s in insight.suggestions if s.kind.value == "data_access")
     assert dac.requestable is False
     assert "linked" in dac.reason.lower()

@@ -217,8 +217,10 @@ class TableAccessInsight(ApiModel):
         catalog_name: Catalog containing the object.
         schema_name: Schema name; empty for catalog-level analysis.
         table_name: Table name; empty for catalog/schema analysis.
-        columns: Per-column masking insight (tables only).
-        row_filter: Row-filter insight (tables only).
+        table_type: Unity Catalog table type (``MANAGED``, ``EXTERNAL``, ``VIEW``, ...).
+        columns: Per-column masking insight. For views, inherited from source columns via lineage.
+        row_filter: First row-filter insight, or a not-attached placeholder.
+        row_filters: Every row-filter dimension in effect (views can inherit several).
         suggestions: Attribute values the user could request.
         summary: One-line human-readable summary of the analysis.
     """
@@ -228,8 +230,10 @@ class TableAccessInsight(ApiModel):
     catalog_name: str
     schema_name: str = ""
     table_name: str = ""
+    table_type: str = ""
     columns: list[ColumnAccessInsight] = Field(default_factory=list)
     row_filter: RowFilterInsight = Field(default_factory=RowFilterInsight)
+    row_filters: list[RowFilterInsight] = Field(default_factory=list)
     suggestions: list[SuggestedAttribute] = Field(default_factory=list)
     summary: str
 

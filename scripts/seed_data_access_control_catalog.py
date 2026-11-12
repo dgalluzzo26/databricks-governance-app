@@ -43,12 +43,19 @@ class TableSpec:
 
 @dataclass(frozen=True)
 class ViewSpec:
+    """A view that carries object-level access tags only.
+
+    Column tags are never set on views: Unity Catalog rejects a view with its own row filter or
+    column mask when it reads a table that already has one (``UNSUPPORTED_NESTED_ROW_OR_COLUMN_ACCESS_POLICY``).
+    The base table's masks and row filters still apply when the view is queried, and Access
+    Explorer inherits them through column lineage.
+    """
+
     schema: str
     name: str
     access_value: str
     reviewed: bool
     select_sql: str
-    column_tags: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
 # Placeholder replaced with the owning table's data_access_control path in build_tables().
@@ -702,10 +709,10 @@ def _resolve_category(table: TableSpec) -> TableSpec:
 
 
 def build_views() -> list[ViewSpec]:
-    """Views in ``cross_domain`` used to verify ABAC masks and row filters on views."""
+    """Views in ``cross_domain`` used to verify that masks and row filters flow through views."""
     base = f"`{CATALOG}`.`{CROSS_SCHEMA}`.`{CROSS_TABLE}`"
-    views = [
-        # Subset view over the cross-domain table; columns re-tagged on the view itself.
+    return [
+        # Subset view over the cross-domain table. Masks and row filters come from the base table.
         ViewSpec(
             CROSS_SCHEMA,
             "people_employees_workforce_view",
@@ -715,14 +722,8 @@ def build_views() -> list[ViewSpec]:
                        payroll_deposit_account, deployment_contact_phone,
                        training_contact_email, disaster_number, state
                 FROM {base}""",
-            {
-                k: v
-                for k, v in CROSS_COLUMN_TAGS.items()
-                if k
-                not in {"deduction_type"}
-            },
         ),
-        # Join view across real base tables (people + finance) to test masks through joins.
+        # Join view across real base tables. Each column inherits from its source table.
         ViewSpec(
             CROSS_SCHEMA,
             "people_employees_payroll_join_view",
@@ -732,23 +733,63 @@ def build_views() -> list[ViewSpec]:
                        d.deduction_type, d.amount AS deduction_amount
                 FROM `{CATALOG}`.`people`.`employees_roster` r
                 JOIN `{CATALOG}`.`finance`.`payroll_deductions` d ON d.employee_id = r.id""",
-            {
-                "first_name": _pii("first_name", "Name", "full", "people.employees"),
-                "email": _pii("email", "Email", "email", "people.employees"),
-                "state": _rf_state(),
-            },
         ),
     ]
-    return [_resolve_view_category(v) for v in views]
 
 
-def _resolve_view_category(view: ViewSpec) -> ViewSpec:
-    resolved: dict[str, dict[str, str]] = {}
-    for column, tags in view.column_tags.items():
-        resolved[column] = {
-            k: (view.access_value if v == TABLE_CATEGORY else v) for k, v in tags.items()
-        }
-    return replace(view, column_tags=resolved)
+# Governance column tags that must never sit on a view column (see ViewSpec).
+VIEW_COLUMN_GOVERNANCE_TAGS = (
+    "sensitivity_category",
+    "sensitivity",
+    "data_type",
+    "mask_rule",
+    "row_filter",
+)
+
+
+def create_views(sql: Any, views: list[ViewSpec]) -> None:
+    """Create or replace each view, tag the view object, and clear any governance column tags.
+
+    Args:
+        sql: Executor with ``execute(statement)`` and rows from ``SELECT`` statements.
+        views: Views to create.
+    """
+    print("Creating cross-domain views (object tags only; columns inherit from base tables)…")
+    for view in views:
+        vfqn = f"`{CATALOG}`.`{view.schema}`.`{view.name}`"
+        print(f"  [view] {CATALOG}.{view.schema}.{view.name} → {view.access_value}")
+        sql.execute(f"CREATE OR REPLACE VIEW {vfqn} AS {view.select_sql}")
+        review_value = "reviewed" if view.reviewed else "pending"
+        sql.execute(
+            f"ALTER VIEW {vfqn} SET TAGS ("
+            f"'{ACCESS_TAG}' = '{view.access_value}', '{REVIEW_TAG}' = '{review_value}')"
+        )
+        clear_view_column_tags(sql, view)
+
+
+def clear_view_column_tags(sql: Any, view: ViewSpec) -> None:
+    """Remove governance column tags left on a view by earlier seed runs.
+
+    Args:
+        sql: Executor with ``execute(statement)`` and rows from ``SELECT`` statements.
+        view: The view whose columns should carry no governance tags.
+    """
+    keys = ", ".join(f"'{k}'" for k in VIEW_COLUMN_GOVERNANCE_TAGS)
+    rows = sql.execute(
+        f"SELECT column_name, tag_name FROM system.information_schema.column_tags "
+        f"WHERE catalog_name = '{CATALOG}' AND schema_name = '{view.schema}' "
+        f"AND table_name = '{view.name}' AND lower(tag_name) IN ({keys})"
+    )
+    by_column: dict[str, list[str]] = {}
+    for column_name, tag_name in rows:
+        by_column.setdefault(str(column_name), []).append(str(tag_name))
+    for column, tag_names in sorted(by_column.items()):
+        names = ", ".join(f"'{t}'" for t in sorted(tag_names))
+        print(f"    [unset] {view.name}.{column}: {', '.join(sorted(tag_names))}")
+        sql.execute(
+            f"ALTER TABLE `{CATALOG}`.`{view.schema}`.`{view.name}` "
+            f"ALTER COLUMN `{column}` UNSET TAGS ({names})"
+        )
 
 
 ACCESS_PATHS = sorted(
@@ -1018,21 +1059,7 @@ def seed(profile: str, warehouse_id: str) -> None:
             )
 
     views = build_views()
-    print("Creating cross-domain views and tagging view columns…")
-    for view in views:
-        vfqn = f"`{CATALOG}`.`{view.schema}`.`{view.name}`"
-        print(f"  [view] {CATALOG}.{view.schema}.{view.name} → {view.access_value}")
-        sql.execute(f"CREATE OR REPLACE VIEW {vfqn} AS {view.select_sql}")
-        review_value = "reviewed" if view.reviewed else "pending"
-        sql.execute(
-            f"ALTER VIEW {vfqn} SET TAGS ("
-            f"'{ACCESS_TAG}' = '{view.access_value}', '{REVIEW_TAG}' = '{review_value}')"
-        )
-        # Column tags on views use ALTER TABLE ... ALTER COLUMN (ALTER VIEW has no column form).
-        for column, tags in view.column_tags.items():
-            sql.execute(
-                f"ALTER TABLE {vfqn} ALTER COLUMN `{column}` SET TAGS ({tag_clause(tags)})"
-            )
+    create_views(sql, views)
 
     reviewed = sum(1 for t in tables if t.reviewed)
     masked = sum(1 for t in tables if any("mask_rule" in tags for tags in t.column_tags.values()))

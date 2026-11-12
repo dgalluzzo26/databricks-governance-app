@@ -14,7 +14,12 @@ import {
   useCreateAccessRequest,
   useTableSearch,
 } from "@/api/queries";
-import type { ColumnAccessInsight, SuggestedAttribute, TableAccessInsight } from "@/api/types";
+import type {
+  ColumnAccessInsight,
+  RowFilterInsight,
+  SuggestedAttribute,
+  TableAccessInsight,
+} from "@/api/types";
 import { Alert, Badge, Card, ErrorAlert, PageHeader, Spinner } from "@/components/ui";
 import styles from "../identity/IdentityPage.module.css";
 import { AccessExplorerTree } from "./AccessExplorerTree";
@@ -234,51 +239,65 @@ export function AccessExplorerPage() {
 }
 
 /**
+ * One row-filter dimension: the column it is attached to and what the signed-in user can see.
+ *
+ * @param props.rowFilter - Row-filter insight for one dimension, or a not-attached placeholder.
+ */
+function RowFilterDetails({ rowFilter }: { rowFilter: RowFilterInsight }) {
+  if (!rowFilter.attached) {
+    return <div className={styles.muted}>{rowFilter.notes ?? "No row filter on this table."}</div>;
+  }
+  return (
+    <div className={styles.stack}>
+      <DescriptionRow label="Dimension" value={<code>{rowFilter.dimensionKey}</code>} />
+      <DescriptionRow label="Column" value={<code>{rowFilter.columnName}</code>} />
+      <DescriptionRow
+        label="Your access"
+        value={
+          <Badge tone={rowFilter.userCanSeeRows ? "success" : "danger"}>
+            {rowFilter.userCanSeeRows
+              ? rowFilter.userHasWildcard
+                ? "All rows (*)"
+                : `Values: ${rowFilter.userValues.join(", ")}`
+              : "No rows"}
+          </Badge>
+        }
+      />
+      <div className={styles.muted}>{rowFilter.notes}</div>
+    </div>
+  );
+}
+
+/**
  * Renders the analyze insight: summary, suggested attributes, row-filter status, and per-column
  * mask/access details.
  *
  * @param props.insight - Full table access insight returned by `useAnalyzeTable`.
  */
 function InsightView({ insight }: { insight: TableAccessInsight }) {
+  const filters: RowFilterInsight[] = insight.rowFilters?.length ? insight.rowFilters : [insight.rowFilter];
   return (
     <>
       <Card
         title={insight.tableFullName}
-        actions={<Badge tone="info">{insight.columns.length} columns</Badge>}
+        actions={
+          <>
+            {insight.tableType && <Badge tone="neutral">{insight.tableType}</Badge>}
+            <Badge tone="info">{insight.columns.length} columns</Badge>
+          </>
+        }
       >
         <div className={styles.muted}>{insight.summary}</div>
       </Card>
 
       <SuggestionsCard suggestions={insight.suggestions} tableFullName={insight.tableFullName} />
 
-      <Card title="Row filter">
-        {!insight.rowFilter.attached ? (
-          <div className={styles.muted}>{insight.rowFilter.notes ?? "No row filter on this table."}</div>
-        ) : (
-          <div className={styles.stack}>
-            <DescriptionRow
-              label="Dimension"
-              value={<code>{insight.rowFilter.dimensionKey}</code>}
-            />
-            <DescriptionRow
-              label="Column"
-              value={<code>{insight.rowFilter.columnName}</code>}
-            />
-            <DescriptionRow
-              label="Your access"
-              value={
-                <Badge tone={insight.rowFilter.userCanSeeRows ? "success" : "danger"}>
-                  {insight.rowFilter.userCanSeeRows
-                    ? insight.rowFilter.userHasWildcard
-                      ? "All rows (*)"
-                      : `Values: ${insight.rowFilter.userValues.join(", ")}`
-                    : "No rows"}
-                </Badge>
-              }
-            />
-            <div className={styles.muted}>{insight.rowFilter.notes}</div>
-          </div>
-        )}
+      <Card title={filters.length > 1 ? `Row filters (${filters.length})` : "Row filter"}>
+        <div className={styles.stack}>
+          {filters.map((rowFilter, index) => (
+            <RowFilterDetails key={`${rowFilter.dimensionKey ?? "none"}-${index}`} rowFilter={rowFilter} />
+          ))}
+        </div>
       </Card>
 
       <Card title="Columns">

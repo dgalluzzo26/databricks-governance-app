@@ -68,9 +68,7 @@ def test_schema_tag_mismatch_does_not_conflict_when_grants_are_table_only() -> N
     # Catalog/schema tags only seed groups; SELECT is table-only so mismatches are not conflicts.
     assert plan.summary.conflicts == 0
     assert plan.conflicts == []
-    assert not any(
-        g.securable_type == "schema" and g.privilege == "SELECT" for g in plan.grants_to_add
-    )
+    assert not any(g.securable_type == "schema" and g.privilege == "SELECT" for g in plan.grants_to_add)
     assert any(g.full_name.endswith(".contracts") and g.privilege == "SELECT" for g in plan.grants_to_add)
     assert any(g.full_name.endswith(".other") and g.privilege == "SELECT" for g in plan.grants_to_add)
     # Nested parent group still planned from schema tag value.
@@ -206,16 +204,12 @@ def test_collapse_membership_keeps_add_when_email_and_display_name_conflict() ->
         reason="no active Identity assignment for this group",
     )
     # Same SCIM user id for both names.
-    collapsed = collapse_membership_by_principal_id(
-        [("g1", "user-1", add), ("g1", "user-1", remove)]
-    )
+    collapsed = collapse_membership_by_principal_id([("g1", "user-1", add), ("g1", "user-1", remove)])
     assert len(collapsed) == 1
     assert collapsed[0][2].action == MembershipAction.ADD
     assert collapsed[0][2].principal_name == "david.galluzzo@databricks.com"
 
-    collapsed_rev = collapse_membership_by_principal_id(
-        [("g1", "user-1", remove), ("g1", "user-1", add)]
-    )
+    collapsed_rev = collapse_membership_by_principal_id([("g1", "user-1", remove), ("g1", "user-1", add)])
     assert len(collapsed_rev) == 1
     assert collapsed_rev[0][2].action == MembershipAction.ADD
 

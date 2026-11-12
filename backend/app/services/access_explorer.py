@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
+from typing import NamedTuple
 
 from backend.app.clients.sql import SqlExecutor, string_literal
 from backend.app.core.config import AppConfig
@@ -78,6 +79,13 @@ _TAG_KEYS = (
     "data_type",
     "row_filter",
 )
+
+
+class _ColumnSource(NamedTuple):
+    """One source column that a view column reads, from ``system.access.column_lineage``."""
+
+    table_full_name: str
+    column_name: str
 
 
 def has_sensitivity_access(held_paths: set[str], required_path: str) -> bool:
@@ -286,7 +294,7 @@ class AccessExplorerService:
         self._require_enrolled_catalog(catalog)
         exists = self._sql.query(
             f"""
-            SELECT 1 AS ok
+            SELECT table_type
             FROM system.information_schema.tables
             WHERE table_catalog = {string_literal(catalog)}
               AND table_schema = {string_literal(schema)}
@@ -296,6 +304,8 @@ class AccessExplorerService:
         )
         if not exists:
             raise NotFoundError(f"Table '{catalog}.{schema}.{table}' was not found")
+        table_type = str(exists[0].get("table_type") or "").strip().upper()
+        is_view = table_type == "VIEW"
 
         columns = self._sql.query(
             f"""
@@ -307,23 +317,18 @@ class AccessExplorerService:
             ORDER BY ordinal_position
             """
         )
-        tag_rows = self._sql.query(
-            f"""
-            SELECT column_name, tag_name, tag_value
-            FROM system.information_schema.column_tags
-            WHERE catalog_name = {string_literal(catalog)}
-              AND schema_name = {string_literal(schema)}
-              AND table_name = {string_literal(table)}
-              AND lower(tag_name) IN ({", ".join(string_literal(k) for k in _TAG_KEYS)})
-            """
-        )
-        tags_by_col: dict[str, dict[str, str]] = defaultdict(dict)
-        for row in tag_rows:
-            name = str(row["column_name"])
-            key = str(row["tag_name"]).strip().lower()
-            value = None if row.get("tag_value") is None else str(row["tag_value"])
-            if key and value is not None:
-                tags_by_col[name][key] = value
+        lineage_error: str | None = None
+        view_sources: dict[str, list[_ColumnSource]] = {}
+        source_tags: dict[str, dict[str, dict[str, str]]] = {}
+        tags_by_col: dict[str, dict[str, str]] = {}
+        if is_view:
+            # Views carry no column tags; each column inherits from its lineage sources.
+            view_sources, lineage_error = self._view_column_sources(catalog, schema, table)
+            for source_table in sorted({s.table_full_name for group in view_sources.values() for s in group}):
+                src_catalog, src_schema, src_table = source_table.split(".")
+                source_tags[source_table] = self._column_tags_for_table(src_catalog, src_schema, src_table)
+        else:
+            tags_by_col = self._column_tags_for_table(catalog, schema, table)
 
         held = self._held_attribute_values(user)
         sensitivity_held = held.get("sensitivity", set())
@@ -332,6 +337,20 @@ class AccessExplorerService:
         insights: list[ColumnAccessInsight] = []
         for col in columns:
             col_name = str(col["column_name"])
+            col_type = None if col.get("full_data_type") is None else str(col["full_data_type"])
+            if is_view:
+                insights.append(
+                    self._inherited_column_insight(
+                        column_name=col_name,
+                        sql_type=col_type,
+                        sources=view_sources.get(col_name.lower(), []),
+                        source_tags=source_tags,
+                        sensitivity_held=sensitivity_held,
+                        rules_by_key=rules_by_key,
+                        lineage_error=lineage_error,
+                    )
+                )
+                continue
             raw_tags = tags_by_col.get(col_name, {})
             tags = ColumnTagMap(
                 sensitivity_category=raw_tags.get("sensitivity_category"),
@@ -343,15 +362,23 @@ class AccessExplorerService:
             insights.append(
                 self._column_insight(
                     column_name=col_name,
-                    sql_type=None if col.get("full_data_type") is None else str(col["full_data_type"]),
+                    sql_type=col_type,
                     tags=tags,
                     sensitivity_held=sensitivity_held,
                     rules_by_key=rules_by_key,
                 )
             )
 
-        row_filter = self._row_filter_insight(catalog, schema, table, held, tags_by_col)
-        suggestions = self._suggestions(insights, row_filter, sensitivity_held, held)
+        if is_view:
+            row_filters = self._inherited_row_filters(catalog, schema, table, held, view_sources, source_tags)
+        else:
+            row_filters = [self._row_filter_insight(catalog, schema, table, held, tags_by_col)]
+        row_filter = (
+            row_filters[0]
+            if row_filters
+            else RowFilterInsight(attached=False, notes="No row_filter inherited from source tables.")
+        )
+        suggestions = self._suggestions(insights, row_filters, sensitivity_held, held)
         dac = self._data_access_suggestion("table", f"{catalog}.{schema}.{table}", held)
         if dac is not None:
             suggestions = [dac, *suggestions]
@@ -383,8 +410,10 @@ class AccessExplorerService:
             catalog_name=catalog,
             schema_name=schema,
             table_name=table,
+            table_type=table_type,
             columns=insights,
             row_filter=row_filter,
+            row_filters=row_filters,
             suggestions=suggestions,
             summary="; ".join(summary_parts),
         )
@@ -421,9 +450,7 @@ class AccessExplorerService:
         )
         allowed = {v.lower() for v in (definition.allowed_values if definition else [])}
         requestable = (
-            not already
-            and definition is not None
-            and (not allowed or access_value.lower() in allowed)
+            not already and definition is not None and (not allowed or access_value.lower() in allowed)
         )
         routing = None
         if self._access_requests is not None:
@@ -481,6 +508,152 @@ class AccessExplorerService:
             resolved_category=resolved,
             approvers=approvers,
         )
+
+    def _column_tags_for_table(self, catalog: str, schema: str, table: str) -> dict[str, dict[str, str]]:
+        """Read explorer-relevant column tags for one table or view, keyed by column name."""
+        tag_rows = self._sql.query(
+            f"""
+            SELECT column_name, tag_name, tag_value
+            FROM system.information_schema.column_tags
+            WHERE catalog_name = {string_literal(catalog)}
+              AND schema_name = {string_literal(schema)}
+              AND table_name = {string_literal(table)}
+              AND lower(tag_name) IN ({", ".join(string_literal(k) for k in _TAG_KEYS)})
+            """
+        )
+        tags_by_col: dict[str, dict[str, str]] = defaultdict(dict)
+        for row in tag_rows:
+            name = str(row["column_name"])
+            key = str(row["tag_name"]).strip().lower()
+            value = None if row.get("tag_value") is None else str(row["tag_value"])
+            if key and value is not None:
+                tags_by_col[name][key] = value
+        return dict(tags_by_col)
+
+    def _view_column_sources(
+        self, catalog: str, schema: str, view: str
+    ) -> tuple[dict[str, list[_ColumnSource]], str | None]:
+        """Map each view column to the source table columns it reads, from column lineage.
+
+        Lineage is recorded by Unity Catalog when queries run, so a view that has never been
+        queried has no rows. Keys are lower-cased view column names.
+
+        Returns:
+            ``(sources, error)``; ``error`` is set when lineage could not be read.
+        """
+        full_name = f"{catalog}.{schema}.{view}"
+        try:
+            rows = self._sql.query(
+                f"""
+                SELECT DISTINCT target_column_name, source_table_full_name, source_column_name
+                FROM system.access.column_lineage
+                WHERE lower(target_table_full_name) = lower({string_literal(full_name)})
+                  AND source_table_full_name IS NOT NULL
+                  AND source_column_name IS NOT NULL
+                LIMIT 5000
+                """
+            )
+        except Exception as exc:  # noqa: BLE001 - lineage is optional for analysis
+            logger.warning("Could not read column lineage for %s: %s", full_name, exc)
+            return {}, str(exc)
+        sources: dict[str, list[_ColumnSource]] = defaultdict(list)
+        for row in rows:
+            source_table = str(row["source_table_full_name"])
+            if source_table.count(".") != 2:
+                continue
+            target = str(row["target_column_name"]).lower()
+            source = _ColumnSource(source_table, str(row["source_column_name"]))
+            if source not in sources[target]:
+                sources[target].append(source)
+        return dict(sources), None
+
+    def _inherited_column_insight(
+        self,
+        *,
+        column_name: str,
+        sql_type: str | None,
+        sources: list[_ColumnSource],
+        source_tags: dict[str, dict[str, dict[str, str]]],
+        sensitivity_held: set[str],
+        rules_by_key: dict,
+        lineage_error: str | None,
+    ) -> ColumnAccessInsight:
+        """Classify a view column using the governance tags of its source columns.
+
+        When several sources are governed, the column is reported as the strictest one: the
+        first governed source the user does not hold, otherwise the first governed source.
+        Every source is named in the notes.
+        """
+        if not sources:
+            note = (
+                f"Could not read column lineage: {lineage_error}"
+                if lineage_error
+                else "No column lineage recorded yet. Query this view once so UC records its sources."
+            )
+            insight = self._column_insight(
+                column_name=column_name,
+                sql_type=sql_type,
+                tags=ColumnTagMap(),
+                sensitivity_held=sensitivity_held,
+                rules_by_key=rules_by_key,
+            )
+            return insight.model_copy(update={"notes": note})
+
+        candidates: list[tuple[_ColumnSource, ColumnAccessInsight]] = []
+        for source in sources:
+            raw = source_tags.get(source.table_full_name, {}).get(source.column_name, {})
+            tags = ColumnTagMap(
+                sensitivity_category=raw.get("sensitivity_category"),
+                sensitivity=raw.get("sensitivity"),
+                mask_rule=raw.get("mask_rule"),
+                data_type=raw.get("data_type"),
+                row_filter=raw.get("row_filter"),
+            )
+            candidates.append(
+                (
+                    source,
+                    self._column_insight(
+                        column_name=column_name,
+                        sql_type=sql_type,
+                        tags=tags,
+                        sensitivity_held=sensitivity_held,
+                        rules_by_key=rules_by_key,
+                    ),
+                )
+            )
+        governed = [c for c in candidates if c[1].access_state != ColumnAccessState.NOT_GOVERNED]
+        pool = governed or candidates
+        denied = [c for c in pool if not c[1].user_has_access]
+        _, chosen = (denied or pool)[0]
+        names = ", ".join(f"{s.table_full_name}.{s.column_name}" for s, _ in candidates)
+        note = f"Inherited from {names}."
+        if chosen.notes:
+            note = f"{note} {chosen.notes}"
+        return chosen.model_copy(update={"notes": note})
+
+    def _inherited_row_filters(
+        self,
+        catalog: str,
+        schema: str,
+        view: str,
+        held: dict[str, set[str]],
+        sources: dict[str, list[_ColumnSource]],
+        source_tags: dict[str, dict[str, dict[str, str]]],
+    ) -> list[RowFilterInsight]:
+        """One row-filter insight per distinct ``row_filter`` dimension on any source column."""
+        first_column: dict[str, tuple[str, str]] = {}
+        for view_column, group in sorted(sources.items()):
+            for source in group:
+                dim = (
+                    source_tags.get(source.table_full_name, {}).get(source.column_name, {}).get("row_filter")
+                    or ""
+                ).strip()
+                if dim and dim.lower() not in first_column:
+                    first_column[dim.lower()] = (dim, view_column)
+        return [
+            self._row_filter_insight(catalog, schema, view, held, {column: {"row_filter": dim}})
+            for dim, column in first_column.values()
+        ]
 
     def _enrolled_catalogs(self) -> list[str]:
         """Return enrollment-tagged catalogs, or empty when data-access is unavailable."""
@@ -739,7 +912,7 @@ class AccessExplorerService:
     def _suggestions(
         self,
         columns: list[ColumnAccessInsight],
-        row_filter: RowFilterInsight,
+        row_filters: list[RowFilterInsight],
         sensitivity_held: set[str],
         held: dict[str, set[str]],
     ) -> list[SuggestedAttribute]:
@@ -754,7 +927,7 @@ class AccessExplorerService:
 
         Args:
             columns: Column insights for the table.
-            row_filter: Row-filter insight for the table.
+            row_filters: Row-filter insights for the table, one per dimension (views can have several).
             sensitivity_held: Sensitivity paths the user holds.
             held: All held attribute values keyed by lower-cased attribute key.
 
@@ -823,6 +996,15 @@ class AccessExplorerService:
                 )
             )
 
+        for row_filter in row_filters:
+            suggestions.extend(self._row_filter_suggestions(row_filter, held))
+        return suggestions
+
+    def _row_filter_suggestions(
+        self, row_filter: RowFilterInsight, held: dict[str, set[str]]
+    ) -> list[SuggestedAttribute]:
+        """Requests that would reveal more rows for one row-filter dimension."""
+        suggestions: list[SuggestedAttribute] = []
         if row_filter.attached and row_filter.dimension_key and not row_filter.user_has_wildcard:
             dim = row_filter.dimension_key
             held_dim = held.get(dim.lower(), set())

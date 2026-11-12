@@ -382,6 +382,28 @@ For a table the service:
    - **Row filter** — dimension `*` (all rows) and any concrete allowed values the user does not
      already hold
 
+### Views inherit from their sources
+
+Views carry no column tags. Setting one would make UC reject the view with
+`UNSUPPORTED_NESTED_ROW_OR_COLUMN_ACCESS_POLICY`, because the base table already has a mask or
+row filter. Masks and row filters still apply when the view is queried, so the explorer follows
+lineage instead:
+
+1. `system.access.column_lineage` maps each view column to its source table columns
+   (`target_table_full_name` = view, `source_table_full_name` / `source_column_name` = source).
+2. Source column tags (`sensitivity_category`, `sensitivity`, `mask_rule`, `data_type`,
+   `row_filter`) are read from each source table.
+3. A view column is reported as the strictest governed source: the first the user does not hold,
+   otherwise the first governed source. All sources are named in the column notes.
+4. Every distinct `row_filter` dimension across all source columns becomes its own row-filter
+   suggestion. Join views can therefore show several dimensions.
+
+If lineage is empty, the column is shown as not governed with "No column lineage recorded yet".
+Lineage is recorded when queries run, so query a view once before analyzing it.
+
+The view's own object tags (`data_access_control`, `clr_review_status`) are kept, so data-access
+grant suggestions still apply to the view.
+
 UC grants are intentionally omitted for now.
 
 ### Who reviews a request
