@@ -256,16 +256,8 @@ def plan_data_access(
             )
         )
 
-    # Informational only: schema/catalog tags no longer drive SELECT.
+    # SELECT is table-only, so catalog/schema tags never over-grant descendants.
     conflicts: list[DataAccessConflict] = []
-    for obj, value in eligible:
-        if obj.level == "table":
-            continue
-        conflicts.extend(
-            _descendant_conflicts(
-                obj, value, objects, by_object, access_key, review_key, review_value
-            )
-        )
 
     desired: set[tuple[str, str, str, str]] = set()
     reasons: dict[tuple[str, str, str, str], str] = {}
@@ -475,72 +467,6 @@ def _membership_changes(
 
     changes.sort(key=lambda m: (m.action.value, m.group.lower(), m.principal_name.lower()))
     return changes
-
-
-def _descendant_conflicts(
-    ancestor: _Object,
-    ancestor_value: str,
-    objects: dict[tuple[str, str], _Object],
-    by_object: dict[tuple[str, str], dict[str, str]],
-    access_key: str,
-    review_key: str,
-    review_value: str,
-) -> list[DataAccessConflict]:
-    """Find descendants whose access tag disagrees with an ancestor grant."""
-    found: list[DataAccessConflict] = []
-    for obj in objects.values():
-        if not _is_descendant(ancestor, obj):
-            continue
-        tags_on = by_object[(obj.level, obj.full_name.lower())]
-        child_value = tags_on.get(access_key)
-        if not child_value:
-            continue
-        child_review = (tags_on.get(review_key) or "").lower()
-        if child_value.lower() != ancestor_value.lower():
-            found.append(
-                DataAccessConflict(
-                    ancestor_type=ancestor.level,
-                    ancestor_name=ancestor.full_name,
-                    ancestor_value=ancestor_value,
-                    descendant_name=obj.full_name,
-                    descendant_value=child_value,
-                    reason=(
-                        f"Granting at {ancestor.level} {ancestor.full_name} "
-                        f"({ancestor_value}) would also expose {obj.full_name} "
-                        f"tagged {child_value}"
-                    ),
-                )
-            )
-        elif child_review != review_value:
-            found.append(
-                DataAccessConflict(
-                    ancestor_type=ancestor.level,
-                    ancestor_name=ancestor.full_name,
-                    ancestor_value=ancestor_value,
-                    descendant_name=obj.full_name,
-                    descendant_value=child_value,
-                    reason=(
-                        f"Granting at {ancestor.level} {ancestor.full_name} would expose "
-                        f"unreviewed descendant {obj.full_name}"
-                    ),
-                )
-            )
-    return found
-
-
-def _is_descendant(ancestor: _Object, obj: _Object) -> bool:
-    """Return whether ``obj`` sits under ``ancestor`` in the UC tree."""
-    if obj.full_name.lower() == ancestor.full_name.lower():
-        return False
-    if ancestor.level == "catalog":
-        return obj.catalog.lower() == ancestor.catalog.lower()
-    if ancestor.level == "schema":
-        return (
-            obj.level == "table"
-            and obj.catalog.lower() == ancestor.catalog.lower()
-            and (obj.schema or "").lower() == (ancestor.schema or "").lower()
-        )
-    return False
 
 
 def _grants_for_table(obj: _Object, group: str, data_privileges: list[str]) -> list[PlannedGrant]:

@@ -150,7 +150,7 @@ flowchart TD
   reviewed -->|yes| eligible["Eligible object with access value"]
   eligible --> level{"Object level"}
   level -->|table| tableGrants["Desired: USE CATALOG, USE SCHEMA, SELECT for the value's group"]
-  level -->|schema or catalog| nestOnly["Value seeds a group for nesting only; descendant mismatches reported as conflicts"]
+  level -->|schema or catalog| nestOnly["Value seeds a group for nesting only; no SELECT and no conflict"]
 ```
 
 ### Groups and nesting

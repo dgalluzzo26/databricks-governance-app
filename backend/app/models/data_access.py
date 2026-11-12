@@ -21,11 +21,11 @@ RUN_HISTORY_PAGE_SIZE_MAX = 50
 
 
 class ConflictPolicy(StrEnum):
-    """How mismatched parent/child tags are reported (SELECT is table-only).
+    """Legacy setting kept for saved configs; SELECT is table-only so conflicts are unused.
 
     Attributes:
-        HOLD: Report conflicts (historical fail-closed label; does not omit table grants).
-        WARN: Report conflicts the same way; kept for settings compatibility.
+        HOLD: Historical fail-closed label; no longer changes the plan.
+        WARN: Historical warn label; no longer changes the plan.
     """
 
     HOLD = "hold"
@@ -75,7 +75,7 @@ class DataAccessSettings(ApiModel):
         interval_minutes: How often the in-app scheduler runs when enabled.
         schedule_enabled: When false, the background scheduler is paused.
         schedule_mode: ``dry_run`` (plan only) or ``apply`` (plan then mutate UC).
-        conflict_policy: Hold or warn when an ancestor grant would over-expose descendants.
+        conflict_policy: Legacy field; parent/child tag mismatches are not reported.
         dry_run: Preferred mode for the settings form (legacy; schedule uses schedule_mode).
     """
 
@@ -306,7 +306,7 @@ class DataAccessPlanSummary(ApiModel):
         grants_unchanged: Desired privileges already present.
         members_to_add: Identity principals missing from their ``dac_*`` group.
         members_to_remove: Stale user/SP members not backed by an active assignment.
-        conflicts: Ancestor/descendant tag mismatches.
+        conflicts: Always zero; retained for plan/summary shape compatibility.
         invalid_values: Access values that cannot become group names.
     """
 
@@ -334,7 +334,7 @@ class DataAccessPlan(ApiModel):
         grants_to_add: Missing privileges (truncated).
         grants_to_revoke: Extra managed-prefix privileges (truncated).
         membership_changes: Identity-driven member add/remove (truncated).
-        conflicts: Over-grant risks (truncated).
+        conflicts: Empty; SELECT is table-only so parent/child mismatches are not conflicts.
         invalid_values: Values that could not be turned into group names.
         truncated: True when any list was cut at ``PLAN_ITEM_LIMIT``.
         drift_since_last_run: Human-readable changes versus the previous successful plan.

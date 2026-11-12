@@ -58,14 +58,16 @@ def test_plan_skips_unreviewed_objects() -> None:
     assert plan.grants_to_add == []
 
 
-def test_schema_tag_mismatch_reports_conflict_without_schema_select() -> None:
+def test_schema_tag_mismatch_does_not_conflict_when_grants_are_table_only() -> None:
     tags = [
         *_reviewed("schema", "sandbox", "finance", None, "finance"),
         *_reviewed("table", "sandbox", "finance", "contracts", "finance.contracts"),
         *_reviewed("table", "sandbox", "finance", "other", "hr"),
     ]
     plan = plan_data_access(DataAccessSettings(), tags, [], set())
-    assert plan.summary.conflicts >= 1
+    # Catalog/schema tags only seed groups; SELECT is table-only so mismatches are not conflicts.
+    assert plan.summary.conflicts == 0
+    assert plan.conflicts == []
     assert not any(
         g.securable_type == "schema" and g.privilege == "SELECT" for g in plan.grants_to_add
     )

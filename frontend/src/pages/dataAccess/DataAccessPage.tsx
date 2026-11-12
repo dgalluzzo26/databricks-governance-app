@@ -592,10 +592,10 @@ function SettingsCard(props: {
               onChange={(e) =>
                 setForm({ ...form, conflictPolicy: e.target.value as DataAccessConflictPolicy })
               }
-              title="SELECT is table-only; this only controls how parent/child tag mismatches are labeled in the plan"
+              title="Unused: SELECT is table-only, so catalog/schema tags do not create conflicts"
             >
-              <option value="hold">Report mismatches (hold)</option>
-              <option value="warn">Report mismatches (warn)</option>
+              <option value="hold">Unused (hold)</option>
+              <option value="warn">Unused (warn)</option>
             </select>
           </label>
           <div className={styles.fieldGrow}>

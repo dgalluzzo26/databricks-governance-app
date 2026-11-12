@@ -836,7 +836,7 @@ export interface TreeTableList {
   truncated: boolean;
 }
 
-/** How the planner treats an ancestor grant that would over-expose descendants. */
+/** Legacy setting; SELECT is table-only so parent/child mismatches are not reported. */
 export type DataAccessConflictPolicy = "hold" | "warn";
 
 /** Admin-editable configuration for the data-access group dry-run. */
