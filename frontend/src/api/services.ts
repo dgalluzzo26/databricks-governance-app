@@ -6,6 +6,8 @@
  */
 import { HttpClient } from "./httpClient";
 import type {
+  RecoveryGitSettings,
+  RecoveryPreview,
   AccessRequest,
   AccessRequestList,
   AnalyzeAttributeRequest,
@@ -969,6 +971,41 @@ export class PolicyExceptionsApi {
 }
 
 /** The full set of API services exposed to components via `useApi()`. */
+/** Recovery export preview and Git target settings (`/api/recovery`, admin only). */
+export class RecoveryApi {
+  /** @param http - Shared HTTP client. */
+  constructor(private readonly http: HttpClient) {}
+
+  /**
+   * `GET /recovery/settings` — saved Git target settings, or defaults.
+   *
+   * @param signal - Optional abort signal.
+   * @returns The settings (never includes the token).
+   */
+  getSettings(signal?: AbortSignal): Promise<RecoveryGitSettings> {
+    return this.http.get<RecoveryGitSettings>("/recovery/settings", signal);
+  }
+
+  /**
+   * `PUT /recovery/settings` — save the Git target settings.
+   *
+   * @param body - Settings to store.
+   * @returns The settings as stored.
+   */
+  saveSettings(body: RecoveryGitSettings): Promise<RecoveryGitSettings> {
+    return this.http.put<RecoveryGitSettings>("/recovery/settings", body);
+  }
+
+  /**
+   * `POST /recovery/export/preview` — build the export files without writing to Git.
+   *
+   * @returns The files, target, and warnings for this snapshot.
+   */
+  previewExport(): Promise<RecoveryPreview> {
+    return this.http.post<RecoveryPreview>("/recovery/export/preview", {});
+  }
+}
+
 export interface ApiServices {
   identity: IdentityApi;
   directory: DirectoryApi;
@@ -982,6 +1019,7 @@ export interface ApiServices {
   attributeExplorer: AttributeExplorerApi;
   help: HelpApi;
   policyExceptions: PolicyExceptionsApi;
+  recovery: RecoveryApi;
 }
 
 /**
@@ -996,6 +1034,7 @@ export function createApiServices(http: HttpClient = new HttpClient()): ApiServi
     directory: new DirectoryApi(http),
     appInfo: new AppInfoApi(http),
     dataAccess: new DataAccessApi(http),
+    recovery: new RecoveryApi(http),
     policies: new PoliciesApi(http),
     identityAttributes: new IdentityAttributesApi(http),
     rowFilters: new RowFiltersApi(http),

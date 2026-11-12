@@ -19,6 +19,7 @@ from backend.app.api.routes import (
     me,
     policies,
     policy_exceptions,
+    recovery,
     row_filters,
 )
 from backend.app.api.routes import (
@@ -41,6 +42,7 @@ ROUTERS: tuple[APIRouter, ...] = (
     access_explorer.router,
     attribute_explorer.router,
     data_access.router,
+    recovery.router,
 )
 
 api_router = APIRouter(prefix="/api")

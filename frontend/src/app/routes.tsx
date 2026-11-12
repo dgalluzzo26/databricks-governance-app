@@ -24,6 +24,7 @@ import { HelpPage } from "@/pages/help/HelpPage";
 import { DataAccessPage } from "@/pages/dataAccess/DataAccessPage";
 import { MaskRulesPage } from "@/pages/maskRules/MaskRulesPage";
 import { RowFiltersPage } from "@/pages/rowFilters/RowFiltersPage";
+import { RecoveryPage } from "@/pages/recovery/RecoveryPage";
 
 /** Declarative route config mounted under {@link AppShell}. */
 export const routes: RouteObject[] = [
@@ -95,6 +96,14 @@ export const routes: RouteObject[] = [
         element: (
           <RequireAdmin>
             <DataAccessPage />
+          </RequireAdmin>
+        ),
+      },
+      {
+        path: "recovery",
+        element: (
+          <RequireAdmin>
+            <RecoveryPage />
           </RequireAdmin>
         ),
       },

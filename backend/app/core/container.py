@@ -26,6 +26,7 @@ from backend.app.services.identity_uc_sync import IdentityUcSync
 from backend.app.services.mask_rules import MaskRuleService
 from backend.app.services.policies import PolicyService
 from backend.app.services.policy_exceptions import PolicyExceptionService
+from backend.app.services.recovery import RecoveryService
 from backend.app.services.request_context import RequestContextResolver
 from backend.app.services.row_filters import RowFilterService
 
@@ -57,6 +58,7 @@ class ServiceContainer:
         attribute_explorer: Attribute path holders and unlocked tables.
         policy_exceptions: Principals exempted from the app-managed policies.
         data_access: Tag-driven group grant sync (settings, readiness, dry-run/apply).
+        recovery: Recovery export preview and Git target settings.
         identity_uc_sync: Mirrors identity attributes to Unity Catalog Delta; only set for
             the Lakebase backend, otherwise None.
     """
@@ -78,6 +80,7 @@ class ServiceContainer:
     attribute_explorer: AttributeExplorerService
     policy_exceptions: PolicyExceptionService
     data_access: DataAccessService
+    recovery: RecoveryService
     identity_uc_sync: IdentityUcSync | None = None
 
     @classmethod
@@ -161,6 +164,7 @@ class ServiceContainer:
             attribute_explorer=attribute_explorer,
             policy_exceptions=policy_exceptions,
             data_access=data_access,
+            recovery=RecoveryService(config, storage),
             identity_uc_sync=uc_sync,
         )
 

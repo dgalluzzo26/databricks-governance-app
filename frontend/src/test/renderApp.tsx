@@ -5,6 +5,8 @@ import { ApiProvider } from "@/api/ApiProvider";
 import type { ApiServices } from "@/api/services";
 import type {
   AccessRequestList,
+  RecoveryGitSettings,
+  RecoveryPreview,
   AppInfo,
   ApprovalInbox,
   AssignAttributeRequest,
@@ -49,6 +51,30 @@ export const testUser: CurrentUser = {
   isAdmin: true,
   isApprover: true,
   workspaceHost: "https://example.cloud.databricks.com",
+};
+
+export const testRecoverySettings: RecoveryGitSettings = {
+  repoUrl: "",
+  branch: "main",
+  pathPrefix: "governance-export",
+  username: "",
+  tokenSecretKey: "git-token",
+};
+
+export const testRecoveryPreview: RecoveryPreview = {
+  generatedAt: "2026-11-11T23:00:00Z",
+  generatedBy: "admin@example.com",
+  target: "",
+  git: testRecoverySettings,
+  files: [
+    { path: "manifest.yaml", records: 0, content: "version: 1\n" },
+    {
+      path: "masking/config.yaml",
+      records: 0,
+      content: "joinable_salt:\n  configured: true\n  value: <redacted>\n",
+    },
+  ],
+  warnings: ["The joinable salt is not exported (value redacted)."],
 };
 
 export const testDataAccessSettings: DataAccessSettingsView = {
@@ -654,6 +680,11 @@ export function fakeServices(
           total: 2,
           truncated: false,
         }) satisfies DirectoryPrincipalList,
+    },
+    recovery: {
+      getSettings: async () => testRecoverySettings,
+      saveSettings: async (body: RecoveryGitSettings) => body,
+      previewExport: async () => testRecoveryPreview,
     },
     dataAccess: {
       getSettings: () =>

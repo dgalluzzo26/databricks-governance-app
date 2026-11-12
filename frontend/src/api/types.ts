@@ -1074,3 +1074,29 @@ export interface DataAccessRun {
   /** Wall-clock seconds from start to finish; null while running. */
   durationSeconds?: number | null;
 }
+
+/** Git target for recovery exports. The token is never sent to the browser; only its secret key name. */
+export interface RecoveryGitSettings {
+  repoUrl: string;
+  branch: string;
+  pathPrefix: string;
+  username: string;
+  tokenSecretKey: string;
+}
+
+/** One YAML file a recovery push would commit. */
+export interface RecoveryFile {
+  path: string;
+  records: number;
+  content: string;
+}
+
+/** Dry-run recovery export (`POST /recovery/export/preview`). */
+export interface RecoveryPreview {
+  generatedAt: string;
+  generatedBy: string;
+  target: string;
+  git: RecoveryGitSettings;
+  files: RecoveryFile[];
+  warnings: string[];
+}

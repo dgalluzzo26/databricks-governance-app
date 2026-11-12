@@ -77,6 +77,7 @@ export const navigation: NavSection[] = [
     title: "App",
     items: [
       { label: "Help", to: "/help", icon: HelpIcon },
+      { label: "Recovery", to: "/recovery", icon: DataAccessIcon, adminOnly: true },
       { label: "App status", to: "/status", icon: StatusIcon, adminOnly: true },
     ],
   },

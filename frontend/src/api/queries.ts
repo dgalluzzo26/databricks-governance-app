@@ -9,6 +9,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useApi } from "./ApiProvider";
 import type {
+  RecoveryGitSettings,
   AssignAttributeRequest,
   AttachRowFilterRequest,
   AssignmentListParams,
@@ -58,6 +59,7 @@ export const queryKeys = {
   helpApiReference: ["help", "api-reference"] as const,
   policyExceptions: ["policy-exceptions"] as const,
   dataAccessSettings: ["data-access", "settings"] as const,
+  recoverySettings: ["recovery", "settings"] as const,
   dataAccessReadiness: ["data-access", "readiness"] as const,
   dataAccessRuns: (mode: "dry_run" | "apply", page: number) =>
     ["data-access", "runs", mode, page] as const,
@@ -1137,5 +1139,49 @@ export function useApplyPolicyExceptions() {
       void client.invalidateQueries({ queryKey: queryKeys.maskRulePack });
       void client.invalidateQueries({ queryKey: queryKeys.rowFilterPack });
     },
+  });
+}
+
+/**
+ * Loads the recovery Git target settings (`GET /recovery/settings`).
+ *
+ * @remarks Key: `queryKeys.recoverySettings`.
+ * @returns The query result for {@link RecoveryGitSettings}.
+ */
+export function useRecoverySettings() {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.recoverySettings,
+    queryFn: ({ signal }) => api.recovery.getSettings(signal),
+  });
+}
+
+/**
+ * Saves the recovery Git target settings (`PUT /recovery/settings`).
+ *
+ * @returns A mutation taking {@link RecoveryGitSettings}.
+ */
+export function useSaveRecoverySettings() {
+  const api = useApi();
+  const client = useQueryClient();
+  return useMutation({
+    meta: { busyMessage: "Saving recovery settings…" },
+    mutationFn: (body: RecoveryGitSettings) => api.recovery.saveSettings(body),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ["recovery"] });
+    },
+  });
+}
+
+/**
+ * Builds a dry-run recovery export (`POST /recovery/export/preview`). Writes nothing.
+ *
+ * @returns A mutation returning {@link RecoveryPreview}.
+ */
+export function usePreviewRecoveryExport() {
+  const api = useApi();
+  return useMutation({
+    meta: { busyMessage: "Building recovery preview…" },
+    mutationFn: () => api.recovery.previewExport(),
   });
 }
