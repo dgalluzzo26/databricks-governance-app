@@ -132,8 +132,8 @@ def main(argv: list[str] | None = None) -> int:
         get_config.cache_clear()
         config = get_config()
         container = ServiceContainer.build(config)
-        # Job must not start the (removed) in-app scheduler; startup still hydrates storage.
-        container.startup()
+        # App SP owns Lakebase tables and runs DDL; Job only needs a live connection.
+        container.startup(migrate_storage=False, sync_schedule=False)
         try:
             settings = container.data_access.get_settings().settings
             if trigger == SyncTrigger.SCHEDULE and not settings.schedule_enabled:

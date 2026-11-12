@@ -308,9 +308,7 @@ class AccessRequestRepository(ABC):
         """
 
     @abstractmethod
-    def has_pending_for(
-        self, *, requester_name: str, attribute_key: str, attribute_value: str
-    ) -> bool:
+    def has_pending_for(self, *, requester_name: str, attribute_key: str, attribute_value: str) -> bool:
         """Report whether a pending request already exists for the same grant.
 
         Matching is case-insensitive on requester name and attribute value.
@@ -325,9 +323,7 @@ class AccessRequestRepository(ABC):
         """
 
     @abstractmethod
-    def dismiss_renewal(
-        self, assignment_id: str, expires_at: datetime, actor: str, at: datetime
-    ) -> None:
+    def dismiss_renewal(self, assignment_id: str, expires_at: datetime, actor: str, at: datetime) -> None:
         """Record that a renewal prompt was dismissed for an assignment expiry.
 
         The dismissal is keyed by ``(assignment_id, expires_at)`` so a later re-grant
@@ -536,8 +532,13 @@ class StorageProvider(ABC):
             Repository used for global ABAC policy exceptions.
         """
 
-    def initialize(self) -> None:
-        """Prepare storage (create schema, open pools). Must be idempotent."""
+    def initialize(self, *, apply_ddl: bool = True) -> None:
+        """Prepare storage (create schema, open pools). Must be idempotent.
+
+        Args:
+            apply_ddl: When False, open connections only and skip schema migrations.
+                Used by the sync Job, which runs as the Admin SP and is not the table owner.
+        """
 
     @abstractmethod
     def health(self) -> StorageHealth:

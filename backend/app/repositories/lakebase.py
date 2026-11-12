@@ -1406,18 +1406,20 @@ class LakebaseStorageProvider(StorageProvider):
         """Return the policy-exception repository for this provider."""
         return self._policy_exceptions
 
-    def initialize(self) -> None:
+    def initialize(self, *, apply_ddl: bool = True) -> None:
         """Open the pool, apply DDL, and backfill columns for older workspaces.
 
         Idempotent: safe to call on every process start. Adds columns that older
         deployments may lack (governed tag keys, value source/SQL, mask kind/expression).
 
-        When the caller is not the table owner (e.g. the sync Job running as the
-        Account Admin SP while the app SP owns the tables), DDL that requires
-        ownership (CREATE INDEX, ALTER TABLE) is skipped — the schema already
-        exists and the statements are idempotent no-ops.
+        Args:
+            apply_ddl: When False (sync Job), only open the pool. Schema migrations stay
+                with the app SP, which owns the Postgres tables.
         """
         self._pool.open(wait=True, timeout=30)
+        if not apply_ddl:
+            logger.info("Lakebase pool ready at %s (DDL skipped)", self._location)
+            return
         try:
             self._pg.run(_DDL)
             # Existing workspaces created the table before governed_tag_keys existed.

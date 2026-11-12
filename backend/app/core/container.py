@@ -174,16 +174,20 @@ class ServiceContainer:
             identity_uc_sync=uc_sync,
         )
 
-    def startup(self) -> None:
-        """Prepare external state before serving requests.
+    def startup(self, *, migrate_storage: bool = True, sync_schedule: bool = True) -> None:
+        """Prepare external state before serving requests or running a sync Job.
 
         Loads Account Admin SP credentials, initializes storage, and mirrors identity
         attributes and mask rules to Unity Catalog. Failures are logged rather than raised so
         the app still starts and can report the problem in the UI.
+
+        Args:
+            migrate_storage: When False, open storage without DDL (sync Job path).
+            sync_schedule: When False, skip pushing settings to the Job schedule (Job path).
         """
         self._ensure_admin_credentials()
         try:
-            self.storage.initialize()
+            self.storage.initialize(apply_ddl=migrate_storage)
         except Exception:
             # Keep serving so the UI can show the storage problem instead of a dead app.
             logger.exception("Storage backend %s failed to initialize", self.storage.kind)
@@ -200,7 +204,8 @@ class ServiceContainer:
                 self.mask_rules.sync_to_uc()
         except Exception:
             logger.exception("Failed to sync mask rules to UC mirror")
-        self.data_access.sync_job_schedule_from_storage()
+        if sync_schedule:
+            self.data_access.sync_job_schedule_from_storage()
 
     def shutdown(self) -> None:
         """Release storage resources such as connection pools."""
