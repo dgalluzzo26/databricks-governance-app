@@ -19,7 +19,10 @@ import sys
 from pathlib import Path
 
 # Bundle deploys this file under ``.../files/backend/jobs/``; repo root is two up.
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+# Databricks spark_python_task runs via an IPython kernel where ``__file__`` is
+# not defined, so fall back to ``sys.argv[0]`` (the python_file path).
+_here = Path(globals().get("__file__") or sys.argv[0]).resolve()
+_REPO_ROOT = _here.parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 

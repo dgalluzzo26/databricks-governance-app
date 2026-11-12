@@ -41,10 +41,9 @@ variables:
     default: databricks-governance-app
   sync_job_run_as_sp:
     description: >
-      Application ID of the app's service principal (run-as identity for the data-access
-      sync Job, so Lakebase credentials match the app's Postgres role). Find it with
-      `databricks apps get <app> -o json` (service_principal_client_id).
-    default: da48b54e-2dd9-4baf-98a3-67b16e0413db
+      Application ID of the Account Admin SP that runs the data-access sync Job. Must match
+      the admin SP in the secret scope (admin-client-id). The deployer needs Use on it.
+    default: bbf03021-a1ad-4721-a6a3-ddd500982f72
 
 sync:
   exclude:
