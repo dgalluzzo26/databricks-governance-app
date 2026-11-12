@@ -27,3 +27,24 @@ convention = "google"
 [tool.pytest.ini_options]
 testpaths = ["backend/tests"]
 pythonpath = ["."]
+
+[tool.coverage.run]
+source = ["backend/app"]
+branch = false
+
+[tool.coverage.report]
+# Thin infrastructure adapters are exercised through the in-memory repositories and the
+# service-level fakes, not against live Lakebase, Delta, SQL warehouses, or the workspace SDK.
+omit = [
+    # SQL-string adapters for Lakebase Postgres and Delta; live-only behavior.
+    "backend/app/repositories/lakebase.py",
+    "backend/app/repositories/delta.py",
+    # Thin wrappers around the Databricks SDK and SQL warehouse; exercised in deployed runs.
+    "backend/app/clients/workspace.py",
+    "backend/app/clients/sql.py",
+    # Process entrypoint (uvicorn startup); create_app is covered by test_api.py.
+    "backend/app/main.py",
+]
+show_missing = true
+skip_covered = false
+fail_under = 90

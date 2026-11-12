@@ -17,5 +17,11 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
     css: { modules: { classNameStrategy: "non-scoped" } },
+    coverage: {
+      provider: "v8",
+      include: ["src/**"],
+      exclude: ["src/test/**", "src/main.tsx", "src/**/*.d.ts"],
+      thresholds: { lines: 80, statements: 80, functions: 70, branches: 65 },
+    },
   },
 });
