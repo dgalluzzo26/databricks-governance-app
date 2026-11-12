@@ -1,0 +1,63 @@
+# Scheduled + on-demand data-access sync. The app no longer runs a daemon thread;
+# Run now and the schedule both go through this job (max_concurrent_runs: 1).
+resources:
+  jobs:
+    data_access_sync:
+      name: ${var.app_name}-data-access-sync
+      description: >
+        Inventories UC tags and Identity assignments, plans dac_* group grants,
+        and optionally applies (create/nest groups, membership, GRANT/REVOKE).
+      max_concurrent_runs: 1
+      queue:
+        enabled: true
+      timeout_seconds: 3600
+      # App service principal so Lakebase credentials match the app's Postgres role.
+      run_as:
+        service_principal_name: ${var.sync_job_run_as_sp}
+      schedule:
+        quartz_cron_expression: "0 */15 * * * ?"
+        timezone_id: UTC
+        pause_status: UNPAUSED
+      parameters:
+        - name: mode
+          default: ""
+        - name: trigger
+          default: schedule
+        - name: actor
+          default: scheduler
+        - name: run_id
+          default: ""
+      tasks:
+        - task_key: sync
+          environment_key: default
+          max_retries: 1
+          min_retry_interval_millis: 60000
+          spark_python_task:
+            python_file: ../backend/jobs/run_data_access_sync.py
+            parameters:
+              - "--mode={{job.parameters.mode}}"
+              - "--trigger={{job.parameters.trigger}}"
+              - "--actor={{job.parameters.actor}}"
+              - "--run_id={{job.parameters.run_id}}"
+              - "--warehouse-id=${var.warehouse_id}"
+              - "--storage-backend=${var.storage_backend}"
+              - "--app-catalog=${var.app_catalog}"
+              - "--app-schema=${var.app_schema}"
+              - "--admin-group=${var.admin_group}"
+              - "--admin-secret-scope=${var.admin_secret_scope}"
+              - "--lakebase-project-id=${var.lakebase_project_id}"
+              - "--lakebase-database-id=${var.lakebase_database_id}"
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "4"
+            # Mirrors requirements.txt; inlined because relative -r paths are not resolved
+            # for serverless environments.
+            dependencies:
+              - databricks-sdk==0.163.0
+              - pydantic==2.14.3
+              - pydantic-settings==2.16.2
+              - psycopg[binary]==3.3.8
+              - psycopg-pool==3.3.3
+              - cachetools==7.2.8
+              - PyYAML==6.0.3

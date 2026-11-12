@@ -2,6 +2,8 @@
 
 Reads catalog/schema/table tags, current grants, and Identity assignments; plans managed
 ``dac_*`` groups (nesting, membership, GRANT/REVOKE). Apply mutates account groups and UC.
+The Databricks Job owns the schedule; the app triggers that Job for Run now and updates its
+cron/pause when settings are saved.
 """
 
 from __future__ import annotations
@@ -13,13 +15,13 @@ from datetime import UTC, datetime, timedelta
 
 from databricks.sdk.errors import DatabricksError
 from databricks.sdk.service.iam import GroupSchema, PatchSchema
+from databricks.sdk.service.jobs import CronSchedule, JobSettings, PauseStatus
 from pydantic import ValidationError
 
 from backend.app.clients.sql import SqlExecutor, quote_identifier, string_literal
 from backend.app.clients.workspace import WorkspaceClientFactory
-from backend.app.core.errors import InvalidRequestError, NotConfiguredError, NotFoundError
+from backend.app.core.errors import InvalidRequestError, NotConfiguredError, NotFoundError, UpstreamError
 from backend.app.models.data_access import (
-    MIN_SYNC_INTERVAL_MINUTES,
     RUN_HISTORY_LIMIT,
     RUN_HISTORY_PAGE_SIZE_DEFAULT,
     RUN_HISTORY_PAGE_SIZE_MAX,
@@ -50,9 +52,12 @@ from backend.app.services.data_access_planner import (
     plan_data_access,
     truncate_plan,
 )
+from backend.app.services.data_access_schedule import quartz_cron_for_interval_minutes, snap_interval_minutes
 from backend.app.services.identity_attributes import IdentityAttributeService
 
 logger = logging.getLogger(__name__)
+
+_JOB_WAIT = timedelta(minutes=30)
 
 
 def collapse_membership_by_principal_id(
@@ -100,8 +105,10 @@ class DataAccessService:
     Args:
         storage: App state (settings JSON for config and run history).
         sql: Warehouse executor running as the Account Admin SP.
-        factory: Workspace clients for readiness probes and group listing.
+        factory: Workspace clients for readiness probes, group listing, and Job trigger.
         identity_attributes: Optional Identity service for governance setup checks.
+        sync_job_id: Databricks Job id that owns the schedule; None runs sync in-process
+            (tests and local memory mode).
     """
 
     def __init__(
@@ -110,14 +117,15 @@ class DataAccessService:
         sql: SqlExecutor,
         factory: WorkspaceClientFactory,
         identity_attributes: IdentityAttributeService | None = None,
+        *,
+        sync_job_id: str | None = None,
     ) -> None:
         self._storage = storage
         self._sql = sql
         self._factory = factory
         self._identity = identity_attributes
+        self._sync_job_id = (sync_job_id or "").strip() or None
         self._lock = threading.Lock()
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
         # Tests replace inventory loaders without a warehouse.
         self._tag_loader = self._load_tags
         self._grant_loader = self._load_grants
@@ -150,6 +158,7 @@ class DataAccessService:
             The stored settings view.
         """
         self._storage.settings.put_many({_SETTINGS_KEY: body.model_dump(mode="json")}, actor.user_name)
+        self.sync_job_schedule(body)
         logger.info("Data-access settings updated by %s", actor.user_name)
         return DataAccessSettingsView(
             settings=body,
@@ -316,7 +325,9 @@ class DataAccessService:
         return runs[0] if runs else None
 
     def run_now(self, actor: CurrentUser, *, mode: str = "dry_run") -> DataAccessRun:
-        """Run a sync as the signed-in admin.
+        """Run a sync as the signed-in admin via the Databricks Job (waits for completion).
+
+        When ``DATA_ACCESS_SYNC_JOB_ID`` is unset (tests/local), runs in-process instead.
 
         Args:
             actor: Admin who clicked Run now.
@@ -327,11 +338,126 @@ class DataAccessService:
 
         Raises:
             InvalidRequestError: If another run holds the lock or apply is not ready.
+            UpstreamError: If the Job cannot be started or fails before writing a run.
         """
-        return self.run_sync(actor=actor.user_name, trigger=SyncTrigger.USER, mode=mode)
+        if self._sync_job_id is None:
+            return self.run_sync(actor=actor.user_name, trigger=SyncTrigger.USER, mode=mode)
+        return self.trigger_job_and_wait(actor=actor, mode=mode)
+
+    def trigger_job_and_wait(self, *, actor: CurrentUser, mode: str = "dry_run") -> DataAccessRun:
+        """Start the data-access sync Job and wait until it finishes, then return the run.
+
+        Args:
+            actor: Admin who clicked Run now.
+            mode: ``dry_run`` or ``apply``.
+
+        Returns:
+            The run written by the Job entrypoint.
+
+        Raises:
+            NotConfiguredError: If the Job id is not configured.
+            InvalidRequestError: If apply is blocked by readiness.
+            UpstreamError: If the Job fails or the run record is missing afterward.
+        """
+        if self._sync_job_id is None:
+            raise NotConfiguredError("DATA_ACCESS_SYNC_JOB_ID is not set")
+        mode = (mode or "dry_run").strip().lower()
+        if mode not in {"dry_run", "apply"}:
+            raise InvalidRequestError("mode must be dry_run or apply")
+        if mode == "apply":
+            readiness = self.readiness()
+            if not readiness.apply_ready:
+                raise InvalidRequestError(
+                    "Apply is not ready — fix failing Account Admin SP / warehouse checks"
+                )
+            if not readiness.setup_ready:
+                raise InvalidRequestError(
+                    "Apply requires sensitivity and data-access Identity definitions"
+                )
+        run_id = str(uuid.uuid4())
+        job_id = int(self._sync_job_id)
+        try:
+            self._factory.app().jobs.run_now_and_wait(
+                job_id,
+                job_parameters={
+                    "mode": mode,
+                    "trigger": SyncTrigger.USER.value,
+                    "actor": actor.user_name,
+                    "run_id": run_id,
+                },
+                timeout=_JOB_WAIT,
+            )
+        except Exception as exc:  # noqa: BLE001 - map Job failures to a clear API error
+            try:
+                return self.get_run(run_id)
+            except NotFoundError:
+                raise UpstreamError(f"Data-access sync Job failed: {exc}") from exc
+        try:
+            return self.get_run(run_id)
+        except NotFoundError as exc:
+            raise UpstreamError(
+                f"Data-access sync Job finished but run {run_id} was not found in history"
+            ) from exc
+
+    def sync_job_schedule_from_storage(self) -> None:
+        """Re-apply stored interval and pause state to the Job (called on app startup).
+
+        A bundle deploy resets the Job to the YAML schedule, so startup pushes the saved
+        settings back. Failures are logged rather than raised so the app still starts.
+        """
+        if self._sync_job_id is None:
+            return
+        try:
+            self.sync_job_schedule(self._settings())
+        except UpstreamError:
+            logger.exception("Could not re-apply data-access sync Job schedule at startup")
+
+    def sync_job_schedule(self, settings: DataAccessSettings) -> None:
+        """Push interval and pause state to the Databricks Job schedule.
+
+        No-op when the Job id is unset (tests/local). ``schedule_mode`` stays in storage;
+        scheduled ticks read it at run time.
+
+        Args:
+            settings: Settings that were just saved.
+
+        Raises:
+            UpstreamError: If the Job schedule cannot be updated.
+        """
+        if self._sync_job_id is None:
+            return
+        snapped = snap_interval_minutes(settings.interval_minutes)
+        cron = quartz_cron_for_interval_minutes(settings.interval_minutes)
+        pause = PauseStatus.UNPAUSED if settings.schedule_enabled else PauseStatus.PAUSED
+        try:
+            self._factory.app().jobs.update(
+                int(self._sync_job_id),
+                new_settings=JobSettings(
+                    schedule=CronSchedule(
+                        quartz_cron_expression=cron,
+                        timezone_id="UTC",
+                        pause_status=pause,
+                    )
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise UpstreamError(f"Could not update data-access sync Job schedule: {exc}") from exc
+        logger.info(
+            "Data-access sync Job %s schedule cron=%s pause=%s (requested %sm, snapped %sm)",
+            self._sync_job_id,
+            cron,
+            pause.value,
+            settings.interval_minutes,
+            snapped,
+        )
 
     def run_sync(
-        self, *, actor: str, trigger: SyncTrigger, mode: str = "dry_run"
+        self,
+        *,
+        actor: str,
+        trigger: SyncTrigger,
+        mode: str = "dry_run",
+        run_id: str | None = None,
     ) -> DataAccessRun:
         """Inventory, plan, optionally apply, and persist the run.
 
@@ -339,6 +465,7 @@ class DataAccessService:
             actor: User name or ``scheduler``.
             trigger: Manual or scheduled.
             mode: ``dry_run`` (plan only) or ``apply`` (mutate groups/grants/members).
+            run_id: Optional predetermined id (Job Run now passes one so the app can wait).
 
         Returns:
             The stored run.
@@ -359,7 +486,7 @@ class DataAccessService:
                 raise InvalidRequestError(
                     "Apply requires sensitivity and data-access Identity definitions"
                 )
-        run_id = str(uuid.uuid4())
+        run_id = (run_id or "").strip() or str(uuid.uuid4())
         started = datetime.now(UTC)
         if not self._acquire_lock(run_id, started):
             raise InvalidRequestError("A data-access sync is already running")
@@ -435,47 +562,6 @@ class DataAccessService:
             return failed
         finally:
             self._release_lock(run_id)
-
-    def start_scheduler(self) -> None:
-        """Start the background dry-run loop if it is not already running."""
-        if self._thread is not None and self._thread.is_alive():
-            return
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._scheduler_loop, name="data-access-sync", daemon=True)
-        self._thread.start()
-
-    def stop_scheduler(self) -> None:
-        """Signal the scheduler thread to exit and wait briefly."""
-        self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=2)
-            self._thread = None
-
-    def _scheduler_loop(self) -> None:
-        """Sleep for the interval, then dry-run or apply per settings when enabled.
-
-        Apply mode still plans first (inventory → plan → mutate) in one run — the same
-        path as Live → Run apply. Readiness failures and lock contention skip the tick.
-        """
-        while not self._stop.wait(self._interval_seconds()):
-            settings = self._settings()
-            if not settings.schedule_enabled:
-                logger.debug("Scheduled data-access sync paused (schedule_enabled=false)")
-                continue
-            mode = (settings.schedule_mode.value if settings.schedule_mode else "dry_run").lower()
-            if mode not in {"dry_run", "apply"}:
-                mode = "dry_run"
-            try:
-                self.run_sync(actor="scheduler", trigger=SyncTrigger.SCHEDULE, mode=mode)
-            except InvalidRequestError as exc:
-                logger.info("Skipping scheduled data-access %s: %s", mode, exc)
-            except Exception:
-                logger.exception("Scheduled data-access %s failed", mode)
-
-    def _interval_seconds(self) -> float:
-        """Return the current scheduler sleep in seconds (at least the minimum)."""
-        minutes = max(self._settings().interval_minutes, MIN_SYNC_INTERVAL_MINUTES)
-        return float(minutes * 60)
 
     @staticmethod
     def _normalize_mode_filter(mode: str | None) -> str | None:

@@ -72,8 +72,8 @@ class DataAccessSettings(ApiModel):
         enrollment_catalog_tag_value: Required value of ``enrollment_catalog_tag_key``.
         allowed_catalogs: Deprecated; ignored. Perimeter is enrollment-tag discovery only.
         data_privileges: Privileges granted on the tagged securable (traversal is added).
-        interval_minutes: How often the in-app scheduler runs when enabled.
-        schedule_enabled: When false, the background scheduler is paused.
+        interval_minutes: How often the Databricks sync Job runs when enabled.
+        schedule_enabled: When false, the Job schedule is paused.
         schedule_mode: ``dry_run`` (plan only) or ``apply`` (plan then mutate UC).
         conflict_policy: Legacy field; parent/child tag mismatches are not reported.
         dry_run: Preferred mode for the settings form (legacy; schedule uses schedule_mode).

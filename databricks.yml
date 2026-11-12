@@ -39,6 +39,12 @@ variables:
   admin_secret_scope:
     description: Secret scope holding Account Admin SP client_id / client_secret (metastore ABAC)
     default: databricks-governance-app
+  sync_job_run_as_sp:
+    description: >
+      Application ID of the app's service principal (run-as identity for the data-access
+      sync Job, so Lakebase credentials match the app's Postgres role). Find it with
+      `databricks apps get <app> -o json` (service_principal_client_id).
+    default: da48b54e-2dd9-4baf-98a3-67b16e0413db
 
 sync:
   exclude:

@@ -100,6 +100,8 @@ class AppConfig(BaseSettings):
             (``DEV_USER_EMAIL``); None falls back to the CLI profile's user.
         frontend_dist: Directory of the built frontend served as static files
             (``FRONTEND_DIST``).
+        data_access_sync_job_id: Databricks Job id for data-access sync
+            (``DATA_ACCESS_SYNC_JOB_ID``); None falls back to in-process runs (tests/local).
     """
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", populate_by_name=True)
@@ -153,6 +155,7 @@ class AppConfig(BaseSettings):
 
     dev_user_email: str | None = Field(None, alias="DEV_USER_EMAIL")
     frontend_dist: Path = Field(REPO_ROOT / "frontend" / "dist", alias="FRONTEND_DIST")
+    data_access_sync_job_id: str | None = Field(None, alias="DATA_ACCESS_SYNC_JOB_ID")
 
     @property
     def admin_sp_configured(self) -> bool:

@@ -29,6 +29,9 @@ resources:
             value_from: admin-client-id
           - name: ADMIN_CLIENT_SECRET
             value_from: admin-client-secret
+          # Job that owns the data-access schedule; Run now triggers it and waits.
+          - name: DATA_ACCESS_SYNC_JOB_ID
+            value_from: data-access-sync-job
       resources:
         - name: sql-warehouse
           sql_warehouse:
@@ -49,3 +52,7 @@ resources:
             scope: ${var.admin_secret_scope}
             key: client_secret
             permission: READ
+        - name: data-access-sync-job
+          job:
+            id: ${resources.jobs.data_access_sync.id}
+            permission: CAN_MANAGE

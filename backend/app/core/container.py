@@ -134,7 +134,13 @@ class ServiceContainer:
         policy_exceptions._mask_rules = mask_rules  # noqa: SLF001
         policy_exceptions._row_filters = row_filters  # noqa: SLF001
         access_requests = AccessRequestService(storage, identity_attributes)
-        data_access = DataAccessService(storage, sql, workspace, identity_attributes)
+        data_access = DataAccessService(
+            storage,
+            sql,
+            workspace,
+            identity_attributes,
+            sync_job_id=config.data_access_sync_job_id,
+        )
         attribute_explorer = AttributeExplorerService(
             storage, identity_attributes, access_requests, data_access
         )
@@ -194,14 +200,10 @@ class ServiceContainer:
                 self.mask_rules.sync_to_uc()
         except Exception:
             logger.exception("Failed to sync mask rules to UC mirror")
-        try:
-            self.data_access.start_scheduler()
-        except Exception:
-            logger.exception("Failed to start data-access dry-run scheduler")
+        self.data_access.sync_job_schedule_from_storage()
 
     def shutdown(self) -> None:
-        """Stop background work and release storage resources such as connection pools."""
-        self.data_access.stop_scheduler()
+        """Release storage resources such as connection pools."""
         self.storage.close()
 
     def _ensure_admin_credentials(self) -> None:

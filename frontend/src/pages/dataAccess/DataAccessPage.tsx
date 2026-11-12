@@ -3,7 +3,7 @@
  *
  * Dry-run tab: configure schedule, run the planner, inspect dry-run logs.
  * Live tab: apply readiness, manual apply, live-only logs.
- * Schedule can pause, dry-run only, or plan-then-apply each interval.
+ * Schedule is a Databricks Job; Run now triggers that Job and waits.
  */
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
@@ -138,8 +138,8 @@ export function DataAccessPage() {
             }
           >
             <p className={styles.muted}>
-              Plans groups, nesting, Identity→membership diffs, and table SELECT grants without
-              mutating Unity Catalog.
+              Starts the sync Job and waits for it to finish. Plans groups, nesting,
+              Identity→membership diffs, and table SELECT grants without mutating Unity Catalog.
             </p>
             {run.error && <ErrorAlert error={run.error} title="Dry-run failed" />}
             {(dryLatest.isPending || (drySelectedId !== null && drySelected.isPending)) && (
@@ -259,7 +259,7 @@ function LiveTab(props: {
       <Card title="Schedule">
         {scheduleApplies ? (
           <Alert tone="success" title="Scheduled apply is on">
-            Every interval the scheduler inventories tags, builds a plan, then mutates groups /
+            Every Job interval inventories tags, builds a plan, then mutates groups /
             membership / grants — the same path as Run apply. Logs appear below (apply only).
           </Alert>
         ) : (
@@ -549,6 +549,10 @@ function SettingsCard(props: {
               value={form.intervalMinutes}
               onChange={(e) => setForm({ ...form, intervalMinutes: Number(e.target.value) })}
             />
+            <span className={styles.muted}>
+              Saved to the sync Job schedule (snapped to a cron-friendly step such as 5, 15, 30, or
+              60).
+            </span>
           </label>
           <label className={styles.field}>
             <span className={styles.label}>Schedule</span>
@@ -622,8 +626,9 @@ function SettingsCard(props: {
         </div>
         {form.scheduleEnabled && form.scheduleMode === "apply" && (
           <Alert tone="warning" title="Scheduled apply will mutate Unity Catalog">
-            Each interval invents the desired state from tags + Identity, then creates groups,
+            Each Job interval invents the desired state from tags + Identity, then creates groups,
             syncs members, and GRANT/REVOKE. Pause the schedule or switch mode to Dry-run to stop.
+            The Job keeps running even if the app restarts.
           </Alert>
         )}
         <div className={styles.buttonRow}>
