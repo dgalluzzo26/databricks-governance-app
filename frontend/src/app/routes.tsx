@@ -22,6 +22,7 @@ import { AccessExplorerPage } from "@/pages/accessExplorer/AccessExplorerPage";
 import { PolicyExceptionsPage } from "@/pages/exceptions/PolicyExceptionsPage";
 import { HelpPage } from "@/pages/help/HelpPage";
 import { DataAccessPage } from "@/pages/dataAccess/DataAccessPage";
+import { DataAccessAnalyticsPage } from "@/pages/dataAccess/DataAccessAnalyticsPage";
 import { MaskRulesPage } from "@/pages/maskRules/MaskRulesPage";
 import { RowFiltersPage } from "@/pages/rowFilters/RowFiltersPage";
 import { RecoveryPage } from "@/pages/recovery/RecoveryPage";
@@ -96,6 +97,14 @@ export const routes: RouteObject[] = [
         element: (
           <RequireAdmin>
             <DataAccessPage />
+          </RequireAdmin>
+        ),
+      },
+      {
+        path: "data-access/analytics",
+        element: (
+          <RequireAdmin>
+            <DataAccessAnalyticsPage />
           </RequireAdmin>
         ),
       },

@@ -44,6 +44,7 @@ from backend.app.repositories.base import (
     SettingsRepository,
     StorageProvider,
 )
+from backend.app.repositories.lakebase_views import VIEW_DEFINITIONS, drop_statements
 
 logger = logging.getLogger(__name__)
 
@@ -1462,6 +1463,7 @@ class LakebaseStorageProvider(StorageProvider):
                 "CREATE INDEX IF NOT EXISTS sensitivity_category_approvers_path_idx "
                 "ON {schema}.sensitivity_category_approvers (lower(attribute_key), lower(category_path))"
             )
+            self._apply_data_access_views()
             self._grant_admin_sp_access()
         except psycopg.errors.InsufficientPrivilege:
             logger.warning(
@@ -1469,6 +1471,17 @@ class LakebaseStorageProvider(StorageProvider):
                 "(tables/indexes already exist); continuing with existing schema"
             )
         logger.info("Lakebase schema %s ready", self._location)
+
+    def _apply_data_access_views(self) -> None:
+        """Recreate the data-access analytics views over the stored run history.
+
+        Views are dropped and recreated so column changes deploy cleanly. Runs before
+        the Admin SP grants so the new views inherit SELECT.
+        """
+        for statement in drop_statements():
+            self._pg.run(statement)
+        for statement in VIEW_DEFINITIONS:
+            self._pg.run(statement)
 
     def _grant_admin_sp_access(self) -> None:
         """Grant the Account Admin SP DML on the app schema (for the sync Job).

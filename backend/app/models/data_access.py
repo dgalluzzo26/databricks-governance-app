@@ -411,3 +411,113 @@ class DataAccessRunList(ApiModel):
     page_size: int = RUN_HISTORY_PAGE_SIZE_DEFAULT
     mode: str | None = None
     retention_days: int = RUN_HISTORY_RETENTION_DAYS
+
+
+class DataAccessAnalyticsKpis(ApiModel):
+    """Headline numbers for the analytics window.
+
+    Attributes:
+        total_runs: Runs started in the window (any status).
+        success_runs: Runs that finished successfully.
+        failed_runs: Runs that finished with an error.
+        running_runs: Runs still in progress (or orphaned by a cancel).
+        success_rate: Successes over finished runs, 0..1; None when nothing finished.
+        avg_duration_seconds: Mean wall time across finished runs.
+        last_success_at: Start time of the newest successful run.
+        last_failure_at: Start time of the newest failed run.
+        distinct_fingerprints: Distinct desired-state fingerprints across successful runs.
+        fingerprint_changes: Times the desired state changed between consecutive successes of the same mode.
+    """
+
+    total_runs: int = 0
+    success_runs: int = 0
+    failed_runs: int = 0
+    running_runs: int = 0
+    success_rate: float | None = None
+    avg_duration_seconds: float | None = None
+    last_success_at: datetime | None = None
+    last_failure_at: datetime | None = None
+    distinct_fingerprints: int = 0
+    fingerprint_changes: int = 0
+
+
+class DataAccessAnalyticsDay(ApiModel):
+    """One UTC day and mode of run activity, summed from successful plan summaries.
+
+    Attributes:
+        day: ISO date (UTC).
+        mode: ``dry_run`` or ``apply``.
+        runs: Runs started that day.
+        success: Successful runs.
+        failed: Failed runs.
+        grants_added: Sum of planned GRANTs on successful runs.
+        grants_revoked: Sum of planned REVOKEs on successful runs.
+        members_added: Sum of planned membership adds.
+        members_removed: Sum of planned membership removals.
+        avg_duration_seconds: Mean wall time across finished runs that day; None when none finished.
+    """
+
+    day: str
+    mode: str
+    runs: int = 0
+    success: int = 0
+    failed: int = 0
+    grants_added: int = 0
+    grants_revoked: int = 0
+    members_added: int = 0
+    members_removed: int = 0
+    avg_duration_seconds: float | None = None
+
+
+class DataAccessAnalyticsFailure(ApiModel):
+    """A recent failed run for the failures table.
+
+    Attributes:
+        run_id: Run identifier.
+        mode: ``dry_run`` or ``apply``.
+        started_at: When the run started.
+        triggered_by: Who or what started it.
+        error: Error text stored on the run.
+    """
+
+    run_id: str
+    mode: str
+    started_at: datetime
+    triggered_by: str
+    error: str | None = None
+
+
+class DataAccessAnalyticsFingerprint(ApiModel):
+    """How often one desired-state fingerprint appeared across successful runs.
+
+    Attributes:
+        fingerprint: 16-char hash of the desired state.
+        runs: Successful runs that produced it.
+        first_seen: Earliest run start with this fingerprint.
+        last_seen: Latest run start with this fingerprint.
+    """
+
+    fingerprint: str
+    runs: int
+    first_seen: datetime
+    last_seen: datetime
+
+
+class DataAccessAnalytics(ApiModel):
+    """Dashboard payload for the data-access sync analytics page.
+
+    Attributes:
+        days: Window length used.
+        generated_at: When the payload was computed.
+        kpis: Headline numbers.
+        daily: Per-day, per-mode activity.
+        failures: Most recent failed runs, newest first.
+        fingerprints: Most frequent desired-state fingerprints.
+    """
+
+    days: int
+    generated_at: datetime
+    kpis: DataAccessAnalyticsKpis
+    daily: list[DataAccessAnalyticsDay] = Field(default_factory=list)
+    failures: list[DataAccessAnalyticsFailure] = Field(default_factory=list)
+    fingerprints: list[DataAccessAnalyticsFingerprint] = Field(default_factory=list)

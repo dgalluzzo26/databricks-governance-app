@@ -1173,3 +1173,60 @@ export interface RecoveryApplyResult {
   warnings: string[];
   appHadState: boolean;
 }
+
+/** Headline KPIs for the data-access analytics window (`GET /data-access/analytics`). */
+export interface DataAccessAnalyticsKpis {
+  totalRuns: number;
+  successRuns: number;
+  failedRuns: number;
+  runningRuns: number;
+  /** Successes over finished runs, 0..1; null when nothing finished. */
+  successRate: number | null;
+  avgDurationSeconds: number | null;
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+  distinctFingerprints: number;
+  /** Times the desired state changed between consecutive successful runs of the same mode. */
+  fingerprintChanges: number;
+}
+
+/** One UTC day and mode of sync activity. */
+export interface DataAccessAnalyticsDay {
+  day: string;
+  mode: "dry_run" | "apply";
+  runs: number;
+  success: number;
+  failed: number;
+  grantsAdded: number;
+  grantsRevoked: number;
+  membersAdded: number;
+  membersRemoved: number;
+  avgDurationSeconds: number | null;
+}
+
+/** A recent failed sync. */
+export interface DataAccessAnalyticsFailure {
+  runId: string;
+  mode: "dry_run" | "apply";
+  startedAt: string;
+  triggeredBy: string;
+  error: string | null;
+}
+
+/** How often one desired-state fingerprint appeared across successful runs. */
+export interface DataAccessAnalyticsFingerprint {
+  fingerprint: string;
+  runs: number;
+  firstSeen: string;
+  lastSeen: string;
+}
+
+/** Dashboard payload for data-access sync analytics (`GET /data-access/analytics`). */
+export interface DataAccessAnalytics {
+  days: number;
+  generatedAt: string;
+  kpis: DataAccessAnalyticsKpis;
+  daily: DataAccessAnalyticsDay[];
+  failures: DataAccessAnalyticsFailure[];
+  fingerprints: DataAccessAnalyticsFingerprint[];
+}

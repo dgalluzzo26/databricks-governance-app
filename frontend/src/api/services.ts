@@ -20,6 +20,7 @@ import type {
   AttributeExplorerResult,
   DataAccessReadiness,
   DataAccessRun,
+  DataAccessAnalytics,
   DataAccessRunList,
   DataAccessSettings,
   DataAccessSettingsView,
@@ -184,6 +185,17 @@ export class DataAccessApi {
    */
   readiness(signal?: AbortSignal): Promise<DataAccessReadiness> {
     return this.http.get<DataAccessReadiness>("/data-access/readiness", signal);
+  }
+
+  /**
+   * `GET /data-access/analytics` — KPIs, daily activity, failures, and fingerprints (admin only).
+   *
+   * @param days - Window length in days (1..30).
+   * @param signal - Optional abort signal.
+   * @returns The analytics payload for the window.
+   */
+  analytics(days: number, signal?: AbortSignal): Promise<DataAccessAnalytics> {
+    return this.http.get<DataAccessAnalytics>(`/data-access/analytics?days=${days}`, signal);
   }
 
   /**

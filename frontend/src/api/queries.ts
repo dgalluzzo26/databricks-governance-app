@@ -24,6 +24,7 @@ import type {
   UpsertMaskRuleRequest,
   UpsertPolicyExceptionRequest,
   UpsertRowFilterDimensionRequest,
+  DataAccessAnalytics,
   DataAccessSettings,
   PrincipalKind,
 } from "./types";
@@ -66,6 +67,7 @@ export const queryKeys = {
   dataAccessLatestRun: (mode: "dry_run" | "apply") =>
     ["data-access", "runs", "latest", mode] as const,
   dataAccessRun: (runId: string) => ["data-access", "runs", "id", runId] as const,
+  dataAccessAnalytics: (days: number) => ["data-access", "analytics", days] as const,
   directoryPrincipals: (q: string, kind?: string) => ["directory", "principals", q, kind ?? ""] as const,
 };
 
@@ -173,6 +175,20 @@ export function useDataAccessLatestRun(mode: "dry_run" | "apply") {
   return useQuery({
     queryKey: queryKeys.dataAccessLatestRun(mode),
     queryFn: ({ signal }) => api.dataAccess.latestRun(mode, signal),
+  });
+}
+
+/**
+ * Fetches sync analytics for the admin dashboard (`GET /data-access/analytics`).
+ *
+ * @param days - Window length in days.
+ * @returns The query result for {@link DataAccessAnalytics}.
+ */
+export function useDataAccessAnalytics(days: number) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.dataAccessAnalytics(days),
+    queryFn: ({ signal }) => api.dataAccess.analytics(days, signal),
   });
 }
 

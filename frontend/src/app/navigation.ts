@@ -8,6 +8,7 @@
  */
 import type { ComponentType, SVGProps } from "react";
 import {
+  AnalyticsIcon,
   ApprovalsIcon,
   DataAccessIcon,
   ExceptionIcon,
@@ -33,6 +34,8 @@ export interface NavItem {
   adminOnly?: boolean;
   /** When true, the item is shown to app admins and category approvers. */
   approverVisible?: boolean;
+  /** When true, the link is active only on its exact path (not on nested routes). */
+  end?: boolean;
   /** Optional live badge source (Approvals inbox count). */
   badge?: "approvals";
 }
@@ -70,7 +73,13 @@ export const navigation: NavSection[] = [
       { label: "Exceptions", to: "/exceptions", icon: ExceptionIcon, adminOnly: true },
       { label: "Row filters", to: "/row-filters", icon: RowFilterIcon, adminOnly: true },
       { label: "Mask rules", to: "/mask-rules", icon: MaskRuleIcon, adminOnly: true },
-      { label: "Data access", to: "/data-access", icon: DataAccessIcon, adminOnly: true },
+      { label: "Data access", to: "/data-access", icon: DataAccessIcon, adminOnly: true, end: true },
+      {
+        label: "Data access analytics",
+        to: "/data-access/analytics",
+        icon: AnalyticsIcon,
+        adminOnly: true,
+      },
     ],
   },
   {

@@ -58,7 +58,7 @@ export function SideNav({ isAdmin, canApprove }: { isAdmin: boolean; canApprove:
                   >
                     <NavLink
                       to={to}
-                      end={to === "/"}
+                      end={to === "/" || item.end === true}
                       aria-label={navCollapsed ? tipLabel : undefined}
                       className={({ isActive }) => `${styles.link} ${isActive ? styles.active : ""}`}
                     >

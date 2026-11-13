@@ -8,6 +8,7 @@ from backend.app.api.deps import Admin, Container
 from backend.app.models.data_access import (
     RUN_HISTORY_PAGE_SIZE_DEFAULT,
     RUN_HISTORY_PAGE_SIZE_MAX,
+    DataAccessAnalytics,
     DataAccessReadiness,
     DataAccessRun,
     DataAccessRunList,
@@ -88,6 +89,26 @@ def list_runs(
     return container.data_access.list_runs(mode=mode, page=page, page_size=page_size)
 
 
+@router.get("/analytics", response_model=DataAccessAnalytics)
+def analytics(
+    _: Admin,
+    container: Container,
+    days: int = Query(default=30, ge=1, le=30, description="Window in days (max = retention)."),
+) -> DataAccessAnalytics:
+    """Return sync analytics for the admin dashboard.
+
+    Requires app admin. Aggregates stored runs (KPIs, daily activity, failures, fingerprints).
+
+    Args:
+        container: Service container.
+        days: Window length in days.
+
+    Returns:
+        Analytics payload for the window.
+    """
+    return container.data_access.analytics(days=days)
+
+
 @router.get("/runs/latest", response_model=DataAccessRun | None)
 def latest_run(
     _: Admin,
@@ -128,9 +149,7 @@ def get_run(_: Admin, container: Container, run_id: str) -> DataAccessRun:
 
 
 @router.post("/runs", response_model=DataAccessRun)
-def run_now(
-    admin: Admin, container: Container, body: RunDataAccessRequest | None = None
-) -> DataAccessRun:
+def run_now(admin: Admin, container: Container, body: RunDataAccessRequest | None = None) -> DataAccessRun:
     """Run a data-access sync now (dry-run or apply) via the sync Job.
 
     Requires app admin. Starts the Databricks Job and waits for it to finish. Apply

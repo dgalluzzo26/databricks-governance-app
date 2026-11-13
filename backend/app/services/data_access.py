@@ -26,6 +26,7 @@ from backend.app.models.data_access import (
     RUN_HISTORY_PAGE_SIZE_DEFAULT,
     RUN_HISTORY_PAGE_SIZE_MAX,
     RUN_HISTORY_RETENTION_DAYS,
+    DataAccessAnalytics,
     DataAccessPlan,
     DataAccessReadiness,
     DataAccessRun,
@@ -44,6 +45,7 @@ from backend.app.models.identity_attribute import AttributeAssignmentFilter
 from backend.app.models.user import CurrentUser
 from backend.app.repositories.base import StorageProvider
 from backend.app.services.catalog_enrollment import enrolled_catalogs_sql
+from backend.app.services.data_access_analytics import build_analytics
 from backend.app.services.data_access_planner import (
     ActualGrant,
     ActualMember,
@@ -312,6 +314,18 @@ class DataAccessService:
             if run.run_id == run_id:
                 return run
         raise NotFoundError(f"Data-access run {run_id} was not found")
+
+    def analytics(self, *, days: int | None = None) -> DataAccessAnalytics:
+        """Aggregate stored runs into dashboard analytics for the window.
+
+        Args:
+            days: Window length in days (clamped to the retention window).
+
+        Returns:
+            KPIs, daily series, recent failures, and fingerprint stability.
+        """
+        self._reconcile_stale_runs()
+        return build_analytics(self._filtered_runs(), days=days)
 
     def latest_run(self, *, mode: str | None = None) -> DataAccessRun | None:
         """Return the most recent run (optionally mode-filtered) including its plan.

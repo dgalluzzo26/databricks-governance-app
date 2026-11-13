@@ -85,6 +85,14 @@ export const DataAccessIcon = (p: IconProps) => (
   </Icon>
 );
 
+/** Analytics / charts nav icon. */
+export const AnalyticsIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M2.5 13.5h11" />
+    <path d="M4.5 11V8.5M8 11V5M11.5 11V7" />
+  </Icon>
+);
+
 /** Approvals inbox nav icon. */
 export const ApprovalsIcon = (p: IconProps) => (
   <Icon {...p}>

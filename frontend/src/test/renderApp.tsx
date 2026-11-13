@@ -36,6 +36,7 @@ import type {
   UpsertRowFilterDimensionRequest,
   MaskHandlerValidateRequest,
   TableAccessInsight,
+  DataAccessAnalytics,
   DataAccessReadiness,
   DataAccessRun,
   DataAccessSettings,
@@ -683,6 +684,79 @@ export const testMaskRulePack: MaskRulePackStatus = {
   rules: testMaskRules.rules,
 };
 
+/** Analytics fixture: two days of dry-run and apply activity with one failure. */
+export const testDataAccessAnalytics: DataAccessAnalytics = {
+  days: 30,
+  generatedAt: "2026-11-12T12:00:00Z",
+  kpis: {
+    totalRuns: 6,
+    successRuns: 4,
+    failedRuns: 1,
+    runningRuns: 1,
+    successRate: 0.8,
+    avgDurationSeconds: 12.5,
+    lastSuccessAt: "2026-11-12T11:00:00Z",
+    lastFailureAt: "2026-11-12T09:00:00Z",
+    distinctFingerprints: 2,
+    fingerprintChanges: 1,
+  },
+  daily: [
+    {
+      day: "2026-11-11",
+      mode: "dry_run",
+      runs: 2,
+      success: 2,
+      failed: 0,
+      grantsAdded: 4,
+      grantsRevoked: 0,
+      membersAdded: 1,
+      membersRemoved: 0,
+      avgDurationSeconds: 10,
+    },
+    {
+      day: "2026-11-12",
+      mode: "dry_run",
+      runs: 2,
+      success: 1,
+      failed: 1,
+      grantsAdded: 2,
+      grantsRevoked: 1,
+      membersAdded: 0,
+      membersRemoved: 0,
+      avgDurationSeconds: 15,
+    },
+    {
+      day: "2026-11-12",
+      mode: "apply",
+      runs: 2,
+      success: 1,
+      failed: 0,
+      grantsAdded: 3,
+      grantsRevoked: 0,
+      membersAdded: 2,
+      membersRemoved: 1,
+      avgDurationSeconds: 20,
+    },
+  ],
+  failures: [
+    {
+      runId: "run-fail-1",
+      mode: "dry_run",
+      startedAt: "2026-11-12T09:00:00Z",
+      triggeredBy: "scheduler",
+      error: "Warehouse unavailable",
+    },
+  ],
+  fingerprints: [
+    {
+      fingerprint: "035e259276c5fb22",
+      runs: 3,
+      firstSeen: "2026-11-11T08:00:00Z",
+      lastSeen: "2026-11-12T11:00:00Z",
+    },
+  ],
+};
+
 export function fakeServices(
   overrides: {
     user?: CurrentUser | Error;
@@ -702,6 +776,7 @@ export function fakeServices(
     dataAccessSettings?: DataAccessSettingsView | Error;
     dataAccessReadiness?: DataAccessReadiness | Error;
     dataAccessRun?: DataAccessRun | null | Error;
+    dataAccessAnalytics?: DataAccessAnalytics | Error;
   } = {},
 ): ApiServices {
   const governedTags = overrides.governedTags ?? testGovernedTags;
@@ -812,6 +887,12 @@ export function fakeServices(
         const run = overrides.dataAccessRun ?? testDataAccessRun;
         if (mode && run.mode !== mode) return null;
         return run;
+      },
+      analytics: async (days: number) => {
+        if (overrides.dataAccessAnalytics instanceof Error) {
+          return Promise.reject(overrides.dataAccessAnalytics);
+        }
+        return { ...(overrides.dataAccessAnalytics ?? testDataAccessAnalytics), days };
       },
       runNow: async (_mode?: "dry_run" | "apply") =>
         overrides.dataAccessRun instanceof Error
