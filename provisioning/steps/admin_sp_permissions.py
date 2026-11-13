@@ -21,8 +21,9 @@ class GrantAdminSpPermissionsStep(ProvisioningStep):
 
     - Own the app schema (and its current tables) so UC mirror DELETE/INSERT works.
     - Have SELECT/MODIFY/CREATE TABLE on the app schema for the App SP's companion grants.
-    - Have MANAGE on every catalog tagged ``data_access_controlled=true`` so GRANT/REVOKE
-      for ``dac_*`` groups works without relying on metastore-admin quirks.
+    - Have MANAGE, USE CATALOG, USE SCHEMA, and SELECT on every catalog tagged
+      ``data_access_controlled=true`` so GRANT/REVOKE for ``dac_*`` groups works and seed
+      queries / inventory reads against those catalogs succeed.
     - Have a Lakebase Postgres role with DML on ``governance_app`` (role created here;
       table grants are applied when tables already exist, and re-applied by the app on
       startup after it creates them as the app SP).
@@ -84,9 +85,12 @@ class GrantAdminSpPermissionsStep(ProvisioningStep):
             )
             return
         for catalog in catalogs:
-            ctx.sql.execute(f"GRANT MANAGE ON CATALOG `{catalog}` TO `{admin_sp}`")
-            ctx.sql.execute(f"GRANT USE CATALOG ON CATALOG `{catalog}` TO `{admin_sp}`")
-        logger.info("Granted Admin SP MANAGE on enrolled catalogs: %s", ", ".join(catalogs))
+            ctx.sql.execute(
+                f"GRANT MANAGE, USE CATALOG, USE SCHEMA, SELECT ON CATALOG `{catalog}` TO `{admin_sp}`"
+            )
+        logger.info(
+            "Granted Admin SP MANAGE/USE/SELECT on enrolled catalogs: %s", ", ".join(catalogs)
+        )
 
     def _ensure_lakebase_role(self, ctx: ProvisioningContext, admin_sp: str) -> None:
         project = (ctx.lakebase_project_id or "").strip()

@@ -59,6 +59,8 @@ Stored as JSON in the app settings store under `data_access`.
 | `group_prefix` | `dac_` | Managed-group prefix; only `dac_*` principals are ever revoked |
 | `hierarchy_separator` | `.` | Splits values into parents for nesting |
 | `enrollment_catalog_tag_key` / `enrollment_catalog_tag_value` | `data_access_controlled` / `true` | Catalog tag that enrolls a catalog; sync and Access Explorer only see tagged catalogs |
+
+When the app first sees an enrolled catalog, it grants the Account Admin SP `MANAGE`, `USE CATALOG`, `USE SCHEMA`, and `SELECT` on that catalog (also done by the setup job at deploy). `SELECT` is required so Identity seed queries and inventory reads against tables in the catalog succeed; `MANAGE` is required for `dac_*` GRANT/REVOKE.
 | `allowed_catalogs` | empty | Deprecated / ignored (perimeter is enrollment tags only) |
 | `data_privileges` | `SELECT` | Privileges granted on each eligible table |
 | `interval_minutes` | 15 (min 5) | Scheduler interval |

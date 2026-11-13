@@ -30,12 +30,9 @@ describe("Access explorer", () => {
     const dataAccess = screen.getByRole("table", { name: "Data access suggestions" });
     expect(within(dataAccess).getByText("Already held")).toBeInTheDocument();
     expect(within(dataAccess).queryByText("Not requestable yet")).not.toBeInTheDocument();
-    const requestValue = within(sensitivity).getByRole("combobox", {
-      name: "Request value for sensitivity=finance.budget.PII.Name",
-    });
-    expect(requestValue).toHaveValue("finance.budget.PII.Name");
-    await user.selectOptions(requestValue, "finance.budget.PII");
-    expect(requestValue).toHaveValue("finance.budget.PII");
+    expect(within(sensitivity).queryByRole("combobox")).not.toBeInTheDocument();
+    expect(within(sensitivity).getByText("finance.budget.PII.Name")).toBeInTheDocument();
+    expect(within(sensitivity).queryByText("broader path")).not.toBeInTheDocument();
 
     const wildcard = screen.getByRole("table", { name: "Row filter wildcard" });
     expect(
@@ -59,7 +56,7 @@ describe("Access explorer", () => {
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({
         attributeKey: "sensitivity",
-        attributeValue: "finance.budget.PII",
+        attributeValue: "finance.budget.PII.Name",
       }),
     );
     expect(create).toHaveBeenCalledWith(

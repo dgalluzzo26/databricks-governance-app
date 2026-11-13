@@ -9,10 +9,10 @@ import { Link, useSearchParams } from "react-router-dom";
 import {
   useAnalyzeAttribute,
   useAttributeDefinitions,
-  useCurrentUser,
   useDataAccessSettings,
   useRevokeAttribute,
 } from "@/api/queries";
+import { useEffectiveUser } from "@/app/viewAs";
 import type {
   AttributeDefinition,
   AttributeExplorerResult,
@@ -53,7 +53,7 @@ function definitionKind(
  * Admin / approver reverse lookup: holders + unlocked tables for a path.
  */
 export function AttributeExplorerPage() {
-  const { data: user } = useCurrentUser();
+  const { data: user } = useEffectiveUser();
   const definitions = useAttributeDefinitions();
   const dataAccessSettings = useDataAccessSettings();
   const analyze = useAnalyzeAttribute();

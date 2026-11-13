@@ -402,14 +402,14 @@ def test_api_tree_routes(client: TestClient, container) -> None:  # noqa: ANN001
     assert tables.json()["tables"][0]["tableType"] == "MANAGED"
 
 
-def test_hierarchy_and_admin_routing(container) -> None:  # noqa: ANN001
+def test_sensitivity_leaves_only_and_admin_routing(container) -> None:  # noqa: ANN001
     from datetime import UTC, datetime
 
     from backend.app.models.access_explorer import RequestRouteKind
     from backend.app.models.access_request import CategoryApprover
 
     service, sql = _explorer(container)
-    # Two columns with related paths → leaf suggestions + parent
+    # Related paths → leaf suggestions only (no broader hierarchy parents)
     sql.tags = [
         {"column_name": "a", "tag_name": "sensitivity_category", "tag_value": "finance.budget"},
         {"column_name": "a", "tag_name": "sensitivity", "tag_value": "PII.Name"},
@@ -470,7 +470,8 @@ def test_hierarchy_and_admin_routing(container) -> None:  # noqa: ANN001
     assert "finance.budget.PII.SSN" in values
     assert "public.PII.Name" in values
     parents = [s for s in sens if s.is_hierarchy_parent]
-    assert any(s.attribute_value == "finance.budget" for s in parents)
+    assert parents == []
+    assert "finance.budget" not in values
     budget_leaf = next(s for s in sens if s.attribute_value == "finance.budget.PII.Name")
     assert budget_leaf.routed_to == RequestRouteKind.CATEGORY_APPROVERS
     assert budget_leaf.approvers[0].principal_name == "budget-owners"

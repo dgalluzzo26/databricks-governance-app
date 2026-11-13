@@ -6,11 +6,10 @@
  * attribute access requests via `useCreateAccessRequest`. The selected table is mirrored in the
  * `?table=` search parameter; a URL value bootstraps analysis once on mount.
  */
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   useAnalyzeTable,
-  useAttributeDefinitions,
   useCreateAccessRequest,
   useTableSearch,
 } from "@/api/queries";
@@ -27,46 +26,6 @@ import { useTableView, type TableColumn } from "@/hooks/useTableView";
 import styles from "../identity/IdentityPage.module.css";
 import { AccessExplorerTree } from "./AccessExplorerTree";
 import layout from "./AccessExplorerPage.module.css";
-
-/**
- * Dotted path prefixes including the leaf itself (e.g. `a.b.c` → `a`, `a.b`, `a.b.c`).
- *
- * @param path - Hierarchical attribute value.
- */
-function pathPrefixes(path: string): string[] {
-  const parts = path.split(".").map((part) => part.trim()).filter(Boolean);
-  return parts.map((_, index) => parts.slice(0, index + 1).join("."));
-}
-
-/**
- * Values a user may request instead of the suggested leaf: the leaf plus broader ancestors.
- *
- * When the attribute definition lists allowed values, only those that appear in the
- * vocabulary are offered (so the request will pass server validation).
- *
- * @param leaf - Suggested attribute value from analyze.
- * @param allowedValues - Definition allowed values; empty means free-form.
- */
-function editableRequestValues(leaf: string, allowedValues: string[]): string[] {
-  const prefixes = pathPrefixes(leaf);
-  if (!allowedValues.length) {
-    return [...prefixes].reverse();
-  }
-  const byLower = new Map(allowedValues.map((value) => [value.toLowerCase(), value]));
-  const options: string[] = [];
-  for (const prefix of [...prefixes].reverse()) {
-    const hit = byLower.get(prefix.toLowerCase());
-    if (hit && !options.some((value) => value.toLowerCase() === hit.toLowerCase())) {
-      options.push(hit);
-    }
-  }
-  // Always keep the original leaf if it is allowed (or vocabulary is empty of matches).
-  if (!options.length) {
-    const leafHit = byLower.get(leaf.toLowerCase());
-    return leafHit ? [leafHit] : [leaf];
-  }
-  return options;
-}
 
 /**
  * Maps a column access state to a Badge visual tone.
@@ -147,9 +106,9 @@ export function AccessExplorerPage() {
         title="Access explorer"
         description={
           <>
-            Browse or search a table to see masks, row filters, and requestable attributes.
-            Reviewed <code>data_access_control</code> tags on the table offer a data-access
-            request (broader paths allowed). Group grants stay dry-run until apply mode is on.
+            Browse or search a table to see masks, row filters, and the specific attributes
+            to request. Reviewed <code>data_access_control</code> tags on the table offer a
+            data-access request. Group grants stay dry-run until apply mode is on.
           </>
         }
       />
@@ -483,19 +442,13 @@ function SuggestionsCard({
   tableFullName: string;
 }) {
   const create = useCreateAccessRequest();
-  const definitions = useAttributeDefinitions();
-  const allowedByKey = useMemo(() => {
-    const map = new Map<string, string[]>();
-    for (const item of definitions.data?.definitions ?? []) {
-      map.set(item.key.toLowerCase(), item.allowedValues ?? []);
-    }
-    return map;
-  }, [definitions.data]);
 
-  const requestable = suggestions.filter((item) => item.requestable);
-  const dataAccessItems = suggestions.filter((item) => item.kind === "data_access");
-  const sensitivityItems = suggestions.filter((item) => item.kind === "sensitivity");
-  const rowFilterItems = suggestions.filter((item) => item.kind === "row_filter");
+  // Specific access only — broader hierarchy parents are omitted (backend and UI).
+  const specific = suggestions.filter((item) => !item.isHierarchyParent);
+  const requestable = specific.filter((item) => item.requestable);
+  const dataAccessItems = specific.filter((item) => item.kind === "data_access");
+  const sensitivityItems = specific.filter((item) => item.kind === "sensitivity");
+  const rowFilterItems = specific.filter((item) => item.kind === "row_filter");
   const rowFilterStar = rowFilterItems.filter((item) => item.attributeValue === "*");
   const rowFilterValues = rowFilterItems.filter((item) => item.attributeValue !== "*");
   const rowFilterKeys = rowFilterItems.map((item) => suggestionKey(item));
@@ -505,20 +458,15 @@ function SuggestionsCard({
       .filter(
         (item) =>
           item.kind === "data_access" ||
-          (item.kind === "sensitivity" && !item.isHierarchyParent) ||
+          item.kind === "sensitivity" ||
           (item.kind === "row_filter" && item.attributeValue === "*"),
       )
       .map((item) => suggestionKey(item)),
   );
-  /** Edited request values keyed by the original suggestion `key:value`. */
-  const [valueOverrides, setValueOverrides] = useState<Record<string, string>>({});
   const [valueFilter, setValueFilter] = useState("");
   const [justification, setJustification] = useState(`Need access for ${tableFullName}`);
   const [expires, setExpires] = useState("");
   const [results, setResults] = useState<string[]>([]);
-
-  const resolvedValue = (item: SuggestedAttribute) =>
-    valueOverrides[suggestionKey(item)] ?? item.attributeValue;
 
   const needle = valueFilter.trim().toLowerCase();
   const matchedValues = needle
@@ -589,11 +537,11 @@ function SuggestionsCard({
   /** Submits one access request per selected suggestion, then clears the selection. */
   const onSubmit = async () => {
     const notes: string[] = [];
-    const chosen = suggestions.filter((item) => selected.includes(suggestionKey(item)));
+    const chosen = specific.filter((item) => selected.includes(suggestionKey(item)));
     for (const item of chosen) {
       const created = await create.mutateAsync({
         attributeKey: item.attributeKey,
-        attributeValue: resolvedValue(item),
+        attributeValue: item.attributeValue,
         justification: justification.trim(),
         requestedExpiresAt: new Date(expires).toISOString(),
       });
@@ -605,10 +553,9 @@ function SuggestionsCard({
     }
     setResults(notes);
     setSelected([]);
-    setValueOverrides({});
   };
 
-  if (suggestions.length === 0) {
+  if (specific.length === 0) {
     return (
       <Card title="Suggested attributes">
         <Alert title="Nothing to request">
@@ -622,11 +569,9 @@ function SuggestionsCard({
   return (
     <Card title="Suggested attributes">
       <div className={styles.muted} style={{ marginBottom: "var(--space-3)" }}>
-        Data-access values drive tagged-level group grants once apply mode is on. Sensitivity paths
-        unmask columns; row-filter attributes unlock matching rows. For sensitivity and data access,
-        change the requested value to a broader allowed path (for example{" "}
-        <code>finance.budget.PII</code> instead of <code>finance.budget.PII.Name</code>) before
-        submitting.
+        Data-access values drive table-level group grants once apply mode is on. Sensitivity paths
+        unmask columns. Row-filter attributes unlock matching rows — keep <code>*</code> for all
+        rows, or search below to request specific values instead.
       </div>
 
       {dataAccessItems.length > 0 && (
@@ -637,11 +582,6 @@ function SuggestionsCard({
             items={dataAccessItems}
             selected={selected}
             onToggle={toggle}
-            valueOverrides={valueOverrides}
-            onValueChange={(item, value) =>
-              setValueOverrides((current) => ({ ...current, [suggestionKey(item)]: value }))
-            }
-            allowedByKey={allowedByKey}
           />
         </div>
       )}
@@ -654,11 +594,6 @@ function SuggestionsCard({
             items={sensitivityItems}
             selected={selected}
             onToggle={toggle}
-            valueOverrides={valueOverrides}
-            onValueChange={(item, value) =>
-              setValueOverrides((current) => ({ ...current, [suggestionKey(item)]: value }))
-            }
-            allowedByKey={allowedByKey}
           />
         </div>
       )}
@@ -812,79 +747,42 @@ function kindLabelOf(item: SuggestedAttribute): string {
 }
 
 /**
- * Checkbox table of suggested attributes with covers paths, related columns, and reviewer routing.
- *
- * Sensitivity and data-access rows can edit the requested value to a broader allowed ancestor.
+ * Simple checkbox table of suggested attributes (no sort/filter): value, columns, reviewers.
  *
  * @param props.label - Accessible name for the table.
  * @param props.items - Rows to render (already filtered by the parent).
  * @param props.selected - Currently selected `key:value` suggestion keys.
  * @param props.onToggle - Called when a requestable row's checkbox is toggled.
- * @param props.valueOverrides - Edited request values keyed by original suggestion key.
- * @param props.onValueChange - Called when the user picks a different request value.
- * @param props.allowedByKey - Attribute definition allowed values by lower-cased key.
  */
 function SuggestionTable({
   label,
   items,
   selected,
   onToggle,
-  valueOverrides = {},
-  onValueChange,
-  allowedByKey,
 }: {
   label: string;
   items: SuggestedAttribute[];
   selected: string[];
   onToggle: (item: SuggestedAttribute) => void;
-  valueOverrides?: Record<string, string>;
-  onValueChange?: (item: SuggestedAttribute, value: string) => void;
-  allowedByKey?: Map<string, string[]>;
 }) {
-  const suggestionColumns: TableColumn<SuggestedAttribute>[] = [
-    { key: "select", label: "" },
-    {
-      key: "attribute",
-      label: "Attribute",
-      value: (item) => item.attributeKey,
-      filterText: (item) => `${item.attributeKey} ${kindLabelOf(item)}`,
-    },
-    {
-      key: "requestValue",
-      label: "Request value",
-      value: (item) => valueOverrides[suggestionKey(item)] ?? item.attributeValue,
-    },
-    {
-      key: "covers",
-      label: "Covers",
-      value: (item) => (item.coversPaths.length ? item.coversPaths : [item.attributeValue]).join(", "),
-    },
-    { key: "columns", label: "Columns", value: (item) => item.columnNames.join(", ") },
-    { key: "reviewedBy", label: "Reviewed by", value: (item) => routeLabel(item) },
-  ];
-  const view = useTableView(items, suggestionColumns, { paginate: false });
   return (
     <div className={styles.tableWrap}>
       <table className={styles.table} aria-label={label}>
-        <DataTableHead view={view} />
+        <thead>
+          <tr>
+            <th scope="col" />
+            <th scope="col">Attribute</th>
+            <th scope="col">Value</th>
+            <th scope="col">Columns</th>
+            <th scope="col">Reviewed by</th>
+          </tr>
+        </thead>
         <tbody>
-          {view.rows.map((item) => {
+          {items.map((item) => {
             const key = suggestionKey(item);
             const selectable = item.requestable;
-            const editable =
-              selectable &&
-              onValueChange &&
-              (item.kind === "sensitivity" || item.kind === "data_access");
-            const options = editable
-              ? editableRequestValues(
-                  item.attributeValue,
-                  allowedByKey?.get(item.attributeKey.toLowerCase()) ?? [],
-                )
-              : [item.attributeValue];
-            const requested = valueOverrides[key] ?? item.attributeValue;
-            const kindLabel = kindLabelOf(item);
             return (
-              <tr key={`${key}:${item.isHierarchyParent}`}>
+              <tr key={key}>
                 <td>
                   {selectable ? (
                     <input
@@ -898,50 +796,11 @@ function SuggestionTable({
                 <td>
                   <code>{item.attributeKey}</code>
                   <div className={styles.muted} style={{ fontSize: "0.85em" }}>
-                    {kindLabel}
+                    {kindLabelOf(item)}
                   </div>
                 </td>
                 <td>
-                  {editable && options.length > 1 && selected.includes(key) ? (
-                    <select
-                      className={styles.select}
-                      aria-label={`Request value for ${item.attributeKey}=${item.attributeValue}`}
-                      value={requested}
-                      onChange={(event) => onValueChange(item, event.target.value)}
-                    >
-                      {options.map((value) => (
-                        <option key={value} value={value}>
-                          {value}
-                          {value.toLowerCase() === item.attributeValue.toLowerCase()
-                            ? " (exact)"
-                            : " (broader)"}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <>
-                      <Badge tone={item.isHierarchyParent || requested !== item.attributeValue ? "info" : "warning"}>
-                        {requested}
-                      </Badge>
-                      {item.isHierarchyParent && (
-                        <div className={styles.muted} style={{ fontSize: "0.85em" }}>
-                          broader path
-                        </div>
-                      )}
-                      {editable && options.length > 1 && !selected.includes(key) && (
-                        <div className={styles.muted} style={{ fontSize: "0.85em" }}>
-                          Select to choose a broader path
-                        </div>
-                      )}
-                    </>
-                  )}
-                </td>
-                <td className={styles.muted}>
-                  {(item.coversPaths.length ? item.coversPaths : [item.attributeValue]).map((path) => (
-                    <code key={path} style={{ display: "block" }}>
-                      {path}
-                    </code>
-                  ))}
+                  <Badge tone="warning">{item.attributeValue}</Badge>
                 </td>
                 <td>
                   {item.columnNames.map((name) => (
@@ -960,12 +819,6 @@ function SuggestionTable({
   );
 }
 
-/**
- * Simple label/value row used in the row-filter insight card.
- *
- * @param props.label - Fixed-width field label.
- * @param props.value - Field value content.
- */
 function DescriptionRow({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div style={{ display: "flex", gap: "var(--space-3)", alignItems: "baseline" }}>

@@ -9,11 +9,11 @@
 import { useState } from "react";
 import {
   useApplyPolicyExceptions,
-  useCurrentUser,
   useDeletePolicyException,
   usePolicyExceptions,
   useUpsertPolicyException,
 } from "@/api/queries";
+import { useEffectiveUser } from "@/app/viewAs";
 import type { PolicyException, PrincipalKind } from "@/api/types";
 import { PrincipalPicker } from "@/components/PrincipalPicker";
 import { Alert, Badge, Card, ErrorAlert, PageHeader, Spinner, TablePager } from "@/components/ui";
@@ -104,14 +104,15 @@ function ExceptionsTable({
 /**
  * Admin UI to add/remove policy exceptions and re-apply them to ABAC packs.
  *
- * Uses `useCurrentUser` for role gating, `usePolicyExceptions` (enabled only for admins),
+ * Uses `useEffectiveUser` for role gating, `usePolicyExceptions` (enabled only for admins),
  * `useUpsertPolicyException`, `useDeletePolicyException`, and `useApplyPolicyExceptions`.
  * Saving an exception regenerates mask/row-filter packs server-side; "Re-apply" forces a sync.
  *
  * @remarks Non-admin users get a read-only warning shell; the backend enforces authorization.
+ * Respects admin demo preview.
  */
 export function PolicyExceptionsPage() {
-  const { data: user } = useCurrentUser();
+  const { data: user } = useEffectiveUser();
   const list = usePolicyExceptions(Boolean(user?.isAdmin));
   const upsert = useUpsertPolicyException();
   const remove = useDeletePolicyException();

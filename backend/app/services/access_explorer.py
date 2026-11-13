@@ -40,7 +40,7 @@ from backend.app.models.access_explorer import (
 from backend.app.models.access_request import SENSITIVITY_ATTRIBUTE_KEY
 from backend.app.models.mask_rule import MaskRuleKind
 from backend.app.models.user import CurrentUser
-from backend.app.services.access_requests import AccessRequestService, path_prefixes
+from backend.app.services.access_requests import AccessRequestService
 from backend.app.services.data_access import DataAccessService
 from backend.app.services.identity_attributes import IdentityAttributeService
 from backend.app.services.mask_rules import MaskRuleService
@@ -378,7 +378,7 @@ class AccessExplorerService:
             if row_filters
             else RowFilterInsight(attached=False, notes="No row_filter inherited from source tables.")
         )
-        suggestions = self._suggestions(insights, row_filters, sensitivity_held, held)
+        suggestions = self._suggestions(insights, row_filters, held)
         dac = self._data_access_suggestion("table", f"{catalog}.{schema}.{table}", held)
         if dac is not None:
             suggestions = [dac, *suggestions]
@@ -914,26 +914,22 @@ class AccessExplorerService:
         self,
         columns: list[ColumnAccessInsight],
         row_filters: list[RowFilterInsight],
-        sensitivity_held: set[str],
         held: dict[str, set[str]],
     ) -> list[SuggestedAttribute]:
         """Build attribute requests that would widen the user's access to the table.
 
-        Produces one sensitivity suggestion per distinct missing leaf path, then broader
-        hierarchy parents that cover two or more missing leaves (skipped if already held or
-        not in the sensitivity vocabulary). For a row-filtered table without ``*``, also
-        suggests ``*`` and each concrete dimension value the user lacks; row-filter requests
-        always route to app admins and are only requestable once the dimension's attribute
-        definition exists.
+        Produces one sensitivity suggestion per distinct missing leaf path (no broader
+        hierarchy parents). For a row-filtered table without ``*``, also suggests ``*`` and
+        each concrete dimension value the user lacks; row-filter requests always route to
+        app admins and are only requestable once the dimension's attribute definition exists.
 
         Args:
             columns: Column insights for the table.
             row_filters: Row-filter insights for the table, one per dimension (views can have several).
-            sensitivity_held: Sensitivity paths the user holds.
             held: All held attribute values keyed by lower-cased attribute key.
 
         Returns:
-            Suggestions ordered leaf paths first, then parents, then row-filter values.
+            Suggestions ordered leaf paths first, then row-filter values.
         """
         path_to_cols: dict[str, list[str]] = defaultdict(list)
         path_canonical: dict[str, str] = {}
@@ -951,6 +947,7 @@ class AccessExplorerService:
         suggestions: list[SuggestedAttribute] = []
 
         # One suggestion per distinct required leaf path (deduped across columns).
+        # Broader hierarchy parents are omitted so users only see the specific access they need.
         for key, cols in sorted(path_to_cols.items(), key=lambda item: item[0]):
             path = path_canonical[key]
             suggestions.append(
@@ -961,39 +958,6 @@ class AccessExplorerService:
                     is_parent=False,
                     reason=(f"Unmask {len(cols)} column(s) that require sensitivity path {path}"),
                     requestable=key in allowed or not allowed,
-                )
-            )
-
-        # Broader hierarchy parents that cover 2+ missing leaves (and user does not already hold).
-        for parent, covered in self._hierarchy_parents(list(path_canonical.values())):
-            if has_sensitivity_access(sensitivity_held, parent):
-                continue
-            parent_key = parent.lower()
-            if parent_key in path_to_cols:
-                continue
-            if allowed and parent_key not in allowed:
-                continue
-            covered_cols: list[str] = []
-            for leaf in covered:
-                covered_cols.extend(path_to_cols.get(leaf.lower(), []))
-            # Preserve order, unique
-            seen_cols: set[str] = set()
-            unique_cols: list[str] = []
-            for name in covered_cols:
-                if name not in seen_cols:
-                    seen_cols.add(name)
-                    unique_cols.append(name)
-            suggestions.append(
-                self._sensitivity_suggestion(
-                    path=allowed.get(parent_key, parent),
-                    column_names=unique_cols,
-                    covers_paths=covered,
-                    is_parent=True,
-                    reason=(
-                        f"Broader path covering {len(covered)} required tags "
-                        f"({', '.join(covered)}) across {len(unique_cols)} column(s)"
-                    ),
-                    requestable=True,
                 )
             )
 
@@ -1189,28 +1153,3 @@ class AccessExplorerService:
         except Exception:  # noqa: BLE001
             return []
         return list(definition.allowed_values)
-
-    @staticmethod
-    def _hierarchy_parents(paths: list[str]) -> list[tuple[str, list[str]]]:
-        """Return (parent_path, covered_leaf_paths) for parents that cover 2+ leaves.
-
-        Most-specific parents first.
-
-        Args:
-            paths: Distinct required leaf sensitivity paths.
-
-        Returns:
-            Parent paths with the sorted leaves they cover, deepest parents first and then
-            alphabetical.
-        """
-        if len(paths) < 2:
-            return []
-        coverage: dict[str, set[str]] = defaultdict(set)
-        for path in paths:
-            for prefix in path_prefixes(path)[1:]:  # skip the leaf itself
-                coverage[prefix].add(path)
-        ranked = sorted(
-            ((parent, sorted(covered)) for parent, covered in coverage.items() if len(covered) >= 2),
-            key=lambda item: (-len(item[0].split(".")), item[0].lower()),
-        )
-        return ranked

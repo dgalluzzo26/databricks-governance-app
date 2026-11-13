@@ -8,7 +8,6 @@ import { Link } from "react-router-dom";
 import {
   useAttachRowFilter,
   useAttributeDefinitions,
-  useCurrentUser,
   useDeleteRowFilterDimension,
   useDetachRowFilter,
   useEnsureRowFilterPack,
@@ -19,6 +18,7 @@ import {
   useRowFilterPack,
   useUpsertRowFilterDimension,
 } from "@/api/queries";
+import { useEffectiveUser } from "@/app/viewAs";
 import type { RowFilterAttachment, RowFilterDimension } from "@/api/types";
 import { Alert, Badge, Card, ErrorAlert, PageHeader, Spinner, TablePager } from "@/components/ui";
 import { DataTableHead } from "@/components/ui/DataTableHead";
@@ -43,14 +43,14 @@ function parseValues(text: string): string[] {
 /**
  * Row-filter administration: policy pack (admins), dimensions, and attached columns.
  *
- * Uses {@link useCurrentUser} to derive `isAdmin`. Assignments of dimension values (or `*`) live
+ * Uses {@link useEffectiveUser} to derive `isAdmin`. Assignments of dimension values (or `*`) live
  * on Identity → Assignments.
  *
  * @remarks The route is wrapped in `RequireAdmin`. Pack sync and attach/detach/edit still hide
- * when `isAdmin` is false.
+ * when `isAdmin` is false. Respects admin demo preview.
  */
 export function RowFiltersPage() {
-  const { data: user } = useCurrentUser();
+  const { data: user } = useEffectiveUser();
   const isAdmin = Boolean(user?.isAdmin);
 
   return (

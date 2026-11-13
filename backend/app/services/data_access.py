@@ -70,7 +70,7 @@ from backend.app.models.identity_attribute import (
 from backend.app.models.user import CurrentUser
 from backend.app.repositories.base import StorageProvider
 from backend.app.repositories.data_access_state import GAP_ITEM_READERS
-from backend.app.services.catalog_enrollment import enrolled_catalogs_sql
+from backend.app.services.catalog_enrollment import admin_catalog_access_sql, enrolled_catalogs_sql
 from backend.app.services.data_access_analytics import build_analytics
 from backend.app.services.data_access_gap import (
     build_gap,
@@ -212,6 +212,9 @@ class DataAccessService:
         self._member_loader = self._load_members
         self._assignment_loader = self._load_assignments
         self._apply_plan = self._apply_plan_impl
+        # Catalogs the Admin SP has already been granted MANAGE/USE/SELECT on this process.
+        self._ensured_catalogs: set[str] = set()
+        self._ensure_catalogs_lock = threading.Lock()
         add_listener = getattr(identity_attributes, "add_listener", None)
         if callable(add_listener):
             add_listener(self.on_assignment_event)
@@ -257,6 +260,10 @@ class DataAccessService:
     def list_enrolled_catalogs(self, settings: DataAccessSettings | None = None) -> list[str]:
         """Return catalogs tagged with the configured enrollment tag.
 
+        On first sight of each catalog in this process, also grants the Account Admin SP
+        ``MANAGE``, ``USE CATALOG``, ``USE SCHEMA``, and ``SELECT`` on it so inventory reads,
+        seed queries, and ``dac_*`` GRANT/REVOKE work without waiting for the next setup job.
+
         Args:
             settings: Settings to use; defaults to stored settings.
 
@@ -284,7 +291,39 @@ class DataAccessService:
                 if row.get("catalog_name") and str(row["catalog_name"]).lower() not in _EXCLUDED_CATALOGS
             }
         )
+        self._ensure_admin_catalog_access(names)
         return names
+
+    def _ensure_admin_catalog_access(self, catalogs: list[str]) -> None:
+        """Grant the Account Admin SP catalog privileges on newly discovered enrolled catalogs.
+
+        Idempotent per process: each catalog is granted at most once until the app restarts.
+        Failures are logged and skipped so a missing privilege on one catalog does not block
+        listing the others.
+
+        Args:
+            catalogs: Enrollment-tagged catalog names.
+        """
+        principal = (getattr(self._factory, "admin_client_id", None) or "").strip()
+        if not principal or not catalogs:
+            return
+        with self._ensure_catalogs_lock:
+            pending = [name for name in catalogs if name.lower() not in self._ensured_catalogs]
+            if not pending:
+                return
+            for catalog in pending:
+                try:
+                    self._sql.execute(admin_catalog_access_sql(catalog, principal))
+                except (NotConfiguredError, DatabricksError, UpstreamError, InvalidRequestError) as exc:
+                    logger.warning(
+                        "Could not grant Admin SP access on enrolled catalog %s: %s", catalog, exc
+                    )
+                    continue
+                self._ensured_catalogs.add(catalog.lower())
+                logger.info(
+                    "Granted Admin SP MANAGE/USE CATALOG/USE SCHEMA/SELECT on enrolled catalog %s",
+                    catalog,
+                )
 
     def readiness(self) -> DataAccessReadiness:
         """Probe Account Admin SP and warehouse capabilities.

@@ -8,6 +8,7 @@ import { ApiProvider } from "@/api/ApiProvider";
 import { ApiError } from "@/api/httpClient";
 import { PreferencesProvider } from "./preferences";
 import { routes } from "./routes";
+import { ViewAsProvider } from "./viewAs";
 
 /**
  * Builds a QueryClient with app-wide defaults.
@@ -41,7 +42,9 @@ export function App() {
     <QueryClientProvider client={queryClient}>
       <PreferencesProvider>
         <ApiProvider>
-          <RouterProvider router={router} />
+          <ViewAsProvider>
+            <RouterProvider router={router} />
+          </ViewAsProvider>
         </ApiProvider>
       </PreferencesProvider>
     </QueryClientProvider>

@@ -6,18 +6,19 @@
  * and approvals when they are category approvers).
  */
 import { Link } from "react-router-dom";
-import { useAppInfo, useCurrentUser, useMyAttributes } from "@/api/queries";
+import { useAppInfo, useMyAttributes } from "@/api/queries";
+import { useEffectiveUser } from "@/app/viewAs";
 import { Alert, Avatar, Badge, Card, DescriptionList, PageHeader, Spinner } from "@/components/ui";
 import styles from "./HomePage.module.css";
 
 /**
  * Landing page after authentication: identity card plus admin status or non-admin get-started links.
  *
- * Uses `useCurrentUser`, `useMyAttributes`, and (admins only) `useAppInfo`. Renders nothing until
- * the current user is available.
+ * Uses `useEffectiveUser`, `useMyAttributes`, and (admins only) `useAppInfo`. Renders nothing until
+ * the current user is available. Role-gated cards respect admin demo preview.
  */
 export function HomePage() {
-  const { data: user } = useCurrentUser();
+  const { data: user } = useEffectiveUser();
   const appInfo = useAppInfo(Boolean(user?.isAdmin));
   const myAttributes = useMyAttributes();
   if (!user) return null;

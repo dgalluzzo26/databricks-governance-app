@@ -54,6 +54,7 @@ import type {
 } from "@/api/types";
 import { PreferencesProvider } from "@/app/preferences";
 import { routes } from "@/app/routes";
+import { ViewAsProvider } from "@/app/viewAs";
 
 export const testUser: CurrentUser = {
   userName: "ana.lopez@example.com",
@@ -1640,13 +1641,16 @@ export function fakeServices(
 }
 
 export function renderApp(path = "/", services: ApiServices = fakeServices()) {
+  sessionStorage.clear();
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const router = createMemoryRouter(routes, { initialEntries: [path] });
   return render(
     <QueryClientProvider client={queryClient}>
       <PreferencesProvider>
         <ApiProvider services={services}>
-          <RouterProvider router={router} />
+          <ViewAsProvider>
+            <RouterProvider router={router} />
+          </ViewAsProvider>
         </ApiProvider>
       </PreferencesProvider>
     </QueryClientProvider>,

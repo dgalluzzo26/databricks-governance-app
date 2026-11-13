@@ -18,7 +18,6 @@ import {
   useCancelAccessRequest,
   useCategoryApprovers,
   useCreateAccessRequest,
-  useCurrentUser,
   useDataAccessSettings,
   useDeleteAttributeDefinition,
   useDeleteCategoryApprover,
@@ -31,6 +30,7 @@ import {
   useUpsertAttributeDefinition,
   useUpsertCategoryApprover,
 } from "@/api/queries";
+import { useEffectiveUser } from "@/app/viewAs";
 import type {
   AccessRequest,
   AttributeDefinition,
@@ -98,15 +98,15 @@ function formatWhen(value: string | null | undefined): string {
 /**
  * Identity attributes page with a role-gated tab bar and one panel per tab.
  *
- * Reads the current user via `useCurrentUser` and the active tab from the `?tab=` search
+ * Reads the effective user via `useEffectiveUser` and the active tab from the `?tab=` search
  * parameter (default `"mine"`). Legacy `?tab=approvals` redirects to `/approvals`.
  *
  * @remarks
  * Tabs are filtered by role: everyone gets {@link USER_TABS}; admins also get {@link ADMIN_TABS}.
- * A disallowed or unknown `tab` value silently falls back to `"mine"`.
+ * A disallowed or unknown `tab` value silently falls back to `"mine"`. Respects admin demo preview.
  */
 export function IdentityPage() {
-  const { data: user } = useCurrentUser();
+  const { data: user } = useEffectiveUser();
   const [searchParams, setSearchParams] = useSearchParams();
   const rawTab = searchParams.get("tab");
   if (rawTab === "approvals") {

@@ -11,9 +11,10 @@ import styles from "./TopBar.module.css";
 
 /**
  * Sticky header chrome for the app shell.
- * @param props.user - Signed-in user; when absent, the user menu is omitted (e.g. while loading).
+ * @param props.user - Effective user shown in the menu (role flags may be demo-overlaid).
+ * @param props.realUser - Real identity; when admin, unlocks the View as control.
  */
-export function TopBar({ user }: { user?: CurrentUser }) {
+export function TopBar({ user, realUser }: { user?: CurrentUser; realUser?: CurrentUser }) {
   return (
     <header className={styles.topbar}>
       <Link to="/" className={styles.brand}>
@@ -23,7 +24,7 @@ export function TopBar({ user }: { user?: CurrentUser }) {
       <div className={styles.spacer} />
       <BusyStatus />
       <ThemeToggle />
-      {user && <UserMenu user={user} />}
+      {user && <UserMenu user={user} realUser={realUser} />}
     </header>
   );
 }

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from backend.app.clients.sql import string_literal
+from backend.app.clients.sql import quote_identifier, string_literal
 
 DEFAULT_ENROLLMENT_TAG_KEY = "data_access_controlled"
 DEFAULT_ENROLLMENT_TAG_VALUE = "true"
@@ -51,3 +51,30 @@ def enrolled_catalogs_sql(tag_key: str, tag_value: str) -> str:
           AND lower(tag_value) = lower({string_literal(tag_value)})
         ORDER BY catalog_name
     """
+
+
+# Privileges the Account Admin SP needs on every enrollment-tagged catalog: MANAGE for
+# dac_* GRANT/REVOKE, and USE CATALOG / USE SCHEMA / SELECT so seed queries and inventory
+# reads against tables in that catalog succeed.
+ADMIN_CATALOG_PRIVILEGES = ("MANAGE", "USE CATALOG", "USE SCHEMA", "SELECT")
+
+
+def admin_catalog_access_sql(catalog: str, principal: str) -> str:
+    """Return GRANT SQL giving the Admin SP access on an enrolled catalog.
+
+    Args:
+        catalog: Unity Catalog catalog name.
+        principal: Account Admin SP application (client) ID.
+
+    Returns:
+        One ``GRANT … ON CATALOG`` statement.
+
+    Raises:
+        InvalidRequestError: If ``catalog`` or ``principal`` is not a safe identifier.
+    """
+    privileges = ", ".join(ADMIN_CATALOG_PRIVILEGES)
+    return (
+        f"GRANT {privileges} ON CATALOG {quote_identifier(catalog)} "
+        f"TO {quote_identifier(principal)}"
+    )
+

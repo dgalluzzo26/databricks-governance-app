@@ -6,7 +6,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import {
-  useCurrentUser,
   useDeleteMaskRule,
   useDraftMaskHandler,
   useEnsureMaskRulePack,
@@ -17,6 +16,7 @@ import {
   useUpsertMaskRule,
   useValidateMaskHandler,
 } from "@/api/queries";
+import { useEffectiveUser } from "@/app/viewAs";
 import type {
   MaskHandler,
   MaskHandlerSampleResult,
@@ -40,14 +40,14 @@ const HANDLERS: { value: MaskHandler; label: string }[] = [
 /**
  * Column-mask rule administration: policy-pack status (admins) and the named-rule catalog.
  *
- * Uses {@link useCurrentUser} to derive `isAdmin`. Columns are tagged `mask_rule=<name>`; unknown
+ * Uses {@link useEffectiveUser} to derive `isAdmin`. Columns are tagged `mask_rule=<name>`; unknown
  * names fall back to `full`. Authorization still uses Identity sensitivity attributes.
  *
  * @remarks The route is wrapped in `RequireAdmin`. The page still hides pack actions and rule
- * mutations when `isAdmin` is false.
+ * mutations when `isAdmin` is false. Respects admin demo preview.
  */
 export function MaskRulesPage() {
-  const { data: user } = useCurrentUser();
+  const { data: user } = useEffectiveUser();
   const isAdmin = Boolean(user?.isAdmin);
 
   return (
