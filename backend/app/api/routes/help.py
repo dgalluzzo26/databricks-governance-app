@@ -26,6 +26,7 @@ from backend.app.models.help import (
     ApiParameter,
     ApiReference,
     EndpointAccess,
+    HelpAudience,
     HelpDoc,
     HelpDocList,
 )
@@ -36,22 +37,39 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 
 _DOCS: tuple[HelpDoc, ...] = (
     HelpDoc(
+        slug="user",
+        title="User guide",
+        description="Access explorer, requesting attributes, and what a signed-in user can see.",
+        source_path="docs/user-guide.md",
+        audiences=[HelpAudience.USER],
+    ),
+    HelpDoc(
+        slug="approver",
+        title="Approver guide",
+        description="Approvals inbox, attribute explorer, and what category approvers decide.",
+        source_path="docs/approver-guide.md",
+        audiences=[HelpAudience.APPROVER],
+    ),
+    HelpDoc(
         slug="masking-row-filters",
         title="Masking & row filters",
         description="Decision flows for column masks, row filters, access requests, and Access Explorer.",
         source_path="docs/mask-and-row-filter-flows.md",
+        audiences=[HelpAudience.ADMIN],
     ),
     HelpDoc(
         slug="grants-sync",
         title="Grants sync",
         description="How tag-driven dac_* groups, membership, and GRANT/REVOKE are planned and applied.",
         source_path="docs/grants-sync.md",
+        audiences=[HelpAudience.ADMIN],
     ),
     HelpDoc(
         slug="backend",
         title="Backend & APIs",
         description="Backend layers, identities, storage, and the Databricks APIs each service calls.",
         source_path="docs/backend-architecture.md",
+        audiences=[HelpAudience.ADMIN],
     ),
 )
 _DOCS_BY_SLUG = {doc.slug: doc for doc in _DOCS}
@@ -79,7 +97,10 @@ def _read_doc(doc: HelpDoc) -> str:
 
 @router.get("/help/docs", response_model=HelpDocList)
 def list_docs() -> HelpDocList:
-    """List the developer guides available in the Help page.
+    """List every help guide (user, approver, and admin).
+
+    The Help UI filters by the caller's effective role. Returns the full catalog so
+    View as can switch audiences without refetching.
 
     Returns:
         Guides in display order.

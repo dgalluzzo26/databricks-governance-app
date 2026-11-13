@@ -15,6 +15,17 @@ class EndpointAccess(StrEnum):
     ADMIN = "admin"
 
 
+class HelpAudience(StrEnum):
+    """Who should see a help guide in the in-app Help page.
+
+    The Help UI filters by the caller's effective role (including admin demo View as).
+    """
+
+    USER = "user"
+    APPROVER = "approver"
+    ADMIN = "admin"
+
+
 class HelpDoc(ApiModel):
     """One Markdown guide served under ``/api/help/docs/{slug}``.
 
@@ -23,12 +34,14 @@ class HelpDoc(ApiModel):
         title: Display title.
         description: One-line summary shown in the Help tab.
         source_path: Repo-relative path of the Markdown file.
+        audiences: Roles that may see this guide in Help (filter client-side).
     """
 
     slug: str
     title: str
     description: str
     source_path: str
+    audiences: list[HelpAudience]
 
 
 class HelpDocList(ApiModel):

@@ -1559,23 +1559,47 @@ export function fakeServices(
       docs: async () => ({
         docs: [
           {
+            slug: "user",
+            title: "User guide",
+            description: "Access explorer for signed-in users.",
+            sourcePath: "docs/user-guide.md",
+            audiences: ["user"],
+          },
+          {
+            slug: "approver",
+            title: "Approver guide",
+            description: "Approvals for category approvers.",
+            sourcePath: "docs/approver-guide.md",
+            audiences: ["approver"],
+          },
+          {
             slug: "masking-row-filters",
             title: "Masking & row filters",
             description: "Masks and row filters.",
             sourcePath: "docs/mask-and-row-filter-flows.md",
+            audiences: ["admin"],
           },
           {
             slug: "grants-sync",
             title: "Grants sync",
             description: "dac_* groups and grants.",
             sourcePath: "docs/grants-sync.md",
+            audiences: ["admin"],
           },
         ],
       }),
-      doc: async (slug: string) =>
-        slug === "grants-sync"
-          ? "# Grants sync\n\n## Apply order and APIs\n\nAccount SCIM then GRANT.\n\n```mermaid\nflowchart TD\n  a --> b\n```\n"
-          : "# Developer guide\n\n## Mental model\n\nMasks and row filters.\n\n## Row filter flow\n\nUse `state=*`.\n",
+      doc: async (slug: string) => {
+        if (slug === "grants-sync") {
+          return "# Grants sync\n\n## Apply order and APIs\n\nAccount SCIM then GRANT.\n\n```mermaid\nflowchart TD\n  a --> b\n```\n";
+        }
+        if (slug === "user") {
+          return "# User guide\n\n## Access explorer\n\nAnalyze a table and request attributes.\n";
+        }
+        if (slug === "approver") {
+          return "# Approver guide\n\n## Approvals inbox\n\nApprove or deny requests.\n";
+        }
+        return "# Developer guide\n\n## Mental model\n\nMasks and row filters.\n\n## Row filter flow\n\nUse `state=*`.\n";
+      },
       apiReference: async () => ({
         endpoints: [
           {

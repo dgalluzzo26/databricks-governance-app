@@ -18,13 +18,17 @@ def test_help_flows_returns_markdown(client: TestClient) -> None:
 def test_help_docs_index_and_every_doc_loads(client: TestClient) -> None:
     user = headers_for("user@example.com")
     docs = client.get("/api/help/docs", headers=user).json()["docs"]
-    slugs = [d["slug"] for d in docs]
-    assert slugs == ["masking-row-filters", "grants-sync", "backend"]
-    for slug in slugs:
+    by_slug = {d["slug"]: d for d in docs}
+    assert list(by_slug) == ["user", "approver", "masking-row-filters", "grants-sync", "backend"]
+    assert by_slug["user"]["audiences"] == ["user"]
+    assert by_slug["approver"]["audiences"] == ["approver"]
+    assert by_slug["grants-sync"]["audiences"] == ["admin"]
+    for slug, meta in by_slug.items():
         response = client.get(f"/api/help/docs/{slug}", headers=user)
         assert response.status_code == 200, slug
         assert response.text.startswith("# "), slug
-        assert "```mermaid" in response.text, slug
+        if meta["audiences"] == ["admin"]:
+            assert "```mermaid" in response.text, slug
 
 
 def test_help_unknown_doc_is_404(client: TestClient) -> None:

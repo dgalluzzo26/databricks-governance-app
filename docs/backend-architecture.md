@@ -162,7 +162,7 @@ through `quote_identifier` and literals through `string_literal`; never interpol
 | Identity access status | `/api/data-access/access-status*` | `DataAccessService`, `data_access_status` | Grants sync |
 | Performance | `/api/performance` | `PerformanceService`, `performance_analytics`, `AppCostService` | Performance and app cost (below) |
 | App status | `/api/app-info`, `/api/health` | `AppInfoService` | |
-| Help | `/api/help` | Route only | This page |
+| Help | `/api/help` | Route only (guides tagged `user` / `approver` / `admin`; UI filters by effective role) | This page |
 
 ---
 

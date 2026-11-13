@@ -1024,12 +1024,17 @@ export interface AttributeExplorerResult {
   note: string | null;
 }
 
-/** One developer guide listed by `GET /help/docs`. */
+/** Who may see a help guide (Help UI filters by effective role / View as). */
+export type HelpAudience = "user" | "approver" | "admin";
+
+/** One guide listed by `GET /help/docs`. */
 export interface HelpDoc {
   slug: string;
   title: string;
   description: string;
   sourcePath: string;
+  /** Roles that see this guide; Help filters with the effective user. */
+  audiences: HelpAudience[];
 }
 
 /** Guides available in the Help page, in display order. */
