@@ -1,6 +1,8 @@
-import { screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
+import { MarkdownDoc, resolveImageSrc } from "@/pages/help/MarkdownDoc";
 import {
   helpPageTitle,
   helpRoleFor,
@@ -56,6 +58,31 @@ describe("helpAudience", () => {
     expect(visibleHelpDocs(catalog, "user").map((d) => d.slug)).toEqual(["user"]);
     expect(showHelpApiReference("user")).toBe(false);
     expect(helpPageTitle("user")).toBe("Help");
+  });
+});
+
+describe("MarkdownDoc", () => {
+  it("serves doc screenshots from the site root", () => {
+    expect(resolveImageSrc("../frontend/public/help-images/user-home.png")).toBe("/help-images/user-home.png");
+    expect(resolveImageSrc("https://example.com/a.png")).toBe("https://example.com/a.png");
+  });
+
+  it("renders block images as captioned figures and inline links", () => {
+    render(
+      <MemoryRouter>
+        <MarkdownDoc
+          source={[
+            "See the [User guide](?tab=user) or [docs](https://docs.databricks.com).",
+            "",
+            "![Home page](../frontend/public/help-images/user-home.png)",
+          ].join("\n")}
+        />
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole("img", { name: "Home page" })).toHaveAttribute("src", "/help-images/user-home.png");
+    expect(screen.getByText("Home page", { selector: "figcaption" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "User guide" })).toHaveAttribute("href", "/?tab=user");
+    expect(screen.getByRole("link", { name: "docs" })).toHaveAttribute("target", "_blank");
   });
 });
 

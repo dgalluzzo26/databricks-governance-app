@@ -48,6 +48,8 @@ sync:
     - .venv
     - frontend/node_modules
     - frontend/src
+    - frontend/public/help-images
+    - frontend/screenshots
     - backend/tests
   include:
     - frontend/dist/**

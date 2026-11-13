@@ -3,9 +3,11 @@
  *
  * Supports a constrained subset of CommonMark-like syntax sufficient for the guides in `docs/`:
  * ATX headings, fenced code (```mermaid blocks render as diagrams), pipe tables, lists,
- * horizontal rules, paragraphs, and inline `` `code` `` / `**bold**`.
+ * horizontal rules, paragraphs, block images (`![caption](src)`), and inline `` `code` `` /
+ * `**bold**` / `[links](href)`.
  */
 import type { ReactNode } from "react";
+import { Link } from "react-router-dom";
 import { MermaidDiagram } from "./MermaidDiagram";
 import styles from "./HelpPage.module.css";
 
@@ -19,17 +21,50 @@ export function headingId(text: string): string {
 }
 
 /**
- * Parses a single line of text into React nodes with inline code and bold spans.
+ * Resolves a doc image path to the URL the app serves it from.
+ *
+ * Guides reference screenshots relative to `docs/` (`../frontend/public/help-images/x.png`) so
+ * they also render on GitHub; the app serves `frontend/public` at the site root.
+ *
+ * @param src - Image path as written in the Markdown.
+ */
+export function resolveImageSrc(src: string): string {
+  const marker = "help-images/";
+  const index = src.indexOf(marker);
+  return index >= 0 ? `/${src.slice(index)}` : src;
+}
+
+/**
+ * Renders an inline Markdown link: in-app paths and `?query` links use the router, everything
+ * else opens in a new tab.
+ */
+function renderLink(label: string, href: string, key: number): ReactNode {
+  if (href.startsWith("/") || href.startsWith("?")) {
+    return (
+      <Link key={key} to={href}>
+        {label}
+      </Link>
+    );
+  }
+  return (
+    <a key={key} href={href} target="_blank" rel="noreferrer">
+      {label}
+    </a>
+  );
+}
+
+/**
+ * Parses a single line of text into React nodes with inline code, bold, and link spans.
  *
  * Matching rules: consecutive runs of `` `...` `` become `<code>`; runs of `**...**` become
- * `<strong>`; all other text is emitted as plain strings. Nested or overlapping markup is not
- * supported.
+ * `<strong>`; `[label](href)` becomes a link; all other text is emitted as plain strings. Nested
+ * or overlapping markup is not supported.
  *
  * @param text - Raw inline markdown fragment (no block structure).
  */
 function inline(text: string): ReactNode[] {
   const parts: ReactNode[] = [];
-  const pattern = /(`[^`]+`|\*\*[^*]+\*\*)/g;
+  const pattern = /(`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+\]\([^)\s]+\))/g;
   let last = 0;
   let match: RegExpExecArray | null;
   let key = 0;
@@ -38,6 +73,9 @@ function inline(text: string): ReactNode[] {
     const token = match[0];
     if (token.startsWith("`")) {
       parts.push(<code key={key++}>{token.slice(1, -1)}</code>);
+    } else if (token.startsWith("[")) {
+      const close = token.indexOf("](");
+      parts.push(renderLink(token.slice(1, close), token.slice(close + 2, -1), key++));
     } else {
       parts.push(<strong key={key++}>{token.slice(2, -2)}</strong>);
     }
@@ -89,11 +127,15 @@ function parseTable(lines: string[]): ReactNode {
   );
 }
 
+/** A line that is only an image: `![caption](src)`. */
+const IMAGE_LINE = /^!\[([^\]]*)\]\(([^)\s]+)\)$/;
+
 /**
  * Lightweight Markdown renderer for the developer guide (no external deps).
  *
  * Block parsing (top to bottom): blank lines skipped; `---` → `<hr>`; fenced ` ``` ` blocks →
- * `<pre><code>` (optional language in `data-lang`); `|` rows → pipe tables; `#` / `##` / `###`
+ * `<pre><code>` (optional language in `data-lang`); `![caption](src)` lines → `<figure>`;
+ * `|` rows → pipe tables; `#` / `##` / `###`
  * headings get slug `id`s (`lower case`, non-`[a-z0-9]` → `-`); `- ` / `* ` → `<ul>`; numbered
  * `N. ` → `<ol>`; otherwise adjacent non-block lines join into a `<p>`.
  *
@@ -134,6 +176,18 @@ export function MarkdownDoc({ source }: { source: string }) {
           <code>{body.join("\n")}</code>
         </pre>,
       );
+      continue;
+    }
+    const image = IMAGE_LINE.exec(line.trim());
+    if (image) {
+      const [, caption = "", src = ""] = image;
+      blocks.push(
+        <figure key={key++} className={styles.figure}>
+          <img src={resolveImageSrc(src)} alt={caption} loading="lazy" />
+          {caption && <figcaption>{caption}</figcaption>}
+        </figure>,
+      );
+      i += 1;
       continue;
     }
     if (line.startsWith("|")) {
@@ -219,6 +273,7 @@ export function MarkdownDoc({ source }: { source: string }) {
       !(lines[i] ?? "").startsWith("- ") &&
       !(lines[i] ?? "").startsWith("* ") &&
       !(lines[i] ?? "").trim().startsWith("---") &&
+      !IMAGE_LINE.test((lines[i] ?? "").trim()) &&
       !/^\d+\.\s/.test(lines[i] ?? "")
     ) {
       paragraph.push(lines[i] ?? "");

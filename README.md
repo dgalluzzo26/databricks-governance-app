@@ -122,3 +122,7 @@ in-memory.
 .venv/bin/pytest && .venv/bin/ruff check backend provisioning   # backend
 cd frontend && npm test && npm run typecheck                     # frontend
 ```
+
+The User and Approver guide screenshots in `frontend/public/help-images/` come from a demo-data
+harness (`frontend/screenshots/`). After a UI change, re-run `node screenshots/capture.cjs`
+(setup steps are in that file's header).
