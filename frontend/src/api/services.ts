@@ -22,6 +22,10 @@ import type {
   DataAccessRun,
   DataAccessAnalytics,
   DataAccessRunList,
+  DataAccessViewPage,
+  PerformanceCapacity,
+  PerformanceSlowRequestPage,
+  PerformanceSummary,
   DataAccessSettings,
   DataAccessSettingsView,
   HelpDocList,
@@ -196,6 +200,54 @@ export class DataAccessApi {
    */
   analytics(days: number, signal?: AbortSignal): Promise<DataAccessAnalytics> {
     return this.http.get<DataAccessAnalytics>(`/data-access/analytics?days=${days}`, signal);
+  }
+
+  /**
+   * `GET /data-access/analytics/runs` — one page of `data_access_runs_v` (Lakebase only).
+   *
+   * @param params - Optional mode filter and 1-based page.
+   * @param signal - Optional abort signal.
+   * @returns The page of run rows, or an unavailable page on other storage backends.
+   */
+  analyticsRuns(
+    params?: { mode?: "dry_run" | "apply"; page?: number; pageSize?: number },
+    signal?: AbortSignal,
+  ): Promise<DataAccessViewPage> {
+    return this.http.get<DataAccessViewPage>(
+      `/data-access/analytics/runs${toQuery({
+        mode: params?.mode,
+        page: params?.page != null ? String(params.page) : undefined,
+        page_size: params?.pageSize != null ? String(params.pageSize) : undefined,
+      })}`,
+      signal,
+    );
+  }
+
+  /**
+   * `GET /data-access/analytics/grants` — one page of `data_access_run_grants_v` (Lakebase only).
+   *
+   * @param params - Optional mode and change filters and 1-based page.
+   * @param signal - Optional abort signal.
+   * @returns The page of planned grant changes, or an unavailable page on other backends.
+   */
+  analyticsGrants(
+    params?: {
+      mode?: "dry_run" | "apply";
+      change?: "add" | "revoke";
+      page?: number;
+      pageSize?: number;
+    },
+    signal?: AbortSignal,
+  ): Promise<DataAccessViewPage> {
+    return this.http.get<DataAccessViewPage>(
+      `/data-access/analytics/grants${toQuery({
+        mode: params?.mode,
+        change: params?.change,
+        page: params?.page != null ? String(params.page) : undefined,
+        page_size: params?.pageSize != null ? String(params.pageSize) : undefined,
+      })}`,
+      signal,
+    );
   }
 
   /**
@@ -1053,6 +1105,51 @@ export class RecoveryApi {
   }
 }
 
+/** Health monitor: request latency, slow requests, and current resource sizing (admin only). */
+export class PerformanceApi {
+  /** @param http - Shared HTTP client. */
+  constructor(private readonly http: HttpClient) {}
+
+  /**
+   * `GET /performance/summary` — KPIs, per-activity stats, hourly roll-up, and recommendations.
+   *
+   * @param hours - Window length in hours (1..336).
+   * @param signal - Optional abort signal.
+   */
+  summary(hours: number, signal?: AbortSignal): Promise<PerformanceSummary> {
+    return this.http.get<PerformanceSummary>(`/performance/summary?hours=${hours}`, signal);
+  }
+
+  /**
+   * `GET /performance/slow-requests` — one page of slower-than-expected requests, newest first.
+   *
+   * @param params - Window in hours and 1-based page.
+   * @param signal - Optional abort signal.
+   */
+  slowRequests(
+    params: { hours: number; page: number; pageSize: number },
+    signal?: AbortSignal,
+  ): Promise<PerformanceSlowRequestPage> {
+    return this.http.get<PerformanceSlowRequestPage>(
+      `/performance/slow-requests${toQuery({
+        hours: String(params.hours),
+        page: String(params.page),
+        page_size: String(params.pageSize),
+      })}`,
+      signal,
+    );
+  }
+
+  /**
+   * `GET /performance/capacity` — current app, Lakebase, and warehouse sizing.
+   *
+   * @param signal - Optional abort signal.
+   */
+  capacity(signal?: AbortSignal): Promise<PerformanceCapacity> {
+    return this.http.get<PerformanceCapacity>("/performance/capacity", signal);
+  }
+}
+
 export interface ApiServices {
   identity: IdentityApi;
   directory: DirectoryApi;
@@ -1067,6 +1164,7 @@ export interface ApiServices {
   help: HelpApi;
   policyExceptions: PolicyExceptionsApi;
   recovery: RecoveryApi;
+  performance: PerformanceApi;
 }
 
 /**
@@ -1081,6 +1179,7 @@ export function createApiServices(http: HttpClient = new HttpClient()): ApiServi
     directory: new DirectoryApi(http),
     appInfo: new AppInfoApi(http),
     dataAccess: new DataAccessApi(http),
+    performance: new PerformanceApi(http),
     recovery: new RecoveryApi(http),
     policies: new PoliciesApi(http),
     identityAttributes: new IdentityAttributesApi(http),

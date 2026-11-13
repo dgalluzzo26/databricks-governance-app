@@ -99,6 +99,7 @@ def container(config: AppConfig) -> ServiceContainer:
     container.identity._factory = fake
     container.request_context._factory = fake
     container.app_info._factory = fake
+    container.performance._workspace = fake
     return container
 
 

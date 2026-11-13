@@ -101,7 +101,11 @@ flowchart TD
 | `memory` | Tests, local dev | Lost on restart |
 
 Repositories: settings (including grants-sync settings, runs, lock), audit, identity attributes,
-access requests, category approvers, mask rules, policy exceptions.
+access requests, category approvers, mask rules, policy exceptions, request metrics.
+
+Lakebase also owns the `request_metrics` table (one row per `/api` request: activity, status,
+total milliseconds, and warehouse and Lakebase split) and the `data_access_*_v` SQL views over the
+stored sync runs. Other backends keep request metrics in process memory only.
 
 ---
 
@@ -141,6 +145,8 @@ through `quote_identifier` and literals through `string_literal`; never interpol
 | Row filters | `/api/row-filters` | `RowFilterService` | Masking & row filters |
 | Mask rules | `/api/mask-rules` | `MaskRuleService` | Masking & row filters |
 | Data access | `/api/data-access` | `DataAccessService` | Grants sync |
+| Data access analytics | `/api/data-access/analytics*` | `DataAccessService`, `lakebase_views` | Grants sync |
+| Performance | `/api/performance` | `PerformanceService`, `performance_analytics` | Request timing (below) |
 | App status | `/api/app-info`, `/api/health` | `AppInfoService` | |
 | Help | `/api/help` | Route only | This page |
 
@@ -153,6 +159,8 @@ through `quote_identifier` and literals through `string_literal`; never interpol
 | Identity mirror full sync | `ServiceContainer.startup` | App start (Lakebase backend) |
 | Mask registry mirror | `ServiceContainer.startup` | App start when rules exist |
 | Grants sync scheduler | `DataAccessService.start_scheduler` | Every `interval_minutes` when `schedule_enabled` |
+| Request metrics flush | `MetricsRecorder` (daemon thread) | Every 5 seconds; queued metrics are written in batches of 200 |
+| Request metrics prune | `MetricsRecorder` | At most hourly; deletes rows older than 14 days |
 
 ---
 

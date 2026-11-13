@@ -12,6 +12,7 @@ from backend.app.clients.secrets import hydrate_admin_secrets
 from backend.app.clients.sql import SqlExecutor
 from backend.app.clients.workspace import WorkspaceClientFactory
 from backend.app.core.config import AppConfig, StorageBackend
+from backend.app.core.perf import MetricsRecorder
 from backend.app.repositories.base import StorageProvider
 from backend.app.repositories.factory import build_storage
 from backend.app.services.access_explorer import AccessExplorerService
@@ -24,6 +25,7 @@ from backend.app.services.identity import IdentityService
 from backend.app.services.identity_attributes import IdentityAttributeService
 from backend.app.services.identity_uc_sync import IdentityUcSync
 from backend.app.services.mask_rules import MaskRuleService
+from backend.app.services.performance import PerformanceService
 from backend.app.services.policies import PolicyService
 from backend.app.services.policy_exceptions import PolicyExceptionService
 from backend.app.services.recovery import RecoveryService
@@ -81,6 +83,8 @@ class ServiceContainer:
     policy_exceptions: PolicyExceptionService
     data_access: DataAccessService
     recovery: RecoveryService
+    performance: PerformanceService
+    metrics: MetricsRecorder
     identity_uc_sync: IdentityUcSync | None = None
 
     @classmethod
@@ -171,6 +175,11 @@ class ServiceContainer:
             policy_exceptions=policy_exceptions,
             data_access=data_access,
             recovery=RecoveryService(config, storage, workspace),
+            performance=PerformanceService(storage, workspace, config),
+            metrics=MetricsRecorder(
+                sink=storage.performance.record_many,
+                pruner=storage.performance.prune,
+            ),
             identity_uc_sync=uc_sync,
         )
 
@@ -206,9 +215,13 @@ class ServiceContainer:
             logger.exception("Failed to sync mask rules to UC mirror")
         if sync_schedule:
             self.data_access.sync_job_schedule_from_storage()
+        if migrate_storage:
+            # Serving path only; the sync Job does not handle requests, so it records nothing.
+            self.metrics.start()
 
     def shutdown(self) -> None:
-        """Release storage resources such as connection pools."""
+        """Flush request metrics, then release storage resources such as connection pools."""
+        self.metrics.stop()
         self.storage.close()
 
     def _ensure_admin_credentials(self) -> None:

@@ -17,6 +17,7 @@ from databricks.sdk.service.sql import (
 )
 
 from backend.app.core.errors import InvalidRequestError, NotConfiguredError, UpstreamError
+from backend.app.core.perf import track
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +111,11 @@ class SqlExecutor:
         """
         if not self._warehouse_id:
             raise NotConfiguredError("DATABRICKS_WAREHOUSE_ID is not configured")
+        with track("warehouse"):
+            return self._run_statement(statement, parameters)
+
+    def _run_statement(self, statement: str, parameters: dict[str, Any] | None) -> list[dict[str, Any]]:
+        """Submit, poll, and page one statement (see :meth:`query`)."""
         client = self._client_provider()
         params = [
             StatementParameterListItem(name=k, value=None if v is None else str(v))

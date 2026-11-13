@@ -113,7 +113,7 @@ export function AppStatusPage() {
                     label: "Apply",
                     value: (
                       <Badge tone={readiness.data.applyReady ? "success" : "neutral"}>
-                        {readiness.data.applyReady ? "Probes pass (still locked)" : "Locked"}
+                        {readiness.data.applyReady ? "Ready" : "Not ready"}
                       </Badge>
                     ),
                   },

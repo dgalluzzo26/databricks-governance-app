@@ -14,6 +14,7 @@ from backend.app.models.data_access import (
     DataAccessRunList,
     DataAccessSettings,
     DataAccessSettingsView,
+    DataAccessViewPage,
     RunDataAccessRequest,
 )
 
@@ -107,6 +108,58 @@ def analytics(
         Analytics payload for the window.
     """
     return container.data_access.analytics(days=days)
+
+
+@router.get("/analytics/runs", response_model=DataAccessViewPage)
+def analytics_runs(
+    _: Admin,
+    container: Container,
+    mode: str | None = Query(default=None, description="dry_run or apply"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=100),
+) -> DataAccessViewPage:
+    """One page of ``data_access_runs_v`` (one row per sync run), newest first.
+
+    Requires app admin. Lakebase only; other backends return ``available: false``.
+
+    Args:
+        container: Service container.
+        mode: Optional ``dry_run`` or ``apply`` filter.
+        page: 1-based page.
+        page_size: Rows per page.
+
+    Returns:
+        The page of run rows.
+    """
+    return container.data_access.view_page(kind="runs", mode=mode, page=page, page_size=page_size)
+
+
+@router.get("/analytics/grants", response_model=DataAccessViewPage)
+def analytics_grants(
+    _: Admin,
+    container: Container,
+    mode: str | None = Query(default=None, description="dry_run or apply"),
+    change: str | None = Query(default=None, description="add or revoke"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=100),
+) -> DataAccessViewPage:
+    """One page of ``data_access_run_grants_v`` (one row per planned grant change), newest run first.
+
+    Requires app admin. Lakebase only; other backends return ``available: false``.
+
+    Args:
+        container: Service container.
+        mode: Optional ``dry_run`` or ``apply`` filter.
+        change: Optional ``add`` or ``revoke`` filter.
+        page: 1-based page.
+        page_size: Rows per page.
+
+    Returns:
+        The page of grant-change rows.
+    """
+    return container.data_access.view_page(
+        kind="grants", mode=mode, change=change, page=page, page_size=page_size
+    )
 
 
 @router.get("/runs/latest", response_model=DataAccessRun | None)

@@ -21,6 +21,7 @@ from psycopg_pool import ConnectionPool
 from backend.app.clients.workspace import WorkspaceClientFactory
 from backend.app.core.config import AppConfig
 from backend.app.core.errors import NotConfiguredError
+from backend.app.core.perf import track
 from backend.app.models.access_request import AccessRequest, AccessRequestStatus, CategoryApprover
 from backend.app.models.app_info import StorageHealth
 from backend.app.models.audit import AuditEvent
@@ -32,14 +33,17 @@ from backend.app.models.identity_attribute import (
     ValueSource,
 )
 from backend.app.models.mask_rule import MaskRuleDefinition, MaskRuleKind
+from backend.app.models.performance import RequestMetric
 from backend.app.models.policy_exception import PolicyException
 from backend.app.models.principal import PrincipalKind
 from backend.app.repositories.base import (
     AccessRequestRepository,
     AuditRepository,
     CategoryApproverRepository,
+    DataAccessViewsReader,
     IdentityAttributeRepository,
     MaskRuleRepository,
+    PerformanceRepository,
     PolicyExceptionRepository,
     SettingsRepository,
     StorageProvider,
@@ -243,6 +247,23 @@ CREATE UNIQUE INDEX IF NOT EXISTS policy_exceptions_uniq
   ON {schema}.policy_exceptions (lower(principal_name), principal_type);
 CREATE INDEX IF NOT EXISTS policy_exceptions_principal_idx
   ON {schema}.policy_exceptions (principal_type, lower(principal_name));
+
+CREATE TABLE IF NOT EXISTS {schema}.request_metrics (
+  metric_id        BIGSERIAL PRIMARY KEY,
+  recorded_at      TIMESTAMPTZ NOT NULL,
+  method           TEXT NOT NULL,
+  route            TEXT NOT NULL,
+  activity         TEXT NOT NULL,
+  status_code      INT NOT NULL,
+  duration_ms      DOUBLE PRECISION NOT NULL,
+  warehouse_ms     DOUBLE PRECISION NOT NULL DEFAULT 0,
+  warehouse_calls  INT NOT NULL DEFAULT 0,
+  lakebase_ms      DOUBLE PRECISION NOT NULL DEFAULT 0,
+  lakebase_calls   INT NOT NULL DEFAULT 0,
+  user_name        TEXT
+);
+CREATE INDEX IF NOT EXISTS request_metrics_recorded_idx
+  ON {schema}.request_metrics (recorded_at);
 """
 
 
@@ -271,7 +292,7 @@ class _Pg:
         Returns:
             Row dicts when the statement has a result set; otherwise an empty list.
         """
-        with self.pool.connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+        with track("lakebase"), self.pool.connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(sql.format(schema=self.schema), params or {})
             return cur.fetchall() if cur.description else []
 
@@ -282,8 +303,113 @@ class _Pg:
             sql: SQL with optional ``{schema}`` placeholder and ``%(name)s`` params.
             params: Named bind parameters; defaults to an empty mapping.
         """
-        with self.pool.connection() as conn, conn.cursor() as cur:
+        with track("lakebase"), self.pool.connection() as conn, conn.cursor() as cur:
             cur.execute(sql.format(schema=self.schema), params or {})
+
+
+class LakebasePerformanceRepository(PerformanceRepository):
+    """Postgres-backed request metrics (``request_metrics``).
+
+    Args:
+        pg: Schema-scoped query helper.
+    """
+
+    _COLUMNS = (
+        "recorded_at, method, route, activity, status_code, duration_ms, "
+        "warehouse_ms, warehouse_calls, lakebase_ms, lakebase_calls, user_name"
+    )
+
+    def __init__(self, pg: _Pg) -> None:
+        self._pg = pg
+
+    def record_many(self, metrics: list[RequestMetric]) -> None:
+        """Insert a batch of metrics in one round trip."""
+        if not metrics:
+            return
+        rows = [
+            (
+                m.recorded_at,
+                m.method,
+                m.route,
+                m.activity,
+                m.status_code,
+                m.duration_ms,
+                m.warehouse_ms,
+                m.warehouse_calls,
+                m.lakebase_ms,
+                m.lakebase_calls,
+                m.user_name,
+            )
+            for m in metrics
+        ]
+        statement = (
+            f"INSERT INTO {self._pg.schema}.request_metrics ({self._COLUMNS}) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+        )
+        with self._pg.pool.connection() as conn, conn.cursor() as cur:
+            cur.executemany(statement, rows)
+
+    def list_since(self, since: datetime) -> list[RequestMetric]:
+        """Return metrics at or after ``since``, oldest first."""
+        rows = self._pg.fetch(
+            f"SELECT {self._COLUMNS} FROM {{schema}}.request_metrics "
+            "WHERE recorded_at >= %(since)s ORDER BY recorded_at",
+            {"since": since},
+        )
+        return [RequestMetric(**row) for row in rows]
+
+    def prune(self, before: datetime) -> int:
+        """Delete metrics older than ``before``."""
+        rows = self._pg.fetch(
+            "WITH gone AS (DELETE FROM {schema}.request_metrics WHERE recorded_at < %(before)s "
+            "RETURNING 1) SELECT count(*) AS n FROM gone",
+            {"before": before},
+        )
+        return int(rows[0]["n"]) if rows else 0
+
+
+class LakebaseDataAccessViews(DataAccessViewsReader):
+    """Paged reads from the data-access views created by ``lakebase_views``.
+
+    Args:
+        pg: Schema-scoped query helper.
+    """
+
+    def __init__(self, pg: _Pg) -> None:
+        self._pg = pg
+
+    def runs_page(self, *, mode: str | None, limit: int, offset: int) -> tuple[list[dict[str, Any]], int]:
+        """Read one page of ``data_access_runs_v`` newest first."""
+        where = "WHERE mode = %(mode)s" if mode else ""
+        params: dict[str, Any] = {"mode": mode, "limit": limit, "offset": offset}
+        total = self._pg.fetch(f"SELECT count(*) AS n FROM {{schema}}.data_access_runs_v {where}", params)
+        rows = self._pg.fetch(
+            f"SELECT * FROM {{schema}}.data_access_runs_v {where} "
+            "ORDER BY started_at DESC LIMIT %(limit)s OFFSET %(offset)s",
+            params,
+        )
+        return rows, int(total[0]["n"]) if total else 0
+
+    def grants_page(
+        self, *, mode: str | None, change: str | None, limit: int, offset: int
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Read one page of ``data_access_run_grants_v`` newest run first."""
+        clauses = []
+        if mode:
+            clauses.append("mode = %(mode)s")
+        if change:
+            clauses.append("change = %(change)s")
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params: dict[str, Any] = {"mode": mode, "change": change, "limit": limit, "offset": offset}
+        total = self._pg.fetch(
+            f"SELECT count(*) AS n FROM {{schema}}.data_access_run_grants_v {where}", params
+        )
+        rows = self._pg.fetch(
+            f"SELECT * FROM {{schema}}.data_access_run_grants_v {where} "
+            "ORDER BY started_at DESC, change, full_name, principal LIMIT %(limit)s OFFSET %(offset)s",
+            params,
+        )
+        return rows, int(total[0]["n"]) if total else 0
 
 
 class LakebaseSettingsRepository(SettingsRepository):
@@ -1371,6 +1497,8 @@ class LakebaseStorageProvider(StorageProvider):
         self._access_requests = LakebaseAccessRequestRepository(self._pg)
         self._mask_rules = LakebaseMaskRuleRepository(self._pg)
         self._policy_exceptions = LakebasePolicyExceptionRepository(self._pg)
+        self._performance = LakebasePerformanceRepository(self._pg)
+        self._data_access_views = LakebaseDataAccessViews(self._pg)
 
     @property
     def settings(self) -> SettingsRepository:
@@ -1406,6 +1534,16 @@ class LakebaseStorageProvider(StorageProvider):
     def policy_exceptions(self) -> PolicyExceptionRepository:
         """Return the policy-exception repository for this provider."""
         return self._policy_exceptions
+
+    @property
+    def performance(self) -> PerformanceRepository:
+        """Return the persisted request-metrics repository."""
+        return self._performance
+
+    @property
+    def data_access_views(self) -> DataAccessViewsReader | None:
+        """Return the reader for the data-access SQL views."""
+        return self._data_access_views
 
     def initialize(self, *, apply_ddl: bool = True) -> None:
         """Open the pool, apply DDL, and backfill columns for older workspaces.

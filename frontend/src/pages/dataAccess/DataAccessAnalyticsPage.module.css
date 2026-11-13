@@ -77,3 +77,9 @@
   max-width: 480px;
   overflow-wrap: anywhere;
 }
+
+.tableStack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}

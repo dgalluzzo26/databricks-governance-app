@@ -6,7 +6,7 @@
  * App-wide defaults (no refetch on window focus, no retry on 4xx) are set on the
  * `QueryClient` in `app/App.tsx`; `staleTime` is 0 unless a hook says otherwise.
  */
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useApi } from "./ApiProvider";
 import type {
   RecoveryGitSettings,
@@ -68,6 +68,14 @@ export const queryKeys = {
     ["data-access", "runs", "latest", mode] as const,
   dataAccessRun: (runId: string) => ["data-access", "runs", "id", runId] as const,
   dataAccessAnalytics: (days: number) => ["data-access", "analytics", days] as const,
+  dataAccessAnalyticsRuns: (mode: string, page: number, pageSize: number) =>
+    ["data-access", "analytics", "runs", mode, page, pageSize] as const,
+  dataAccessAnalyticsGrants: (mode: string, change: string, page: number, pageSize: number) =>
+    ["data-access", "analytics", "grants", mode, change, page, pageSize] as const,
+  performanceSummary: (hours: number) => ["performance", "summary", hours] as const,
+  performanceSlowRequests: (hours: number, page: number, pageSize: number) =>
+    ["performance", "slow-requests", hours, page, pageSize] as const,
+  performanceCapacity: ["performance", "capacity"] as const,
   directoryPrincipals: (q: string, kind?: string) => ["directory", "principals", q, kind ?? ""] as const,
 };
 
@@ -189,6 +197,92 @@ export function useDataAccessAnalytics(days: number) {
   return useQuery({
     queryKey: queryKeys.dataAccessAnalytics(days),
     queryFn: ({ signal }) => api.dataAccess.analytics(days, signal),
+  });
+}
+
+/**
+ * Fetches one page of `data_access_runs_v` (`GET /data-access/analytics/runs`).
+ *
+ * @param params - Optional mode filter, 1-based page, and page size.
+ * @returns The query result for {@link DataAccessViewPage}. Keeps the previous page on screen while the next loads.
+ */
+export function useDataAccessAnalyticsRuns(params: {
+  mode?: "dry_run" | "apply";
+  page: number;
+  pageSize: number;
+}) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.dataAccessAnalyticsRuns(params.mode ?? "all", params.page, params.pageSize),
+    queryFn: ({ signal }) => api.dataAccess.analyticsRuns(params, signal),
+    placeholderData: keepPreviousData,
+  });
+}
+
+/**
+ * Fetches one page of `data_access_run_grants_v` (`GET /data-access/analytics/grants`).
+ *
+ * @param params - Optional mode and change filters, 1-based page, and page size.
+ * @returns The query result for {@link DataAccessViewPage}. Keeps the previous page on screen while the next loads.
+ */
+export function useDataAccessAnalyticsGrants(params: {
+  mode?: "dry_run" | "apply";
+  change?: "add" | "revoke";
+  page: number;
+  pageSize: number;
+}) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.dataAccessAnalyticsGrants(
+      params.mode ?? "all",
+      params.change ?? "all",
+      params.page,
+      params.pageSize,
+    ),
+    queryFn: ({ signal }) => api.dataAccess.analyticsGrants(params, signal),
+    placeholderData: keepPreviousData,
+  });
+}
+
+/**
+ * Fetches the health-monitor summary for a window (`GET /performance/summary`).
+ *
+ * @param hours - Window length in hours.
+ * @returns The query result for {@link PerformanceSummary}.
+ */
+export function usePerformanceSummary(hours: number) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.performanceSummary(hours),
+    queryFn: ({ signal }) => api.performance.summary(hours, signal),
+  });
+}
+
+/**
+ * Fetches one page of slow requests (`GET /performance/slow-requests`).
+ *
+ * @param params - Window in hours, 1-based page, and page size.
+ * @returns The query result for the slow-request page. Keeps the previous page on screen while the next loads.
+ */
+export function usePerformanceSlowRequests(params: { hours: number; page: number; pageSize: number }) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.performanceSlowRequests(params.hours, params.page, params.pageSize),
+    queryFn: ({ signal }) => api.performance.slowRequests(params, signal),
+    placeholderData: keepPreviousData,
+  });
+}
+
+/**
+ * Fetches current app, Lakebase, and warehouse sizing (`GET /performance/capacity`).
+ *
+ * @returns The query result for the capacity report.
+ */
+export function usePerformanceCapacity() {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.performanceCapacity,
+    queryFn: ({ signal }) => api.performance.capacity(signal),
   });
 }
 

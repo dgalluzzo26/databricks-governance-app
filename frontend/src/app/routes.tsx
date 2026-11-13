@@ -23,6 +23,7 @@ import { PolicyExceptionsPage } from "@/pages/exceptions/PolicyExceptionsPage";
 import { HelpPage } from "@/pages/help/HelpPage";
 import { DataAccessPage } from "@/pages/dataAccess/DataAccessPage";
 import { DataAccessAnalyticsPage } from "@/pages/dataAccess/DataAccessAnalyticsPage";
+import { PerformancePage } from "@/pages/performance/PerformancePage";
 import { MaskRulesPage } from "@/pages/maskRules/MaskRulesPage";
 import { RowFiltersPage } from "@/pages/rowFilters/RowFiltersPage";
 import { RecoveryPage } from "@/pages/recovery/RecoveryPage";
@@ -105,6 +106,14 @@ export const routes: RouteObject[] = [
         element: (
           <RequireAdmin>
             <DataAccessAnalyticsPage />
+          </RequireAdmin>
+        ),
+      },
+      {
+        path: "performance",
+        element: (
+          <RequireAdmin>
+            <PerformancePage />
           </RequireAdmin>
         ),
       },

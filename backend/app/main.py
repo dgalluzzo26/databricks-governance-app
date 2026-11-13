@@ -17,6 +17,8 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
+from starlette.routing import Match
+from starlette.types import Scope
 
 from backend.app import __version__
 from backend.app.api.routes import api_router
@@ -25,6 +27,7 @@ from backend.app.core.config import AppConfig, get_config
 from backend.app.core.container import ServiceContainer
 from backend.app.core.errors import NotFoundError, register_exception_handlers
 from backend.app.core.logging import configure_logging
+from backend.app.core.perf import RequestTimingMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +65,15 @@ def _mount_frontend(app: FastAPI, dist: Path) -> None:
         if path and candidate.is_file() and dist.resolve() in candidate.parents:
             return FileResponse(candidate)
         return FileResponse(index)
+
+
+def _route_template(app: FastAPI, scope: Scope) -> str | None:
+    """Return the template of the first route that fully matches ``scope`` (e.g. ``/api/x/{id}``)."""
+    for route in app.routes:
+        match, _ = route.matches(scope)
+        if match == Match.FULL:
+            return getattr(route, "path", None)
+    return None
 
 
 def create_app(config: AppConfig | None = None, container: ServiceContainer | None = None) -> FastAPI:
@@ -113,6 +125,11 @@ def create_app(config: AppConfig | None = None, container: ServiceContainer | No
     app.state.container = container
     register_exception_handlers(app)
     app.include_router(api_router)
+    app.add_middleware(
+        RequestTimingMiddleware,
+        recorder=lambda: container.metrics,
+        route_template=lambda scope: _route_template(app, scope),
+    )
     _mount_frontend(app, config.frontend_dist)
     return app
 

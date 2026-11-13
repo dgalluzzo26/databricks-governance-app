@@ -17,6 +17,7 @@ from databricks.sdk.errors import DatabricksError
 from databricks.sdk.service.iam import GroupSchema, PatchSchema
 from databricks.sdk.service.jobs import CronSchedule, JobSettings, PauseStatus
 from pydantic import ValidationError
+from pydantic.alias_generators import to_camel
 
 from backend.app.clients.sql import SqlExecutor, quote_identifier, string_literal
 from backend.app.clients.workspace import WorkspaceClientFactory
@@ -33,6 +34,7 @@ from backend.app.models.data_access import (
     DataAccessRunList,
     DataAccessSettings,
     DataAccessSettingsView,
+    DataAccessViewPage,
     MembershipAction,
     MembershipChange,
     PlannedGrant,
@@ -326,6 +328,53 @@ class DataAccessService:
         """
         self._reconcile_stale_runs()
         return build_analytics(self._filtered_runs(), days=days)
+
+    def view_page(
+        self,
+        *,
+        kind: str,
+        mode: str | None = None,
+        change: str | None = None,
+        page: int = 1,
+        page_size: int = 25,
+    ) -> DataAccessViewPage:
+        """Read one page of a data-access SQL view (Lakebase only).
+
+        Args:
+            kind: ``runs`` for ``data_access_runs_v`` or ``grants`` for ``data_access_run_grants_v``.
+            mode: Optional ``dry_run`` or ``apply`` filter.
+            change: Optional ``add`` or ``revoke`` filter (grants only).
+            page: 1-based page index.
+            page_size: Rows per page (clamped to 1..100).
+
+        Returns:
+            Converted rows and the total count, or an unavailable page on other backends.
+        """
+        size = min(max(1, page_size), 100)
+        current = max(1, page)
+        source = "data_access_runs_v" if kind == "runs" else "data_access_run_grants_v"
+        reader = self._storage.data_access_views
+        if reader is None:
+            return DataAccessViewPage(
+                page=current,
+                page_size=size,
+                source=source,
+                available=False,
+                detail="The SQL views exist only on the Lakebase backend.",
+            )
+        mode_filter = self._normalize_mode_filter(mode)
+        offset = (current - 1) * size
+        if kind == "runs":
+            rows, total = reader.runs_page(mode=mode_filter, limit=size, offset=offset)
+        else:
+            rows, total = reader.grants_page(mode=mode_filter, change=change, limit=size, offset=offset)
+        return DataAccessViewPage(
+            rows=[{to_camel(key): value for key, value in row.items()} for row in rows],
+            total=total,
+            page=current,
+            page_size=size,
+            source=source,
+        )
 
     def latest_run(self, *, mode: str | None = None) -> DataAccessRun | None:
         """Return the most recent run (optionally mode-filtered) including its plan.

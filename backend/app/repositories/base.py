@@ -20,6 +20,7 @@ from backend.app.models.identity_attribute import (
     IdentityAttributeAssignment,
 )
 from backend.app.models.mask_rule import MaskRuleDefinition
+from backend.app.models.performance import RequestMetric
 from backend.app.models.policy_exception import PolicyException
 
 
@@ -460,6 +461,95 @@ class PolicyExceptionRepository(ABC):
         """
 
 
+class PerformanceRepository(ABC):
+    """Append-only store for per-request elapsed-time metrics."""
+
+    @abstractmethod
+    def record_many(self, metrics: list[RequestMetric]) -> None:
+        """Persist a batch of request metrics.
+
+        Args:
+            metrics: Metrics to append.
+        """
+
+    @abstractmethod
+    def list_since(self, since: datetime) -> list[RequestMetric]:
+        """Return metrics recorded at or after ``since``, oldest first.
+
+        Args:
+            since: Inclusive lower bound.
+
+        Returns:
+            Matching metrics.
+        """
+
+    @abstractmethod
+    def prune(self, before: datetime) -> int:
+        """Delete metrics recorded before ``before``.
+
+        Args:
+            before: Exclusive upper bound for deletion.
+
+        Returns:
+            Rows deleted.
+        """
+
+
+class InMemoryPerformanceRepository(PerformanceRepository):
+    """Process-local metrics store for backends without a metrics table (memory, Delta)."""
+
+    def __init__(self) -> None:
+        self._rows: list[RequestMetric] = []
+
+    def record_many(self, metrics: list[RequestMetric]) -> None:
+        """Append metrics to the in-process list."""
+        self._rows.extend(metrics)
+
+    def list_since(self, since: datetime) -> list[RequestMetric]:
+        """Return metrics at or after ``since``, oldest first."""
+        return sorted((m for m in self._rows if m.recorded_at >= since), key=lambda m: m.recorded_at)
+
+    def prune(self, before: datetime) -> int:
+        """Drop metrics older than ``before``."""
+        kept = [m for m in self._rows if m.recorded_at >= before]
+        removed = len(self._rows) - len(kept)
+        self._rows = kept
+        return removed
+
+
+class DataAccessViewsReader(ABC):
+    """Paged reads from the data-access SQL views (Lakebase only)."""
+
+    @abstractmethod
+    def runs_page(self, *, mode: str | None, limit: int, offset: int) -> tuple[list[dict[str, Any]], int]:
+        """Read ``data_access_runs_v`` newest first.
+
+        Args:
+            mode: Optional ``dry_run`` or ``apply`` filter.
+            limit: Page size.
+            offset: Rows to skip.
+
+        Returns:
+            The page rows and the total matching row count.
+        """
+
+    @abstractmethod
+    def grants_page(
+        self, *, mode: str | None, change: str | None, limit: int, offset: int
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Read ``data_access_run_grants_v`` newest run first.
+
+        Args:
+            mode: Optional ``dry_run`` or ``apply`` filter.
+            change: Optional ``add`` or ``revoke`` filter.
+            limit: Page size.
+            offset: Rows to skip.
+
+        Returns:
+            The page rows and the total matching row count.
+        """
+
+
 class StorageProvider(ABC):
     """Strategy for where app state lives. One provider supplies every repository.
 
@@ -531,6 +621,28 @@ class StorageProvider(ABC):
         Returns:
             Repository used for global ABAC policy exceptions.
         """
+
+    @property
+    def performance(self) -> PerformanceRepository:
+        """Request-metrics repository; process-local unless a backend persists it.
+
+        Returns:
+            Repository used by the request timing recorder and the health monitor.
+        """
+        repo = getattr(self, "_performance_fallback", None)
+        if repo is None:
+            repo = InMemoryPerformanceRepository()
+            self._performance_fallback = repo
+        return repo
+
+    @property
+    def data_access_views(self) -> DataAccessViewsReader | None:
+        """Reader for the data-access SQL views, or None when the backend has none.
+
+        Returns:
+            A view reader (Lakebase) or None (callers fall back to stored run records).
+        """
+        return None
 
     def initialize(self, *, apply_ddl: bool = True) -> None:
         """Prepare storage (create schema, open pools). Must be idempotent.

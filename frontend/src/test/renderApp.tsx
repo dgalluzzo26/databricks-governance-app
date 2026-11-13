@@ -37,6 +37,10 @@ import type {
   MaskHandlerValidateRequest,
   TableAccessInsight,
   DataAccessAnalytics,
+  DataAccessViewPage,
+  PerformanceCapacity,
+  PerformanceSlowRequestPage,
+  PerformanceSummary,
   DataAccessReadiness,
   DataAccessRun,
   DataAccessSettings,
@@ -757,6 +761,172 @@ export const testDataAccessAnalytics: DataAccessAnalytics = {
   ],
 };
 
+/** Sample performance summary (one window of traffic with one slow activity). */
+export const testPerformanceSummary: PerformanceSummary = {
+  hours: 24,
+  generatedAt: "2026-11-12T12:00:00Z",
+  kpis: {
+    totalRequests: 120,
+    slowRequests: 6,
+    errorRequests: 1,
+    slowRate: 0.05,
+    p95Ms: 4200,
+    warehouseShare: 0.75,
+    lakebaseShare: 0.1,
+    appShare: 0.15,
+    peakConcurrency: 4,
+  },
+  activities: [
+    {
+      activity: "Approve permission request",
+      method: "POST",
+      route: "/api/identity/access-requests/{request_id}/approve",
+      expectedMs: 5000,
+      count: 10,
+      errorCount: 0,
+      slowCount: 3,
+      avgMs: 4800,
+      p50Ms: 4000,
+      p95Ms: 9000,
+      maxMs: 9500,
+      avgWarehouseMs: 3900,
+      avgLakebaseMs: 200,
+      avgAppMs: 700,
+    },
+    {
+      activity: "Load signed-in user",
+      method: "GET",
+      route: "/api/me",
+      expectedMs: 1000,
+      count: 100,
+      errorCount: 0,
+      slowCount: 0,
+      avgMs: 80,
+      p50Ms: 70,
+      p95Ms: 150,
+      maxMs: 300,
+      avgWarehouseMs: 0,
+      avgLakebaseMs: 0,
+      avgAppMs: 80,
+    },
+  ],
+  hourly: [
+    {
+      hour: "2026-11-12T11:00:00Z",
+      count: 120,
+      slowCount: 6,
+      p95Ms: 4200,
+      avgWarehouseMs: 300,
+      avgLakebaseMs: 20,
+      avgAppMs: 60,
+      peakConcurrency: 4,
+    },
+  ],
+  recommendations: [
+    {
+      target: "warehouse",
+      severity: "warning",
+      title: "Approve permission request: warehouse time dominates",
+      detail: "90% of slow time in 3 runs went to the warehouse. Raise the SQL warehouse size or max clusters.",
+    },
+  ],
+};
+
+/** Sample slow-request page. */
+export const testPerformanceSlowRequests: PerformanceSlowRequestPage = {
+  items: [
+    {
+      recordedAt: "2026-11-12T11:30:00Z",
+      activity: "Approve permission request",
+      method: "POST",
+      route: "/api/identity/access-requests/{request_id}/approve",
+      statusCode: 200,
+      durationMs: 9000,
+      expectedMs: 5000,
+      warehouseMs: 8000,
+      lakebaseMs: 200,
+      appMs: 800,
+      userName: "admin@example.com",
+    },
+  ],
+  total: 1,
+  page: 1,
+  pageSize: 25,
+};
+
+/** Sample sizing: app and warehouse readable, Lakebase unavailable. */
+export const testPerformanceCapacity: PerformanceCapacity = {
+  settings: [
+    { target: "app", name: "data-governance-app", size: "MEDIUM", autoscaling: null, detail: "App compute size", available: true },
+    {
+      target: "lakebase",
+      name: "primary",
+      size: null,
+      autoscaling: null,
+      detail: "Could not read endpoint",
+      available: false,
+    },
+    {
+      target: "warehouse",
+      name: "Governance WH",
+      size: "Medium",
+      autoscaling: "1–2 clusters",
+      detail: "State: RUNNING, auto-stop 10 min",
+      available: true,
+    },
+  ],
+};
+
+/** Sample run history page from `data_access_runs_v`. */
+export const testDataAccessRunsPage: DataAccessViewPage = {
+  rows: [
+    {
+      runId: "run-1",
+      status: "success",
+      mode: "apply",
+      triggeredBy: "scheduler",
+      startedAt: "2026-11-12T10:00:00Z",
+      durationSeconds: 14.5,
+      grantsToAdd: 4,
+      grantsToRevoke: 1,
+      membersToAdd: 2,
+      membersToRemove: 0,
+      applyErrorCount: 0,
+      error: null,
+      fingerprint: "abcdef1234567890",
+    },
+  ],
+  total: 26,
+  page: 1,
+  pageSize: 25,
+  source: "data_access_runs_v",
+  available: true,
+  detail: null,
+};
+
+/** Sample grant changes page from `data_access_run_grants_v`. */
+export const testDataAccessGrantsPage: DataAccessViewPage = {
+  rows: [
+    {
+      runId: "run-1",
+      startedAt: "2026-11-12T10:00:00Z",
+      mode: "apply",
+      change: "add",
+      securableType: "table",
+      fullName: "main.sales.orders",
+      principal: "dac_finance_readers",
+      privilege: "SELECT",
+      reason: "data_access_control=finance",
+    },
+  ],
+  total: 1,
+  page: 1,
+  pageSize: 25,
+  source: "data_access_run_grants_v",
+  available: true,
+  detail: null,
+};
+
 export function fakeServices(
   overrides: {
     user?: CurrentUser | Error;
@@ -777,6 +947,11 @@ export function fakeServices(
     dataAccessReadiness?: DataAccessReadiness | Error;
     dataAccessRun?: DataAccessRun | null | Error;
     dataAccessAnalytics?: DataAccessAnalytics | Error;
+    dataAccessRuns?: DataAccessViewPage | Error;
+    dataAccessGrants?: DataAccessViewPage | Error;
+    performanceSummary?: PerformanceSummary | Error;
+    performanceSlowRequests?: PerformanceSlowRequestPage | Error;
+    performanceCapacity?: PerformanceCapacity | Error;
   } = {},
 ): ApiServices {
   const governedTags = overrides.governedTags ?? testGovernedTags;
@@ -816,6 +991,26 @@ export function fakeServices(
           total: 2,
           truncated: false,
         }) satisfies DirectoryPrincipalList,
+    },
+    performance: {
+      summary: async (hours: number) => {
+        if (overrides.performanceSummary instanceof Error) return Promise.reject(overrides.performanceSummary);
+        return { ...(overrides.performanceSummary ?? testPerformanceSummary), hours };
+      },
+      slowRequests: async (params: { page: number; pageSize: number }) => {
+        if (overrides.performanceSlowRequests instanceof Error) {
+          return Promise.reject(overrides.performanceSlowRequests);
+        }
+        return {
+          ...(overrides.performanceSlowRequests ?? testPerformanceSlowRequests),
+          page: params.page,
+          pageSize: params.pageSize,
+        };
+      },
+      capacity: async () => {
+        if (overrides.performanceCapacity instanceof Error) return Promise.reject(overrides.performanceCapacity);
+        return overrides.performanceCapacity ?? testPerformanceCapacity;
+      },
     },
     recovery: {
       getSettings: async () => testRecoverySettings,
@@ -893,6 +1088,22 @@ export function fakeServices(
           return Promise.reject(overrides.dataAccessAnalytics);
         }
         return { ...(overrides.dataAccessAnalytics ?? testDataAccessAnalytics), days };
+      },
+      analyticsRuns: async (params?: { page?: number; pageSize?: number }) => {
+        if (overrides.dataAccessRuns instanceof Error) return Promise.reject(overrides.dataAccessRuns);
+        return {
+          ...(overrides.dataAccessRuns ?? testDataAccessRunsPage),
+          page: params?.page ?? 1,
+          pageSize: params?.pageSize ?? 25,
+        };
+      },
+      analyticsGrants: async (params?: { page?: number; pageSize?: number }) => {
+        if (overrides.dataAccessGrants instanceof Error) return Promise.reject(overrides.dataAccessGrants);
+        return {
+          ...(overrides.dataAccessGrants ?? testDataAccessGrantsPage),
+          page: params?.page ?? 1,
+          pageSize: params?.pageSize ?? 25,
+        };
       },
       runNow: async (_mode?: "dry_run" | "apply") =>
         overrides.dataAccessRun instanceof Error

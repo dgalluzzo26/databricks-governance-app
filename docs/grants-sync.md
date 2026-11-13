@@ -302,6 +302,9 @@ never overlap. Locks older than 30 minutes are treated as stale.
 | `GET /api/data-access/runs?mode=&page=&page_size=` | Last 30 days, newest first, summaries only (no plan) |
 | `GET /api/data-access/runs/latest?mode=` | Latest run with its sampled plan |
 | `POST /api/data-access/runs` `{mode}` | Runs now and returns the finished run |
+| `GET /api/data-access/analytics?days=` | KPIs, daily activity, recent failures, and fingerprint history (admin) |
+| `GET /api/data-access/analytics/runs?mode=&page=&page_size=` | One page of `data_access_runs_v`, newest first (Lakebase only) |
+| `GET /api/data-access/analytics/grants?mode=&change=&page=&page_size=` | One page of `data_access_run_grants_v`, newest run first (Lakebase only) |
 
 Runs are pruned on write: older than 30 days or beyond 500 records. Each stored plan keeps up to
 25 sample rows per list; `summary` always holds the full counts and `truncated` says whether

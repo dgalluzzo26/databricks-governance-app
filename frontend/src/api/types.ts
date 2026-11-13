@@ -1230,3 +1230,128 @@ export interface DataAccessAnalytics {
   failures: DataAccessAnalyticsFailure[];
   fingerprints: DataAccessAnalyticsFingerprint[];
 }
+
+/**
+ * One page of rows from a data-access SQL view (`GET /data-access/analytics/runs` or
+ * `/analytics/grants`). Rows are keyed by camelCase column name.
+ */
+export interface DataAccessViewPage {
+  rows: Record<string, unknown>[];
+  total: number;
+  page: number;
+  pageSize: number;
+  /** View the rows came from, e.g. `data_access_runs_v`. */
+  source: string;
+  /** False when the backend has no SQL views (memory or Delta storage). */
+  available: boolean;
+  detail: string | null;
+}
+
+/** Which resource a performance recommendation is about. */
+export type PerformanceTarget = "app" | "lakebase" | "warehouse" | "none";
+
+/** How urgent a performance recommendation is. */
+export type PerformanceSeverity = "info" | "warning" | "critical";
+
+/** Headline numbers for the health-monitor window (`GET /performance/summary`). */
+export interface PerformanceKpis {
+  totalRequests: number;
+  slowRequests: number;
+  errorRequests: number;
+  /** Slow over total, 0..1; null with no traffic. */
+  slowRate: number | null;
+  p95Ms: number | null;
+  /** Share of slow-request time spent on the SQL warehouse, 0..1. */
+  warehouseShare: number | null;
+  /** Share of slow-request time spent on Lakebase, 0..1. */
+  lakebaseShare: number | null;
+  /** Share of slow-request time in the app itself (including Databricks REST calls), 0..1. */
+  appShare: number | null;
+  peakConcurrency: number;
+}
+
+/** Latency statistics for one API activity over the window. */
+export interface PerformanceActivity {
+  activity: string;
+  method: string;
+  route: string;
+  expectedMs: number;
+  count: number;
+  errorCount: number;
+  slowCount: number;
+  avgMs: number;
+  p50Ms: number;
+  p95Ms: number;
+  maxMs: number;
+  avgWarehouseMs: number;
+  avgLakebaseMs: number;
+  avgAppMs: number;
+}
+
+/** Hourly roll-up across all activities. */
+export interface PerformanceHour {
+  hour: string;
+  count: number;
+  slowCount: number;
+  p95Ms: number;
+  avgWarehouseMs: number;
+  avgLakebaseMs: number;
+  avgAppMs: number;
+  peakConcurrency: number;
+}
+
+/** One sizing recommendation derived from slow-request attribution. */
+export interface PerformanceRecommendation {
+  target: PerformanceTarget;
+  severity: PerformanceSeverity;
+  title: string;
+  detail: string;
+}
+
+/** Health-monitor payload for the window (`GET /performance/summary`). */
+export interface PerformanceSummary {
+  hours: number;
+  generatedAt: string;
+  kpis: PerformanceKpis;
+  activities: PerformanceActivity[];
+  hourly: PerformanceHour[];
+  recommendations: PerformanceRecommendation[];
+}
+
+/** One slow request (slower than its activity's expected time). */
+export interface PerformanceSlowRequest {
+  recordedAt: string;
+  activity: string;
+  method: string;
+  route: string;
+  statusCode: number;
+  durationMs: number;
+  expectedMs: number;
+  warehouseMs: number;
+  lakebaseMs: number;
+  appMs: number;
+  userName: string | null;
+}
+
+/** One page of slow requests, newest first (`GET /performance/slow-requests`). */
+export interface PerformanceSlowRequestPage {
+  items: PerformanceSlowRequest[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+/** Current sizing of one resource (`GET /performance/capacity`). */
+export interface PerformanceCapacitySetting {
+  target: PerformanceTarget;
+  name: string;
+  size: string | null;
+  autoscaling: string | null;
+  detail: string | null;
+  available: boolean;
+}
+
+/** App, Lakebase, and warehouse sizing (`GET /performance/capacity`). */
+export interface PerformanceCapacity {
+  settings: PerformanceCapacitySetting[];
+}

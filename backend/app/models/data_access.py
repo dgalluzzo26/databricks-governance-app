@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 
 from pydantic import Field, computed_field, field_validator
 
@@ -521,3 +522,25 @@ class DataAccessAnalytics(ApiModel):
     daily: list[DataAccessAnalyticsDay] = Field(default_factory=list)
     failures: list[DataAccessAnalyticsFailure] = Field(default_factory=list)
     fingerprints: list[DataAccessAnalyticsFingerprint] = Field(default_factory=list)
+
+
+class DataAccessViewPage(ApiModel):
+    """One page of rows from a data-access SQL view, keyed in camelCase.
+
+    Attributes:
+        rows: Page rows (column names converted to camelCase).
+        total: Rows matching the filters across all pages.
+        page: 1-based page index.
+        page_size: Rows per page.
+        source: View the rows came from (e.g. ``data_access_runs_v``).
+        available: False when the backend has no SQL views (memory / Delta).
+        detail: Why the page is unavailable, when it is.
+    """
+
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+    total: int = 0
+    page: int = 1
+    page_size: int = 25
+    source: str = ""
+    available: bool = True
+    detail: str | None = None

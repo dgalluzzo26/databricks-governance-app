@@ -23,6 +23,7 @@ import { useDataAccessAnalytics } from "@/api/queries";
 import type { DataAccessAnalytics, DataAccessAnalyticsDay } from "@/api/types";
 import { Alert, Card, ErrorAlert, PageHeader, Spinner } from "@/components/ui";
 import identityStyles from "../identity/IdentityPage.module.css";
+import { GrantChangesTable, RunHistoryTable } from "./DataAccessViewTables";
 import styles from "./DataAccessAnalyticsPage.module.css";
 
 const WINDOW_OPTIONS = [7, 14, 30] as const;
@@ -391,6 +392,22 @@ export function DataAccessAnalyticsPage() {
           </Card>
         </>
       ) : null}
+
+      <Card title="Sync run history">
+        <p className={styles.caption}>
+          All stored runs from the Lakebase view <code>data_access_runs_v</code>, newest first. Not limited
+          to the window above.
+        </p>
+        <RunHistoryTable />
+      </Card>
+
+      <Card title="Planned grant changes">
+        <p className={styles.caption}>
+          Each grant or revoke a run planned or applied, from <code>data_access_run_grants_v</code>, newest
+          run first.
+        </p>
+        <GrantChangesTable />
+      </Card>
     </div>
   );
 }
