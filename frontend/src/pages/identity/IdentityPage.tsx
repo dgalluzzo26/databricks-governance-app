@@ -11,6 +11,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, Navigate, useSearchParams } from "react-router-dom";
 import {
+  useAccessStatus,
   useAssignAttribute,
   useAttributeAssignments,
   useAttributeDefinitions,
@@ -23,6 +24,7 @@ import {
   useDeleteCategoryApprover,
   useGovernedTags,
   useMyAccessRequests,
+  useMyAccessStatus,
   useMyAttributes,
   useRevokeAttribute,
   useRowFilterDimensions,
@@ -37,6 +39,7 @@ import type {
   PrincipalKind,
   ValueSource,
 } from "@/api/types";
+import { AccessStatusBadge } from "@/components/AccessStatusBadge";
 import { PrincipalPicker } from "@/components/PrincipalPicker";
 import { Alert, Badge, Card, ErrorAlert, PageHeader, Spinner, TablePager } from "@/components/ui";
 import { useClientPagination } from "@/hooks/useClientPagination";
@@ -232,6 +235,8 @@ function MyAttributesPanel() {
  */
 function MyAttributesTable({ assignments }: { assignments: IdentityAttributeAssignment[] }) {
   const pager = useClientPagination(assignments);
+  const access = useMyAccessStatus();
+  const statusById = new Map((access.data?.statuses ?? []).map((s) => [s.assignmentId, s]));
 
   return (
     <>
@@ -243,6 +248,7 @@ function MyAttributesTable({ assignments }: { assignments: IdentityAttributeAssi
               <th>Value</th>
               <th>Via</th>
               <th>Expires</th>
+              <th>Data access</th>
             </tr>
           </thead>
           <tbody>
@@ -258,6 +264,9 @@ function MyAttributesTable({ assignments }: { assignments: IdentityAttributeAssi
                   <Badge>{item.principalType}</Badge> <code>{item.principalName}</code>
                 </td>
                 <td className={styles.muted}>{formatWhen(item.expiresAt)}</td>
+                <td>
+                  <AccessStatusBadge status={statusById.get(item.assignmentId)} />
+                </td>
               </tr>
             ))}
           </tbody>
@@ -853,6 +862,8 @@ function AssignmentsPanel() {
   const pager = useClientPagination(assignments, {
     resetKey: `${principalName}|${principalType}|${attributeKey}|${includeInactive}`,
   });
+  const access = useAccessStatus(pager.rows.map((item) => item.assignmentId));
+  const statusById = new Map((access.data?.statuses ?? []).map((s) => [s.assignmentId, s]));
 
   const [formPrincipal, setFormPrincipal] = useState("");
   const [formType, setFormType] = useState<PrincipalKind>("USER");
@@ -1050,6 +1061,7 @@ function AssignmentsPanel() {
                     <th>Attribute</th>
                     <th>Value</th>
                     <th>Status</th>
+                    <th>Data access</th>
                     <th>Granted</th>
                     <th>Expires</th>
                     <th />
@@ -1074,6 +1086,9 @@ function AssignmentsPanel() {
                         <Badge tone={item.active ? "success" : "neutral"}>
                           {item.active ? "Active" : "Inactive"}
                         </Badge>
+                      </td>
+                      <td>
+                        <AccessStatusBadge status={statusById.get(item.assignmentId)} />
                       </td>
                       <td className={styles.muted}>
                         {item.grantedBy ?? "—"}

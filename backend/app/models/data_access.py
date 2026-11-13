@@ -353,6 +353,8 @@ class DataAccessPlan(ApiModel):
     truncated: bool = False
     drift_since_last_run: list[str] = Field(default_factory=list)
     apply_errors: list[str] = Field(default_factory=list)
+    # Outstanding-item key -> error for steps that failed during apply; never stored on the run.
+    apply_failures: dict[str, str] = Field(default_factory=dict, exclude=True)
 
 
 class DataAccessRun(ApiModel):

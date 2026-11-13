@@ -23,6 +23,13 @@ import type {
   DataAccessAnalytics,
   DataAccessRunList,
   DataAccessViewPage,
+  AccessStatusList,
+  GapItemPage,
+  GapKind,
+  GapStatus,
+  PendingSummary,
+  TagChangeKind,
+  TagChangePage,
   PerformanceCapacity,
   PerformanceSlowRequestPage,
   PerformanceSummary,
@@ -304,6 +311,81 @@ export class DataAccessApi {
    */
   runNow(mode: "dry_run" | "apply" = "dry_run"): Promise<DataAccessRun> {
     return this.http.post<DataAccessRun>("/data-access/runs", { mode });
+  }
+
+  /**
+   * `GET /data-access/pending` — outstanding sync work by kind, plus tag change counts.
+   *
+   * @param signal - Optional abort signal.
+   * @returns Counts and when they were computed.
+   */
+  pendingSummary(signal?: AbortSignal): Promise<PendingSummary> {
+    return this.http.get<PendingSummary>("/data-access/pending", signal);
+  }
+
+  /**
+   * `GET /data-access/pending/items` — one page of outstanding items.
+   *
+   * @param params - Kind (or `expired`), status, search text, and page.
+   * @param signal - Optional abort signal.
+   * @returns The page and total.
+   */
+  pendingItems(
+    params: { kind?: GapKind | "expired"; status?: GapStatus; q?: string; page: number; pageSize: number },
+    signal?: AbortSignal,
+  ): Promise<GapItemPage> {
+    return this.http.get<GapItemPage>(
+      `/data-access/pending/items${toQuery({
+        kind: params.kind,
+        status: params.status,
+        q: params.q || undefined,
+        page: String(params.page),
+        page_size: String(params.pageSize),
+      })}`,
+      signal,
+    );
+  }
+
+  /**
+   * `GET /data-access/tag-changes` — tables whose data-access tagging changed, newest first.
+   *
+   * @param params - Change kind, scope (`latest` sync or `all` retained), and page.
+   * @param signal - Optional abort signal.
+   * @returns The page and total.
+   */
+  tagChanges(
+    params: { change?: TagChangeKind; scope: "latest" | "all"; page: number; pageSize: number },
+    signal?: AbortSignal,
+  ): Promise<TagChangePage> {
+    return this.http.get<TagChangePage>(
+      `/data-access/tag-changes${toQuery({
+        change: params.change,
+        scope: params.scope,
+        page: String(params.page),
+        page_size: String(params.pageSize),
+      })}`,
+      signal,
+    );
+  }
+
+  /**
+   * `GET /data-access/access-status/me` — whether the signed-in user's data-access attributes work yet.
+   *
+   * @param signal - Optional abort signal.
+   * @returns One status per data-access assignment.
+   */
+  myAccessStatus(signal?: AbortSignal): Promise<AccessStatusList> {
+    return this.http.get<AccessStatusList>("/data-access/access-status/me", signal);
+  }
+
+  /**
+   * `POST /data-access/access-status` — access status for up to 200 assignments (admin only).
+   *
+   * @param assignmentIds - Assignments to report on; non data-access ones are skipped.
+   * @returns One status per data-access assignment.
+   */
+  accessStatus(assignmentIds: string[]): Promise<AccessStatusList> {
+    return this.http.post<AccessStatusList>("/data-access/access-status", { assignmentIds });
   }
 }
 

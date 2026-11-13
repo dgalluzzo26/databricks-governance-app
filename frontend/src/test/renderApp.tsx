@@ -38,6 +38,10 @@ import type {
   TableAccessInsight,
   DataAccessAnalytics,
   DataAccessViewPage,
+  AccessStatusList,
+  GapItemPage,
+  PendingSummary,
+  TagChangePage,
   PerformanceCapacity,
   PerformanceSlowRequestPage,
   PerformanceSummary,
@@ -927,6 +931,102 @@ export const testDataAccessGrantsPage: DataAccessViewPage = {
   detail: null,
 };
 
+/** Outstanding work after a dry run: one item of most kinds, one failure. */
+export const testPendingSummary: PendingSummary = {
+  meta: {
+    runId: "run-9",
+    mode: "dry_run",
+    computedAt: "2026-11-13T09:00:00Z",
+    tablesTracked: 5123,
+    tagBaseline: false,
+  },
+  counts: {
+    groupCreate: 2,
+    groupNest: 1,
+    memberAdd: 3,
+    memberRemove: 0,
+    grantAdd: 17,
+    grantRevoke: 4,
+    failed: 1,
+    expiredSinceSync: 2,
+  },
+  tagChanges: { newlyEligible: 6, noLongerEligible: 1, valueChanged: 2 },
+  total: 27,
+};
+
+/** One page of outstanding items. */
+export const testPendingItems: GapItemPage = {
+  items: [
+    {
+      itemKey: "grant_add|table|main.sales.orders|dac_finance|SELECT",
+      kind: "grant_add",
+      status: "pending",
+      groupName: "dac_finance",
+      principalName: null,
+      principalType: null,
+      securableType: "table",
+      fullName: "main.sales.orders",
+      privilege: "SELECT",
+      value: "finance",
+      reason: "tagged table main.sales.orders",
+      error: null,
+      runId: "run-9",
+      computedAt: "2026-11-13T09:00:00Z",
+    },
+    {
+      itemKey: "group_nest|dac_finance_budget|dac_finance",
+      kind: "group_nest",
+      status: "failed",
+      groupName: "dac_finance_budget",
+      principalName: "dac_finance",
+      principalType: "GROUP",
+      securableType: null,
+      fullName: null,
+      privilege: null,
+      value: "finance.budget",
+      reason: "dac_finance must be a member of dac_finance_budget",
+      error: "permission denied",
+      runId: "run-9",
+      computedAt: "2026-11-13T09:00:00Z",
+    },
+  ],
+  total: 2,
+  page: 1,
+  pageSize: 25,
+};
+
+/** One page of tag changes from the last sync. */
+export const testTagChanges: TagChangePage = {
+  items: [
+    {
+      runId: "run-9",
+      detectedAt: "2026-11-13T09:00:00Z",
+      fullName: "main.sales.forecast",
+      change: "value_changed",
+      oldValue: "finance",
+      newValue: "finance.budget",
+    },
+  ],
+  total: 1,
+  page: 1,
+  pageSize: 25,
+};
+
+/** Access status for the default `a1` assignment: in the group, grants pending. */
+export const testAccessStatus: AccessStatusList = {
+  statuses: [
+    {
+      assignmentId: "a1",
+      principalName: "ana.lopez@example.com",
+      value: "finance.budget",
+      groupName: "dac_finance_budget",
+      membership: "member",
+      structure: "pending_sync",
+      detail: "Group was created at approval; nesting and table grants are added by the next sync",
+    },
+  ],
+};
+
 export function fakeServices(
   overrides: {
     user?: CurrentUser | Error;
@@ -949,6 +1049,10 @@ export function fakeServices(
     dataAccessAnalytics?: DataAccessAnalytics | Error;
     dataAccessRuns?: DataAccessViewPage | Error;
     dataAccessGrants?: DataAccessViewPage | Error;
+    pendingSummary?: PendingSummary | Error;
+    pendingItems?: GapItemPage | Error;
+    tagChanges?: TagChangePage | Error;
+    accessStatus?: AccessStatusList | Error;
     performanceSummary?: PerformanceSummary | Error;
     performanceSlowRequests?: PerformanceSlowRequestPage | Error;
     performanceCapacity?: PerformanceCapacity | Error;
@@ -1109,6 +1213,33 @@ export function fakeServices(
         overrides.dataAccessRun instanceof Error
           ? Promise.reject(overrides.dataAccessRun)
           : Promise.resolve(overrides.dataAccessRun ?? testDataAccessRun),
+      pendingSummary: async () => {
+        if (overrides.pendingSummary instanceof Error) return Promise.reject(overrides.pendingSummary);
+        return overrides.pendingSummary ?? testPendingSummary;
+      },
+      pendingItems: async (params: { kind?: string; status?: string; page: number; pageSize: number }) => {
+        if (overrides.pendingItems instanceof Error) return Promise.reject(overrides.pendingItems);
+        const base = overrides.pendingItems ?? testPendingItems;
+        const items = base.items.filter(
+          (item) =>
+            (!params.kind || params.kind === "expired" || item.kind === params.kind) &&
+            (!params.status || item.status === params.status),
+        );
+        return { items, total: items.length, page: params.page, pageSize: params.pageSize };
+      },
+      tagChanges: async (params: { page: number; pageSize: number }) => {
+        if (overrides.tagChanges instanceof Error) return Promise.reject(overrides.tagChanges);
+        return { ...(overrides.tagChanges ?? testTagChanges), page: params.page, pageSize: params.pageSize };
+      },
+      myAccessStatus: async () => {
+        if (overrides.accessStatus instanceof Error) return Promise.reject(overrides.accessStatus);
+        return overrides.accessStatus ?? testAccessStatus;
+      },
+      accessStatus: async (ids: string[]) => {
+        if (overrides.accessStatus instanceof Error) return Promise.reject(overrides.accessStatus);
+        const all = overrides.accessStatus ?? testAccessStatus;
+        return { statuses: all.statuses.filter((s) => ids.includes(s.assignmentId)) };
+      },
     },
     attributeExplorer: {
       analyze: async (body: import("@/api/types").AnalyzeAttributeRequest) => {

@@ -107,6 +107,14 @@ Lakebase also owns the `request_metrics` table (one row per `/api` request: acti
 total milliseconds, and warehouse and Lakebase split) and the `data_access_*_v` SQL views over the
 stored sync runs. Other backends keep request metrics in process memory only.
 
+Grants-sync state lives in four more Lakebase tables, written by both the app SP (immediate
+membership on approval) and the Admin SP (sync Job): `data_access_gap_items` and
+`data_access_gap_meta` (full outstanding work from the last run), `data_access_tag_snapshot` and
+`data_access_tag_changes` (table tagging and changes between runs), and
+`data_access_membership_events` (approval-time adds and removes). They use text keys rather than
+serial ids; the Admin SP is granted table DML and sequence usage. Other backends keep this state
+in process memory.
+
 ---
 
 ## Services and the Databricks APIs they call
@@ -146,6 +154,8 @@ through `quote_identifier` and literals through `string_literal`; never interpol
 | Mask rules | `/api/mask-rules` | `MaskRuleService` | Masking & row filters |
 | Data access | `/api/data-access` | `DataAccessService` | Grants sync |
 | Data access analytics | `/api/data-access/analytics*` | `DataAccessService`, `lakebase_views` | Grants sync |
+| Data access outstanding work | `/api/data-access/pending*`, `/api/data-access/tag-changes` | `DataAccessService`, `data_access_gap` | Grants sync |
+| Identity access status | `/api/data-access/access-status*` | `DataAccessService`, `data_access_status` | Grants sync |
 | Performance | `/api/performance` | `PerformanceService`, `performance_analytics` | Request timing (below) |
 | App status | `/api/app-info`, `/api/health` | `AppInfoService` | |
 | Help | `/api/help` | Route only | This page |
@@ -159,6 +169,8 @@ through `quote_identifier` and literals through `string_literal`; never interpol
 | Identity mirror full sync | `ServiceContainer.startup` | App start (Lakebase backend) |
 | Mask registry mirror | `ServiceContainer.startup` | App start when rules exist |
 | Grants sync scheduler | `DataAccessService.start_scheduler` | Every `interval_minutes` when `schedule_enabled` |
+| Immediate group membership | `DataAccessService.on_assignment_event` (Identity listener) | Each data-access approval, assign, or revoke |
+| Outstanding work and tag snapshot | `DataAccessService._record_state` | End of every sync run |
 | Request metrics flush | `MetricsRecorder` (daemon thread) | Every 5 seconds; queued metrics are written in batches of 200 |
 | Request metrics prune | `MetricsRecorder` | At most hourly; deletes rows older than 14 days |
 

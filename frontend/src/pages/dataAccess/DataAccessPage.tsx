@@ -3,6 +3,7 @@
  *
  * Dry-run tab: configure schedule, run the planner, inspect dry-run logs.
  * Live tab: apply readiness, manual apply, live-only logs.
+ * Outstanding work tab: the full list of changes the next sync still has to make, plus tag changes.
  * Schedule is a Databricks Job; Run now triggers that Job and waits.
  */
 import { useEffect, useState, type ReactNode } from "react";
@@ -24,16 +25,18 @@ import type {
 } from "@/api/types";
 import { Alert, Badge, Card, ErrorAlert, PageHeader, Spinner } from "@/components/ui";
 import styles from "../identity/IdentityPage.module.css";
+import { OutstandingWorkPanel } from "./DataAccessOutstanding";
 
-type DataAccessTab = "dry-run" | "live";
+type DataAccessTab = "dry-run" | "live" | "outstanding";
 
 /**
- * Data-access administration with Dry-run and Live tabs.
+ * Data-access administration with Dry-run, Live, and Outstanding work tabs.
  */
 export function DataAccessPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const requested = (searchParams.get("tab") as DataAccessTab | null) ?? "dry-run";
-  const tab: DataAccessTab = requested === "live" ? "live" : "dry-run";
+  const tab: DataAccessTab =
+    requested === "live" || requested === "outstanding" ? requested : "dry-run";
   const [dryPage, setDryPage] = useState(1);
   const [livePage, setLivePage] = useState(1);
   const [drySelectedId, setDrySelectedId] = useState<string | null>(null);
@@ -84,7 +87,18 @@ export function DataAccessPage() {
         >
           Live
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "outstanding"}
+          className={`${styles.tab}${tab === "outstanding" ? ` ${styles.tabActive}` : ""}`}
+          onClick={() => setTab("outstanding")}
+        >
+          Outstanding work
+        </button>
       </div>
+
+      {tab === "outstanding" && <OutstandingWorkPanel />}
 
       {tab === "dry-run" && (
         <>

@@ -1247,6 +1247,131 @@ export interface DataAccessViewPage {
   detail: string | null;
 }
 
+/** One kind of change the data-access sync still has to make. */
+export type GapKind =
+  | "group_create"
+  | "group_nest"
+  | "member_add"
+  | "member_remove"
+  | "grant_add"
+  | "grant_revoke";
+
+/** Pending until the next apply; failed when the last apply tried and errored. */
+export type GapStatus = "pending" | "failed";
+
+/** One outstanding change between desired and actual data-access state. */
+export interface GapItem {
+  itemKey: string;
+  kind: GapKind;
+  status: GapStatus;
+  groupName: string | null;
+  principalName: string | null;
+  principalType: string | null;
+  securableType: string | null;
+  fullName: string | null;
+  privilege: string | null;
+  value: string | null;
+  reason: string;
+  error: string | null;
+  runId: string | null;
+  computedAt: string;
+}
+
+/** When the outstanding-work list was last computed. */
+export interface GapMeta {
+  runId: string;
+  mode: "dry_run" | "apply";
+  computedAt: string;
+  tablesTracked: number;
+  /** True when that run took the first tag snapshot, so no tag changes exist yet. */
+  tagBaseline: boolean;
+}
+
+/** Outstanding item counts by kind (`GET /data-access/pending`). */
+export interface PendingCounts {
+  groupCreate: number;
+  groupNest: number;
+  memberAdd: number;
+  memberRemove: number;
+  grantAdd: number;
+  grantRevoke: number;
+  failed: number;
+  expiredSinceSync: number;
+}
+
+/** Tag changes detected by the last sync. */
+export interface TagChangeCounts {
+  newlyEligible: number;
+  noLongerEligible: number;
+  valueChanged: number;
+}
+
+/** Headline view of what the data-access sync still has to do. */
+export interface PendingSummary {
+  meta: GapMeta | null;
+  counts: PendingCounts;
+  tagChanges: TagChangeCounts;
+  total: number;
+}
+
+/** One page of outstanding items (`GET /data-access/pending/items`). */
+export interface GapItemPage {
+  items: GapItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+/** How a table's data-access tagging changed between syncs. */
+export type TagChangeKind = "newly_eligible" | "no_longer_eligible" | "value_changed";
+
+/** One table whose tagging changed since the previous sync. */
+export interface TagChange {
+  runId: string;
+  detectedAt: string;
+  fullName: string;
+  change: TagChangeKind;
+  oldValue: string | null;
+  newValue: string | null;
+}
+
+/** One page of tag changes (`GET /data-access/tag-changes`). */
+export interface TagChangePage {
+  items: TagChange[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+/** Whether the assignee is in the assignment's `dac_*` group. */
+export type MembershipState =
+  | "member"
+  | "pending_sync"
+  | "failed"
+  | "removal_pending"
+  | "removed"
+  | "not_applicable"
+  | "unknown";
+
+/** Whether groups, nesting, and grants under the assignment's path are in place. */
+export type StructureState = "ready" | "pending_sync" | "not_applicable" | "unknown";
+
+/** Whether one data-access assignment actually gives access yet. */
+export interface AccessStatus {
+  assignmentId: string;
+  principalName: string;
+  value: string;
+  groupName: string | null;
+  membership: MembershipState;
+  structure: StructureState;
+  detail: string;
+}
+
+/** Access status for a set of data-access assignments. */
+export interface AccessStatusList {
+  statuses: AccessStatus[];
+}
+
 /** Which resource a performance recommendation is about. */
 export type PerformanceTarget = "app" | "lakebase" | "warehouse" | "none";
 

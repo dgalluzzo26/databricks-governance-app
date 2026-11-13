@@ -9,7 +9,9 @@ write is mirrored to Unity Catalog Delta tables and audited.
 
 from __future__ import annotations
 
+import logging
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 from backend.app.clients.sql import SqlExecutor
@@ -37,8 +39,14 @@ from backend.app.services.governed_tags import GovernedTagService
 from backend.app.services.identity_uc_sync import IdentityUcSync
 from backend.app.services.value_seed import run_seed_sql
 
+logger = logging.getLogger(__name__)
+
 _DATA_ACCESS_SETTINGS_KEY = "data_access"
 _DEFAULT_ACCESS_TAG_KEY = "data_access_control"
+
+ASSIGNMENT_ASSIGNED = "assigned"
+ASSIGNMENT_REVOKED = "revoked"
+AssignmentListener = Callable[[str, IdentityAttributeAssignment, CurrentUser], None]
 
 
 class IdentityAttributeService:
@@ -66,6 +74,25 @@ class IdentityAttributeService:
         self._governed_tags = governed_tags
         self._uc_sync = uc_sync
         self._sql = sql
+        self._listeners: list[AssignmentListener] = []
+
+    def add_listener(self, listener: AssignmentListener) -> None:
+        """Call ``listener(event, assignment, actor)`` after each new assignment or revoke.
+
+        Listener failures are logged and never fail the assignment.
+
+        Args:
+            listener: Callback receiving ``assigned`` or ``revoked``, the saved assignment, and the actor.
+        """
+        self._listeners.append(listener)
+
+    def _notify(self, event: str, assignment: IdentityAttributeAssignment, actor: CurrentUser) -> None:
+        """Run listeners, isolating their failures from the caller."""
+        for listener in self._listeners:
+            try:
+                listener(event, assignment, actor)
+            except Exception:  # noqa: BLE001 - side effects must not undo the assignment
+                logger.exception("Assignment listener failed for %s %s", event, assignment.assignment_id)
 
     def list_governed_tags(self, *, q: str | None = None, limit: int = 50) -> GovernedTagList:
         """List governed tags that definitions can bind to.
@@ -472,6 +499,7 @@ class IdentityAttributeService:
                 "source": saved.source.value,
             },
         )
+        self._notify(ASSIGNMENT_ASSIGNED, saved, actor)
         return saved
 
     def update_expiry(
@@ -555,6 +583,7 @@ class IdentityAttributeService:
                 "attribute_value": updated.attribute_value,
             },
         )
+        self._notify(ASSIGNMENT_REVOKED, updated, actor)
         return updated
 
     def sync_to_uc(self) -> dict[str, int]:

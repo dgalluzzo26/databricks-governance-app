@@ -207,6 +207,28 @@ flowchart TD
 
 Expired or revoked assignments are inactive, so the principal is removed on the next apply.
 
+### Immediate membership on approve, assign, and revoke
+
+Membership does not wait for the sync. `IdentityAttributeService` calls its listeners after
+every new assignment and every revoke; `DataAccessService.on_assignment_event` handles the
+data-access attribute:
+
+| Event | What happens right away | What still waits for the sync |
+| --- | --- | --- |
+| Approval or admin assign | Find the path's `dac_*` account group, create it if missing, add the principal | Parent nesting and table grants for a newly created group |
+| Revoke | Remove the principal, unless another active assignment still maps to the same group | Nothing |
+| Expiry | Nothing (expiry is only noticed when a sync reads assignments) | Removal at the next apply |
+| Renewal (expiry change) | Nothing (membership is unchanged) | Nothing |
+
+Every attempt is recorded in `data_access_membership_events`. Failures never fail the
+approval: the item is listed as failed outstanding work and the next apply retries it. Without
+an Account Admin SP the event is recorded as skipped and left for the sync.
+
+Access needs both halves: membership in the path's group and the path's structure (the group,
+its parent nesting, and the table grants). A user added to a group that the approval just
+created is a member, but has no table access until the next apply nests the parent and grants
+SELECT. The Identity pages show this per assignment (see Access status below).
+
 Member inventory resolves USER entries to Account SCIM ``userName`` (email). Group membership
 APIs often return only the display name (``David Galluzzo``), while Identity assignments store
 the email. Without that resolution the plan would add the email and remove the display name —
@@ -309,6 +331,66 @@ never overlap. Locks older than 30 minutes are treated as stale.
 Runs are pruned on write: older than 30 days or beyond 500 records. Each stored plan keeps up to
 25 sample rows per list; `summary` always holds the full counts and `truncated` says whether
 samples were cut.
+
+---
+
+## Outstanding work and tag changes
+
+The 25-row plan samples are too small to work from at 5,000+ tables and users, so every run
+also stores its **full** outstanding list (`data_access_gap_items`) and a per-table tag
+snapshot. The Data access page shows both on the **Outstanding work** tab.
+
+| Run mode | What is stored as outstanding |
+| --- | --- |
+| Dry run | Everything the next apply would change: groups to create, missing parent→child nesting links, members to add or remove, grants to add or revoke |
+| Apply | Only the items that failed during this apply, with the error |
+
+Approvals that apply membership while a run is in flight are not re-listed, and approval-time
+failures stay listed until a sync retries them. Successful immediate membership changes delete
+their outstanding member item, so the list stays current between syncs.
+
+Nesting is listed only when the child group's members do not already include the parent group.
+Expired assignments are not in the stored list (nothing has noticed them yet); they are counted
+live as **Expired since sync** from Identity assignments whose expiry is after the last sync.
+
+Tag change detection compares the table-level snapshot with the previous run's:
+
+| Change | Meaning |
+| --- | --- |
+| `newly_eligible` | Table gained the access tag plus review (it will receive grants) |
+| `no_longer_eligible` | Table lost the access tag or review (its grants will be revoked) |
+| `value_changed` | Eligible table moved to another access path |
+
+The first run after deploy takes a baseline and records no changes. Tag changes and membership
+events are kept for 30 days.
+
+| Endpoint | Returns |
+| --- | --- |
+| `GET /api/data-access/pending` | Counts by kind, failures, expired since sync, last run's tag change counts |
+| `GET /api/data-access/pending/items?kind=&status=&q=&page=&page_size=` | One page of outstanding items; `kind=expired` lists expiries since the last sync |
+| `GET /api/data-access/tag-changes?change=&scope=latest\|all&page=&page_size=` | Tables whose tagging changed, newest first |
+
+## Access status
+
+Per data-access assignment, two states:
+
+| Membership | Meaning |
+| --- | --- |
+| `member` | In the path's group (applied at approval or by a sync) |
+| `pending_sync` | Not added yet; the next apply adds it |
+| `failed` | Immediate add or remove failed; the next apply retries |
+| `removal_pending` | Revoked or expired; removed at the next apply |
+| `removed` | Removed at revoke |
+
+| Structure | Meaning |
+| --- | --- |
+| `ready` | No outstanding group, nesting, or grant work for the value or anything beneath it |
+| `pending_sync` | The group was created at approval after the last sync, or the path (`finance` covers `finance.budget`) still has group, nesting, or grant work |
+
+| Endpoint | Returns |
+| --- | --- |
+| `GET /api/data-access/access-status/me` | Status for the signed-in user's data-access attributes (any user) |
+| `POST /api/data-access/access-status` `{assignmentIds}` | Status for up to 200 assignments (admin); used by Identity → Assignments for the visible page |
 
 ---
 

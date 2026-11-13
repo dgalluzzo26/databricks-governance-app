@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+import uuid
 from datetime import datetime
 from typing import Any
 
@@ -25,6 +26,13 @@ from backend.app.core.perf import track
 from backend.app.models.access_request import AccessRequest, AccessRequestStatus, CategoryApprover
 from backend.app.models.app_info import StorageHealth
 from backend.app.models.audit import AuditEvent
+from backend.app.models.data_access_pending import (
+    GapItem,
+    GapMeta,
+    MembershipEvent,
+    TagChange,
+    TagSnapshotRow,
+)
 from backend.app.models.identity_attribute import (
     AttributeAssignmentFilter,
     AttributeDefinition,
@@ -47,6 +55,11 @@ from backend.app.repositories.base import (
     PolicyExceptionRepository,
     SettingsRepository,
     StorageProvider,
+)
+from backend.app.repositories.data_access_state import (
+    MEMBER_KINDS,
+    STRUCTURE_KINDS,
+    DataAccessStateRepository,
 )
 from backend.app.repositories.lakebase_views import VIEW_DEFINITIONS, drop_statements
 
@@ -264,6 +277,75 @@ CREATE TABLE IF NOT EXISTS {schema}.request_metrics (
 );
 CREATE INDEX IF NOT EXISTS request_metrics_recorded_idx
   ON {schema}.request_metrics (recorded_at);
+
+CREATE TABLE IF NOT EXISTS {schema}.data_access_gap_items (
+  item_key        TEXT PRIMARY KEY,
+  kind            TEXT NOT NULL,
+  status          TEXT NOT NULL,
+  group_name      TEXT,
+  principal_name  TEXT,
+  principal_type  TEXT,
+  securable_type  TEXT,
+  full_name       TEXT,
+  privilege       TEXT,
+  value           TEXT,
+  reason          TEXT NOT NULL DEFAULT '',
+  error           TEXT,
+  run_id          TEXT,
+  computed_at     TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS data_access_gap_items_kind_idx
+  ON {schema}.data_access_gap_items (kind, status);
+CREATE INDEX IF NOT EXISTS data_access_gap_items_principal_idx
+  ON {schema}.data_access_gap_items (lower(principal_name));
+
+CREATE TABLE IF NOT EXISTS {schema}.data_access_gap_meta (
+  singleton       BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+  run_id          TEXT NOT NULL,
+  mode            TEXT NOT NULL,
+  computed_at     TIMESTAMPTZ NOT NULL,
+  tables_tracked  INT NOT NULL DEFAULT 0,
+  tag_baseline    BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+CREATE TABLE IF NOT EXISTS {schema}.data_access_tag_snapshot (
+  full_name_key   TEXT PRIMARY KEY,
+  full_name       TEXT NOT NULL,
+  access_value    TEXT,
+  reviewed        BOOLEAN NOT NULL DEFAULT FALSE,
+  eligible        BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+CREATE TABLE IF NOT EXISTS {schema}.data_access_tag_changes (
+  run_id          TEXT NOT NULL,
+  detected_at     TIMESTAMPTZ NOT NULL,
+  full_name       TEXT NOT NULL,
+  change          TEXT NOT NULL,
+  old_value       TEXT,
+  new_value       TEXT,
+  PRIMARY KEY (run_id, full_name)
+);
+CREATE INDEX IF NOT EXISTS data_access_tag_changes_detected_idx
+  ON {schema}.data_access_tag_changes (detected_at DESC);
+
+CREATE TABLE IF NOT EXISTS {schema}.data_access_membership_events (
+  event_id        TEXT PRIMARY KEY,
+  recorded_at     TIMESTAMPTZ NOT NULL,
+  assignment_id   TEXT NOT NULL,
+  principal_name  TEXT NOT NULL,
+  principal_type  TEXT NOT NULL,
+  group_name      TEXT NOT NULL,
+  value           TEXT NOT NULL,
+  action          TEXT NOT NULL,
+  status          TEXT NOT NULL,
+  group_created   BOOLEAN NOT NULL DEFAULT FALSE,
+  error           TEXT,
+  actor           TEXT
+);
+CREATE INDEX IF NOT EXISTS data_access_membership_events_assignment_idx
+  ON {schema}.data_access_membership_events (assignment_id, recorded_at DESC);
+CREATE INDEX IF NOT EXISTS data_access_membership_events_recorded_idx
+  ON {schema}.data_access_membership_events (recorded_at);
 """
 
 
@@ -410,6 +492,302 @@ class LakebaseDataAccessViews(DataAccessViewsReader):
             params,
         )
         return rows, int(total[0]["n"]) if total else 0
+
+
+class LakebaseDataAccessStateRepository(DataAccessStateRepository):
+    """Postgres-backed outstanding work, tag snapshot, and membership events.
+
+    Written by both the app SP (immediate membership) and the Admin SP (sync Job), so the
+    tables use natural text keys rather than serial ids.
+
+    Args:
+        pg: Schema-scoped query helper.
+    """
+
+    _GAP_COLUMNS = (
+        "item_key, kind, status, group_name, principal_name, principal_type, securable_type, "
+        "full_name, privilege, value, reason, error, run_id, computed_at"
+    )
+    _EVENT_COLUMNS = (
+        "recorded_at, assignment_id, principal_name, principal_type, group_name, value, action, "
+        "status, group_created, error, actor"
+    )
+
+    def __init__(self, pg: _Pg) -> None:
+        self._pg = pg
+
+    @staticmethod
+    def _gap_row(item: GapItem) -> tuple[Any, ...]:
+        return (
+            item.item_key,
+            item.kind.value,
+            item.status.value,
+            item.group_name,
+            item.principal_name,
+            item.principal_type,
+            item.securable_type,
+            item.full_name,
+            item.privilege,
+            item.value,
+            item.reason,
+            item.error,
+            item.run_id,
+            item.computed_at,
+        )
+
+    def replace_gap(self, items: list[GapItem], meta: GapMeta) -> None:
+        """Delete and bulk-copy the outstanding list and upsert metadata in one transaction."""
+        schema = self._pg.schema
+        with track("lakebase"), self._pg.pool.connection() as conn, conn.transaction(), conn.cursor() as cur:
+            cur.execute(f"DELETE FROM {schema}.data_access_gap_items")
+            if items:
+                statement = f"COPY {schema}.data_access_gap_items ({self._GAP_COLUMNS}) FROM STDIN"
+                with cur.copy(statement) as copy:
+                    for item in items:
+                        copy.write_row(self._gap_row(item))
+            cur.execute(
+                f"INSERT INTO {schema}.data_access_gap_meta "
+                "(singleton, run_id, mode, computed_at, tables_tracked, tag_baseline) "
+                "VALUES (TRUE, %(run_id)s, %(mode)s, %(computed_at)s, %(tables)s, %(baseline)s) "
+                "ON CONFLICT (singleton) DO UPDATE SET run_id = EXCLUDED.run_id, mode = EXCLUDED.mode, "
+                "computed_at = EXCLUDED.computed_at, tables_tracked = EXCLUDED.tables_tracked, "
+                "tag_baseline = EXCLUDED.tag_baseline",
+                {
+                    "run_id": meta.run_id,
+                    "mode": meta.mode,
+                    "computed_at": meta.computed_at,
+                    "tables": meta.tables_tracked,
+                    "baseline": meta.tag_baseline,
+                },
+            )
+
+    def gap_meta(self) -> GapMeta | None:
+        """Return the single metadata row, if any."""
+        rows = self._pg.fetch(
+            "SELECT run_id, mode, computed_at, tables_tracked, tag_baseline "
+            "FROM {schema}.data_access_gap_meta"
+        )
+        return GapMeta(**rows[0]) if rows else None
+
+    def gap_counts(self) -> dict[str, int]:
+        """Count items by kind and failed status in one scan."""
+        rows = self._pg.fetch(
+            "SELECT kind, count(*) AS n, count(*) FILTER (WHERE status = 'failed') AS failed "
+            "FROM {schema}.data_access_gap_items GROUP BY kind"
+        )
+        counts: dict[str, int] = {}
+        failed = 0
+        for row in rows:
+            counts[row["kind"]] = int(row["n"])
+            failed += int(row["failed"])
+        if failed:
+            counts["failed"] = failed
+        return counts
+
+    def gap_page(
+        self, *, kind: str | None, status: str | None, query: str | None, limit: int, offset: int
+    ) -> tuple[list[GapItem], int]:
+        """Filtered page plus total, ordered by kind then key."""
+        clauses = ["TRUE"]
+        params: dict[str, Any] = {"limit": limit, "offset": offset}
+        if kind:
+            clauses.append("kind = %(kind)s")
+            params["kind"] = kind
+        if status:
+            clauses.append("status = %(status)s")
+            params["status"] = status
+        needle = (query or "").strip()
+        if needle:
+            clauses.append(
+                "(group_name ILIKE %(q)s OR principal_name ILIKE %(q)s "
+                "OR full_name ILIKE %(q)s OR value ILIKE %(q)s)"
+            )
+            params["q"] = f"%{needle}%"
+        where = " AND ".join(clauses)
+        total_rows = self._pg.fetch(
+            f"SELECT count(*) AS n FROM {{schema}}.data_access_gap_items WHERE {where}", params
+        )
+        rows = self._pg.fetch(
+            f"SELECT {self._GAP_COLUMNS} FROM {{schema}}.data_access_gap_items WHERE {where} "
+            "ORDER BY kind, item_key LIMIT %(limit)s OFFSET %(offset)s",
+            params,
+        )
+        return [GapItem(**row) for row in rows], int(total_rows[0]["n"]) if total_rows else 0
+
+    def gap_structure_values(self) -> set[str]:
+        """Distinct values with group, nesting, or grant work."""
+        rows = self._pg.fetch(
+            "SELECT DISTINCT value FROM {schema}.data_access_gap_items "
+            "WHERE kind = ANY(%(kinds)s) AND value IS NOT NULL",
+            {"kinds": [k.value for k in STRUCTURE_KINDS]},
+        )
+        return {row["value"] for row in rows}
+
+    def member_gap_items(self, principal_names: list[str]) -> list[GapItem]:
+        """Membership items for the given principals."""
+        if not principal_names:
+            return []
+        rows = self._pg.fetch(
+            f"SELECT {self._GAP_COLUMNS} FROM {{schema}}.data_access_gap_items "
+            "WHERE kind = ANY(%(kinds)s) AND lower(principal_name) = ANY(%(names)s)",
+            {"kinds": [k.value for k in MEMBER_KINDS], "names": [p.lower() for p in principal_names]},
+        )
+        return [GapItem(**row) for row in rows]
+
+    def upsert_gap_items(self, items: list[GapItem]) -> None:
+        """Insert or replace by key."""
+        if not items:
+            return
+        updates = ", ".join(
+            f"{col} = EXCLUDED.{col}" for col in self._GAP_COLUMNS.replace(" ", "").split(",")[1:]
+        )
+        statement = (
+            f"INSERT INTO {self._pg.schema}.data_access_gap_items ({self._GAP_COLUMNS}) "
+            f"VALUES ({', '.join(['%s'] * 14)}) ON CONFLICT (item_key) DO UPDATE SET {updates}"
+        )
+        with track("lakebase"), self._pg.pool.connection() as conn, conn.cursor() as cur:
+            cur.executemany(statement, [self._gap_row(i) for i in items])
+
+    def delete_gap_items(self, item_keys: list[str]) -> None:
+        """Delete by key."""
+        if not item_keys:
+            return
+        self._pg.run(
+            "DELETE FROM {schema}.data_access_gap_items WHERE item_key = ANY(%(keys)s)", {"keys": item_keys}
+        )
+
+    def load_tag_snapshot(self) -> dict[str, TagSnapshotRow]:
+        """Read the whole snapshot (one row per tagged table)."""
+        rows = self._pg.fetch(
+            "SELECT full_name_key, full_name, access_value, reviewed, eligible "
+            "FROM {schema}.data_access_tag_snapshot"
+        )
+        return {
+            row["full_name_key"]: TagSnapshotRow(
+                full_name=row["full_name"],
+                access_value=row["access_value"],
+                reviewed=row["reviewed"],
+                eligible=row["eligible"],
+            )
+            for row in rows
+        }
+
+    def replace_tag_snapshot(self, rows: list[TagSnapshotRow]) -> None:
+        """Delete and bulk-copy the snapshot in one transaction."""
+        schema = self._pg.schema
+        with track("lakebase"), self._pg.pool.connection() as conn, conn.transaction(), conn.cursor() as cur:
+            cur.execute(f"DELETE FROM {schema}.data_access_tag_snapshot")
+            if rows:
+                with cur.copy(
+                    f"COPY {schema}.data_access_tag_snapshot "
+                    "(full_name_key, full_name, access_value, reviewed, eligible) FROM STDIN"
+                ) as copy:
+                    for r in rows:
+                        copy.write_row(
+                            (r.full_name.lower(), r.full_name, r.access_value, r.reviewed, r.eligible)
+                        )
+
+    def add_tag_changes(self, changes: list[TagChange]) -> None:
+        """Bulk-copy detected changes."""
+        if not changes:
+            return
+        schema = self._pg.schema
+        statement = (
+            f"COPY {schema}.data_access_tag_changes "
+            "(run_id, detected_at, full_name, change, old_value, new_value) FROM STDIN"
+        )
+        with (
+            track("lakebase"),
+            self._pg.pool.connection() as conn,
+            conn.cursor() as cur,
+            cur.copy(statement) as copy,
+        ):
+            for c in changes:
+                copy.write_row(
+                    (c.run_id, c.detected_at, c.full_name, c.change.value, c.old_value, c.new_value)
+                )
+
+    def tag_changes_page(
+        self, *, change: str | None, run_id: str | None, limit: int, offset: int
+    ) -> tuple[list[TagChange], int]:
+        """Filtered page, newest first, plus total."""
+        clauses = ["TRUE"]
+        params: dict[str, Any] = {"limit": limit, "offset": offset}
+        if change:
+            clauses.append("change = %(change)s")
+            params["change"] = change
+        if run_id:
+            clauses.append("run_id = %(run_id)s")
+            params["run_id"] = run_id
+        where = " AND ".join(clauses)
+        total_rows = self._pg.fetch(
+            f"SELECT count(*) AS n FROM {{schema}}.data_access_tag_changes WHERE {where}", params
+        )
+        rows = self._pg.fetch(
+            "SELECT run_id, detected_at, full_name, change, old_value, new_value "
+            f"FROM {{schema}}.data_access_tag_changes WHERE {where} "
+            "ORDER BY detected_at DESC, full_name DESC LIMIT %(limit)s OFFSET %(offset)s",
+            params,
+        )
+        return [TagChange(**row) for row in rows], int(total_rows[0]["n"]) if total_rows else 0
+
+    def tag_change_counts(self, run_id: str) -> dict[str, int]:
+        """Counts by kind for one run."""
+        rows = self._pg.fetch(
+            "SELECT change, count(*) AS n FROM {schema}.data_access_tag_changes "
+            "WHERE run_id = %(run_id)s GROUP BY change",
+            {"run_id": run_id},
+        )
+        return {row["change"]: int(row["n"]) for row in rows}
+
+    def prune_tag_changes(self, before: datetime) -> int:
+        """Delete changes older than ``before``."""
+        rows = self._pg.fetch(
+            "WITH gone AS (DELETE FROM {schema}.data_access_tag_changes WHERE detected_at < %(before)s "
+            "RETURNING 1) SELECT count(*) AS n FROM gone",
+            {"before": before},
+        )
+        return int(rows[0]["n"]) if rows else 0
+
+    def record_membership_event(self, event: MembershipEvent) -> None:
+        """Insert one event."""
+        self._pg.run(
+            f"INSERT INTO {{schema}}.data_access_membership_events (event_id, {self._EVENT_COLUMNS}) "
+            "VALUES (%(event_id)s, %(recorded_at)s, %(assignment_id)s, %(principal_name)s, "
+            "%(principal_type)s, %(group_name)s, %(value)s, %(action)s, %(status)s, %(group_created)s, "
+            "%(error)s, %(actor)s)",
+            {"event_id": uuid.uuid4().hex, **event.model_dump(mode="python"), "status": event.status.value},
+        )
+
+    def latest_membership_events(self, assignment_ids: list[str]) -> dict[str, MembershipEvent]:
+        """Newest event per assignment via DISTINCT ON."""
+        if not assignment_ids:
+            return {}
+        rows = self._pg.fetch(
+            f"SELECT DISTINCT ON (assignment_id) {self._EVENT_COLUMNS} "
+            "FROM {schema}.data_access_membership_events WHERE assignment_id = ANY(%(ids)s) "
+            "ORDER BY assignment_id, recorded_at DESC",
+            {"ids": assignment_ids},
+        )
+        return {row["assignment_id"]: MembershipEvent(**row) for row in rows}
+
+    def membership_events_since(self, since: datetime) -> list[MembershipEvent]:
+        """Events at or after ``since``, oldest first."""
+        rows = self._pg.fetch(
+            f"SELECT {self._EVENT_COLUMNS} FROM {{schema}}.data_access_membership_events "
+            "WHERE recorded_at >= %(since)s ORDER BY recorded_at",
+            {"since": since},
+        )
+        return [MembershipEvent(**row) for row in rows]
+
+    def prune_membership_events(self, before: datetime) -> int:
+        """Delete events older than ``before``."""
+        rows = self._pg.fetch(
+            "WITH gone AS (DELETE FROM {schema}.data_access_membership_events WHERE recorded_at < %(before)s "
+            "RETURNING 1) SELECT count(*) AS n FROM gone",
+            {"before": before},
+        )
+        return int(rows[0]["n"]) if rows else 0
 
 
 class LakebaseSettingsRepository(SettingsRepository):
@@ -1499,6 +1877,12 @@ class LakebaseStorageProvider(StorageProvider):
         self._policy_exceptions = LakebasePolicyExceptionRepository(self._pg)
         self._performance = LakebasePerformanceRepository(self._pg)
         self._data_access_views = LakebaseDataAccessViews(self._pg)
+        self._data_access_state = LakebaseDataAccessStateRepository(self._pg)
+
+    @property
+    def data_access_state(self) -> DataAccessStateRepository:
+        """Return the persisted outstanding-work, tag snapshot, and membership event store."""
+        return self._data_access_state
 
     @property
     def settings(self) -> SettingsRepository:
@@ -1654,6 +2038,16 @@ class LakebaseStorageProvider(StorageProvider):
                     sql.SQL(
                         "ALTER DEFAULT PRIVILEGES IN SCHEMA {} "
                         "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO {}"
+                    ).format(sql.Identifier(self._schema), role)
+                )
+                cur.execute(
+                    sql.SQL("GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA {} TO {}").format(
+                        sql.Identifier(self._schema), role
+                    )
+                )
+                cur.execute(
+                    sql.SQL(
+                        "ALTER DEFAULT PRIVILEGES IN SCHEMA {} GRANT USAGE, SELECT ON SEQUENCES TO {}"
                     ).format(sql.Identifier(self._schema), role)
                 )
             logger.info("Granted Lakebase DML on %s to Admin SP %s", self._schema, self._admin_sp)

@@ -83,3 +83,18 @@
   flex-direction: column;
   gap: var(--space-3);
 }
+
+.kpiButton {
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.kpiButton:hover {
+  border-color: var(--color-primary);
+}
+
+.kpiActive {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 1px var(--color-primary);
+}

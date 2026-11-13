@@ -26,7 +26,10 @@ import type {
   UpsertRowFilterDimensionRequest,
   DataAccessAnalytics,
   DataAccessSettings,
+  GapKind,
+  GapStatus,
   PrincipalKind,
+  TagChangeKind,
 } from "./types";
 
 /**
@@ -72,6 +75,13 @@ export const queryKeys = {
     ["data-access", "analytics", "runs", mode, page, pageSize] as const,
   dataAccessAnalyticsGrants: (mode: string, change: string, page: number, pageSize: number) =>
     ["data-access", "analytics", "grants", mode, change, page, pageSize] as const,
+  dataAccessPending: ["data-access", "pending"] as const,
+  dataAccessPendingItems: (kind: string, status: string, q: string, page: number, pageSize: number) =>
+    ["data-access", "pending", "items", kind, status, q, page, pageSize] as const,
+  dataAccessTagChanges: (change: string, scope: string, page: number, pageSize: number) =>
+    ["data-access", "tag-changes", change, scope, page, pageSize] as const,
+  myAccessStatus: ["data-access", "access-status", "me"] as const,
+  accessStatus: (ids: string) => ["data-access", "access-status", ids] as const,
   performanceSummary: (hours: number) => ["performance", "summary", hours] as const,
   performanceSlowRequests: (hours: number, page: number, pageSize: number) =>
     ["performance", "slow-requests", hours, page, pageSize] as const,
@@ -318,6 +328,98 @@ export function useRunDataAccessSync() {
 }
 
 /**
+ * Fetches outstanding data-access sync work (`GET /data-access/pending`, admin only).
+ *
+ * @remarks Key: `queryKeys.dataAccessPending`.
+ * @returns The query result for {@link PendingSummary}.
+ */
+export function useDataAccessPending() {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.dataAccessPending,
+    queryFn: ({ signal }) => api.dataAccess.pendingSummary(signal),
+  });
+}
+
+/**
+ * Fetches one page of outstanding items (`GET /data-access/pending/items`, admin only).
+ *
+ * @param params - Kind (or `expired`), status, search text, and page (1-based).
+ * @returns The query result for {@link GapItemPage}; keeps the previous page while loading.
+ */
+export function useDataAccessPendingItems(params: {
+  kind?: GapKind | "expired";
+  status?: GapStatus;
+  q?: string;
+  page: number;
+  pageSize: number;
+}) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.dataAccessPendingItems(
+      params.kind ?? "all",
+      params.status ?? "all",
+      params.q ?? "",
+      params.page,
+      params.pageSize,
+    ),
+    queryFn: ({ signal }) => api.dataAccess.pendingItems(params, signal),
+    placeholderData: keepPreviousData,
+  });
+}
+
+/**
+ * Fetches tables whose data-access tagging changed (`GET /data-access/tag-changes`, admin only).
+ *
+ * @param params - Change kind, scope, and page (1-based).
+ * @returns The query result for {@link TagChangePage}; keeps the previous page while loading.
+ */
+export function useDataAccessTagChanges(params: {
+  change?: TagChangeKind;
+  scope: "latest" | "all";
+  page: number;
+  pageSize: number;
+}) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.dataAccessTagChanges(params.change ?? "all", params.scope, params.page, params.pageSize),
+    queryFn: ({ signal }) => api.dataAccess.tagChanges(params, signal),
+    placeholderData: keepPreviousData,
+  });
+}
+
+/**
+ * Fetches whether the signed-in user's data-access attributes give access yet.
+ *
+ * @remarks Key: `queryKeys.myAccessStatus`.
+ * @returns The query result for {@link AccessStatusList}.
+ */
+export function useMyAccessStatus() {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.myAccessStatus,
+    queryFn: ({ signal }) => api.dataAccess.myAccessStatus(signal),
+    staleTime: 15_000,
+  });
+}
+
+/**
+ * Fetches access status for a page of assignments (`POST /data-access/access-status`, admin only).
+ *
+ * @param assignmentIds - Assignments on the visible page; disabled when empty.
+ * @returns The query result for {@link AccessStatusList}.
+ */
+export function useAccessStatus(assignmentIds: string[]) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.accessStatus(assignmentIds.join(",")),
+    queryFn: () => api.dataAccess.accessStatus(assignmentIds),
+    enabled: assignmentIds.length > 0,
+    placeholderData: keepPreviousData,
+  });
+}
+
+/**
  * Attribute Explorer reverse lookup (`POST /attribute-explorer/analyze`).
  *
  * @returns A mutation taking `{ attributeKey, attributeValue }`.
@@ -491,6 +593,7 @@ export function useAssignAttribute() {
     mutationFn: (body: AssignAttributeRequest) => api.identityAttributes.assign(body),
     onSuccess: () => {
       client.invalidateQueries({ queryKey: ["identity-assignments"] });
+      client.invalidateQueries({ queryKey: ["data-access"] });
     },
   });
 }
@@ -511,6 +614,7 @@ export function useRevokeAttribute() {
     mutationFn: (assignmentId: string) => api.identityAttributes.revoke(assignmentId),
     onSuccess: () => {
       client.invalidateQueries({ queryKey: ["identity-assignments"] });
+      client.invalidateQueries({ queryKey: ["data-access"] });
     },
   });
 }
@@ -652,6 +756,7 @@ export function useApproveAccessRequest() {
       client.invalidateQueries({ queryKey: queryKeys.approvals });
       client.invalidateQueries({ queryKey: queryKeys.myAccessRequests });
       client.invalidateQueries({ queryKey: ["identity-assignments"] });
+      client.invalidateQueries({ queryKey: ["data-access"] });
     },
   });
 }

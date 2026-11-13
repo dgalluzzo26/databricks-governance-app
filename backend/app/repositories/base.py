@@ -22,6 +22,10 @@ from backend.app.models.identity_attribute import (
 from backend.app.models.mask_rule import MaskRuleDefinition
 from backend.app.models.performance import RequestMetric
 from backend.app.models.policy_exception import PolicyException
+from backend.app.repositories.data_access_state import (
+    DataAccessStateRepository,
+    InMemoryDataAccessStateRepository,
+)
 
 
 class SettingsRepository(ABC):
@@ -633,6 +637,19 @@ class StorageProvider(ABC):
         if repo is None:
             repo = InMemoryPerformanceRepository()
             self._performance_fallback = repo
+        return repo
+
+    @property
+    def data_access_state(self) -> DataAccessStateRepository:
+        """Outstanding sync work, tag snapshot, and membership events; process-local unless persisted.
+
+        Returns:
+            Repository used by the data-access sync and the immediate membership hook.
+        """
+        repo = getattr(self, "_data_access_state_fallback", None)
+        if repo is None:
+            repo = InMemoryDataAccessStateRepository()
+            self._data_access_state_fallback = repo
         return repo
 
     @property

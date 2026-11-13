@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Query
 
-from backend.app.api.deps import Admin, Container
+from backend.app.api.deps import Admin, Container, User
 from backend.app.models.data_access import (
     RUN_HISTORY_PAGE_SIZE_DEFAULT,
     RUN_HISTORY_PAGE_SIZE_MAX,
@@ -16,6 +16,13 @@ from backend.app.models.data_access import (
     DataAccessSettingsView,
     DataAccessViewPage,
     RunDataAccessRequest,
+)
+from backend.app.models.data_access_pending import (
+    AccessStatusList,
+    AccessStatusRequest,
+    GapItemPage,
+    PendingSummary,
+    TagChangePage,
 )
 
 router = APIRouter(prefix="/data-access", tags=["data-access"])
@@ -218,3 +225,115 @@ def run_now(admin: Admin, container: Container, body: RunDataAccessRequest | Non
     """
     mode = body.mode if body is not None else "dry_run"
     return container.data_access.run_now(admin, mode=mode)
+
+
+@router.get("/pending", response_model=PendingSummary)
+def pending_summary(_: Admin, container: Container) -> PendingSummary:
+    """Counts of what the sync still has to do (groups, nesting, members, grants).
+
+    Requires app admin. Computed by the last sync run; approvals and revokes update the
+    membership counts immediately. Expiries are listed until the next sync removes them.
+
+    Args:
+        container: Service container.
+
+    Returns:
+        Outstanding counts, expiries since the last sync, and tag change counts.
+    """
+    return container.data_access.pending_summary()
+
+
+@router.get("/pending/items", response_model=GapItemPage)
+def pending_items(
+    _: Admin,
+    container: Container,
+    kind: str | None = Query(
+        default=None,
+        description=(
+            "group_create, group_nest, member_add, member_remove, grant_add, grant_revoke, or expired"
+        ),
+    ),
+    status: str | None = Query(default=None, description="pending or failed"),
+    q: str | None = Query(default=None, description="Search group, principal, securable, or value"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=200),
+) -> GapItemPage:
+    """One page of outstanding items.
+
+    Requires app admin.
+
+    Args:
+        container: Service container.
+        kind: Optional item kind, or ``expired`` for assignments that expired since the last sync.
+        status: Optional ``pending`` or ``failed``.
+        q: Optional search text.
+        page: 1-based page.
+        page_size: Rows per page.
+
+    Returns:
+        The page and total.
+    """
+    return container.data_access.pending_items(
+        kind=kind, status=status, query=q, page=page, page_size=page_size
+    )
+
+
+@router.get("/tag-changes", response_model=TagChangePage)
+def tag_changes(
+    _: Admin,
+    container: Container,
+    change: str | None = Query(
+        default=None, description="newly_eligible, no_longer_eligible, or value_changed"
+    ),
+    scope: str = Query(default="latest", description="latest (last sync) or all (30 days)"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=200),
+) -> TagChangePage:
+    """Tables whose data-access tagging changed, newest first.
+
+    Requires app admin.
+
+    Args:
+        container: Service container.
+        change: Optional change kind.
+        scope: ``latest`` or ``all``.
+        page: 1-based page.
+        page_size: Rows per page.
+
+    Returns:
+        The page and total.
+    """
+    return container.data_access.tag_changes(change=change, scope=scope, page=page, page_size=page_size)
+
+
+@router.get("/access-status/me", response_model=AccessStatusList)
+def my_access_status(user: User, container: Container) -> AccessStatusList:
+    """Whether each of the signed-in user's data-access attributes gives access yet.
+
+    Args:
+        user: Signed-in user.
+        container: Service container.
+
+    Returns:
+        Membership and structure status per data-access assignment.
+    """
+    assignments = container.identity_attributes.list_for_user(user).assignments
+    return AccessStatusList(statuses=container.data_access.access_status(assignments))
+
+
+@router.post("/access-status", response_model=AccessStatusList)
+def access_status(body: AccessStatusRequest, _: Admin, container: Container) -> AccessStatusList:
+    """Whether the given data-access assignments give access yet.
+
+    Requires app admin. Unknown ids and non data-access assignments are skipped.
+
+    Args:
+        body: Up to 200 assignment ids.
+        container: Service container.
+
+    Returns:
+        Membership and structure status per data-access assignment.
+    """
+    repo = container.storage.identity_attributes
+    found = [a for a in (repo.get_assignment(i) for i in dict.fromkeys(body.assignment_ids)) if a is not None]
+    return AccessStatusList(statuses=container.data_access.access_status(found))

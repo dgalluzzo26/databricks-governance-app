@@ -43,21 +43,49 @@ from backend.app.models.data_access import (
     SyncRunStatus,
     SyncTrigger,
 )
-from backend.app.models.identity_attribute import AttributeAssignmentFilter
+from backend.app.models.data_access_pending import (
+    AccessStatus,
+    GapItem,
+    GapItemPage,
+    GapKind,
+    GapMeta,
+    GapStatus,
+    MembershipEvent,
+    MembershipEventStatus,
+    PendingCounts,
+    PendingSummary,
+    TagChangeCounts,
+    TagChangePage,
+)
+from backend.app.models.identity_attribute import (
+    AttributeAssignmentFilter,
+    IdentityAttributeAssignment,
+)
 from backend.app.models.user import CurrentUser
 from backend.app.repositories.base import StorageProvider
 from backend.app.services.catalog_enrollment import enrolled_catalogs_sql
 from backend.app.services.data_access_analytics import build_analytics
+from backend.app.services.data_access_gap import (
+    build_gap,
+    diff_snapshots,
+    grant_key,
+    group_key,
+    member_key,
+    nest_key,
+    snapshot_from_tags,
+)
 from backend.app.services.data_access_planner import (
     ActualGrant,
     ActualMember,
     AssignmentRow,
     TagRow,
+    group_name,
     plan_data_access,
     truncate_plan,
 )
 from backend.app.services.data_access_schedule import quartz_cron_for_interval_minutes, snap_interval_minutes
-from backend.app.services.identity_attributes import IdentityAttributeService
+from backend.app.services.data_access_status import compute_access_status
+from backend.app.services.identity_attributes import ASSIGNMENT_ASSIGNED, IdentityAttributeService
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +167,9 @@ class DataAccessService:
         self._member_loader = self._load_members
         self._assignment_loader = self._load_assignments
         self._apply_plan = self._apply_plan_impl
+        add_listener = getattr(identity_attributes, "add_listener", None)
+        if callable(add_listener):
+            add_listener(self.on_assignment_event)
 
     def get_settings(self) -> DataAccessSettingsView:
         """Return stored settings or defaults, plus UI constants.
@@ -584,6 +615,9 @@ class DataAccessService:
             )
             if mode == "apply":
                 plan = self._apply_plan(settings, plan)
+            self._record_state(
+                settings, run_id=run_id, mode=mode, started=started, tags=tags, plan=plan, members=members
+            )
             plan = truncate_plan(plan)
             finished = running.model_copy(
                 update={
@@ -620,6 +654,443 @@ class DataAccessService:
             return failed
         finally:
             self._release_lock(run_id)
+
+    # Outstanding work, tag changes, immediate membership, and access status.
+
+    def _record_state(
+        self,
+        settings: DataAccessSettings,
+        *,
+        run_id: str,
+        mode: str,
+        started: datetime,
+        tags: list[TagRow],
+        plan: DataAccessPlan,
+        members: list[ActualMember],
+    ) -> None:
+        """Store the full outstanding list and the tag snapshot diff for this run (best effort).
+
+        Membership applied by approvals while the run was in flight is not re-listed as
+        outstanding, and approval-time failures stay listed until a sync retries them.
+        """
+        state = self._storage.data_access_state
+        try:
+            baseline = state.gap_meta() is None
+            snapshot = snapshot_from_tags(settings, tags)
+            if not baseline:
+                state.add_tag_changes(
+                    diff_snapshots(state.load_tag_snapshot(), snapshot, run_id=run_id, detected_at=started)
+                )
+            state.replace_tag_snapshot(snapshot)
+
+            gap = build_gap(
+                plan,
+                members,
+                applied=mode == "apply",
+                failures=plan.apply_failures,
+                run_id=run_id,
+                computed_at=started,
+            )
+            by_key = {item.item_key: item for item in gap}
+            for event in state.membership_events_since(started):
+                key = member_key(event.action, event.group_name, event.principal_name)
+                if event.status == MembershipEventStatus.APPLIED:
+                    by_key.pop(key, None)
+                elif event.status == MembershipEventStatus.FAILED and key not in by_key:
+                    by_key[key] = self._event_gap_item(event)
+            state.replace_gap(
+                list(by_key.values()),
+                GapMeta(
+                    run_id=run_id,
+                    mode=mode,
+                    computed_at=started,
+                    tables_tracked=len(snapshot),
+                    tag_baseline=baseline,
+                ),
+            )
+            cutoff = started - timedelta(days=RUN_HISTORY_RETENTION_DAYS)
+            state.prune_tag_changes(cutoff)
+            state.prune_membership_events(cutoff)
+        except Exception:  # noqa: BLE001 - the run itself succeeded; status views catch up next run
+            logger.exception("Recording data-access outstanding work for run %s failed", run_id)
+
+    @staticmethod
+    def _event_gap_item(event: MembershipEvent) -> GapItem:
+        """Outstanding item for an approval-time membership change that did not apply."""
+        kind = GapKind.MEMBER_ADD if event.action == "add" else GapKind.MEMBER_REMOVE
+        return GapItem(
+            item_key=member_key(event.action, event.group_name, event.principal_name),
+            kind=kind,
+            status=GapStatus.FAILED if event.status == MembershipEventStatus.FAILED else GapStatus.PENDING,
+            group_name=event.group_name,
+            principal_name=event.principal_name,
+            principal_type=event.principal_type,
+            value=event.value,
+            reason=f"assignment {event.action} by {event.actor or 'unknown'}",
+            error=event.error,
+            computed_at=event.recorded_at,
+        )
+
+    def _data_access_key(self, settings: DataAccessSettings) -> str | None:
+        """Attribute key of the data-access Identity definition, if configured."""
+        if self._identity is None:
+            return None
+        definition = self._identity.find_data_access_definition(settings.access_tag_key)
+        return definition.key if definition is not None else None
+
+    def on_assignment_event(
+        self, event: str, assignment: IdentityAttributeAssignment, actor: CurrentUser
+    ) -> None:
+        """Add or remove the assignee on the path's ``dac_*`` group right away.
+
+        Runs after an approval, admin assignment, or revoke of a data-access attribute.
+        Creates the group when it does not exist yet (nesting and grants still come from
+        the sync). Never raises: failures are recorded and the next sync retries them.
+
+        Args:
+            event: ``assigned`` or ``revoked``.
+            assignment: The saved assignment.
+            actor: Who approved, assigned, or revoked.
+        """
+        settings = self._settings()
+        key = self._data_access_key(settings)
+        if key is None or key.lower() != assignment.attribute_key.lower():
+            return
+        value = assignment.attribute_value.strip()
+        group = group_name(settings.group_prefix, value) if value and value != "*" else None
+        if group is None:
+            return
+        action = "add" if event == ASSIGNMENT_ASSIGNED else "remove"
+        principal_type = assignment.principal_type.value
+        state = self._storage.data_access_state
+
+        def record(
+            status: MembershipEventStatus,
+            *,
+            error: str | None = None,
+            created: bool = False,
+            outstanding: bool = True,
+        ) -> None:
+            entry = MembershipEvent(
+                recorded_at=datetime.now(UTC),
+                assignment_id=assignment.assignment_id,
+                principal_name=assignment.principal_name,
+                principal_type=principal_type,
+                group_name=group,
+                value=value,
+                action=action,
+                status=status,
+                group_created=created,
+                error=error,
+                actor=actor.user_name,
+            )
+            state.record_membership_event(entry)
+            keys = [
+                member_key("add", group, assignment.principal_name),
+                member_key("remove", group, assignment.principal_name),
+            ]
+            if status == MembershipEventStatus.APPLIED:
+                state.delete_gap_items(keys)
+            elif outstanding:
+                state.upsert_gap_items([self._event_gap_item(entry)])
+
+        if not self._factory.admin_configured:
+            record(
+                MembershipEventStatus.SKIPPED,
+                error="Account Admin SP is not configured; the next sync applies this",
+            )
+            return
+        if action == "remove" and self._still_assigned(assignment, group, settings, key):
+            record(
+                MembershipEventStatus.SKIPPED,
+                error="Another active assignment still maps to this group",
+                outstanding=False,
+            )
+            return
+
+        created = False
+        try:
+            group_id = self._find_group_id(group)
+            if group_id is None:
+                if action == "remove":
+                    record(MembershipEventStatus.APPLIED)
+                    return
+                group_id = self._account_scim_create_group(group)
+                created = True
+            errors: list[str] = []
+            member_id = self._resolve_principal_id(assignment.principal_name, principal_type, errors)
+            if member_id is None:
+                missing = f"principal {assignment.principal_name} not found"
+                raise RuntimeError(errors[-1] if errors else missing)
+            if action == "add":
+                self._patch_member_add(group_id, member_id)
+            else:
+                self._patch_member_remove(group_id, member_id)
+        except Exception as exc:  # noqa: BLE001 - recorded; the sync retries
+            logger.warning(
+                "Immediate %s of %s on %s failed: %s", action, assignment.principal_name, group, exc
+            )
+            record(MembershipEventStatus.FAILED, error=str(exc), created=created)
+            return
+        record(MembershipEventStatus.APPLIED, created=created)
+        logger.info(
+            "Immediate membership %s %s on %s (group created: %s)",
+            action,
+            assignment.principal_name,
+            group,
+            created,
+        )
+
+    def _still_assigned(
+        self, assignment: IdentityAttributeAssignment, group: str, settings: DataAccessSettings, key: str
+    ) -> bool:
+        """True when another active assignment for the same principal maps to ``group``."""
+        others = self._storage.identity_attributes.list_assignments(
+            AttributeAssignmentFilter(
+                principal_name=assignment.principal_name,
+                principal_type=assignment.principal_type,
+                attribute_key=key,
+                include_inactive=False,
+            )
+        )
+        return any(
+            other.assignment_id != assignment.assignment_id
+            and (group_name(settings.group_prefix, other.attribute_value) or "").lower() == group.lower()
+            for other in others
+        )
+
+    def _find_group_id(self, group: str) -> str | None:
+        """SCIM id of the account group named ``group``, or None."""
+        escaped = group.replace('"', '\\"')
+        for found in self._account_scim_list_groups(filter_expr=f'displayName eq "{escaped}"'):
+            if str(found.get("displayName") or "").lower() == group.lower() and found.get("id"):
+                return str(found["id"])
+        return None
+
+    def _patch_member_add(self, group_id: str, member_id: str) -> None:
+        """Add one member; an existing membership is success."""
+        try:
+            self._account_scim_patch_group(
+                group_id, [{"op": "add", "path": "members", "value": [{"value": member_id}]}]
+            )
+        except Exception as exc:  # noqa: BLE001
+            message = str(exc).lower()
+            if "already" in message or "exists" in message:
+                return
+            raise
+
+    def _patch_member_remove(self, group_id: str, member_id: str) -> None:
+        """Remove one member; an absent membership is success."""
+        try:
+            self._account_scim_patch_group(
+                group_id, [{"op": "remove", "path": f'members[value eq "{member_id}"]'}]
+            )
+        except Exception as exc:  # noqa: BLE001
+            message = str(exc).lower()
+            if "not found" in message or "does not exist" in message or "no such" in message:
+                return
+            raise
+
+    def _expired_since_sync(
+        self, settings: DataAccessSettings, meta: GapMeta | None
+    ) -> list[IdentityAttributeAssignment]:
+        """Data-access assignments that expired (not revoked) after the last sync looked."""
+        key = self._data_access_key(settings)
+        if key is None:
+            return []
+        now = datetime.now(UTC)
+        since = meta.computed_at if meta is not None else None
+        items = self._storage.identity_attributes.list_assignments(
+            AttributeAssignmentFilter(attribute_key=key, include_inactive=True)
+        )
+        return sorted(
+            (
+                a
+                for a in items
+                if a.revoked_at is None
+                and a.expires_at is not None
+                and a.expires_at <= now
+                and (since is None or a.expires_at > since)
+                and (a.attribute_value or "").strip() not in {"", "*"}
+            ),
+            key=lambda a: a.expires_at or now,
+            reverse=True,
+        )
+
+    def pending_summary(self) -> PendingSummary:
+        """Counts of what the sync still has to do, plus tag changes from the last run.
+
+        Returns:
+            Outstanding counts by kind, expiries not yet seen by a sync, and tag change counts.
+        """
+        state = self._storage.data_access_state
+        meta = state.gap_meta()
+        raw = state.gap_counts()
+        counts = PendingCounts(
+            group_create=raw.get(GapKind.GROUP_CREATE.value, 0),
+            group_nest=raw.get(GapKind.GROUP_NEST.value, 0),
+            member_add=raw.get(GapKind.MEMBER_ADD.value, 0),
+            member_remove=raw.get(GapKind.MEMBER_REMOVE.value, 0),
+            grant_add=raw.get(GapKind.GRANT_ADD.value, 0),
+            grant_revoke=raw.get(GapKind.GRANT_REVOKE.value, 0),
+            failed=raw.get("failed", 0),
+            expired_since_sync=len(self._expired_since_sync(self._settings(), meta)),
+        )
+        tag_counts = TagChangeCounts()
+        if meta is not None:
+            tag_counts = TagChangeCounts(**state.tag_change_counts(meta.run_id))
+        total = sum(raw.get(kind.value, 0) for kind in GapKind)
+        return PendingSummary(meta=meta, counts=counts, tag_changes=tag_counts, total=total)
+
+    def pending_items(
+        self,
+        *,
+        kind: str | None = None,
+        status: str | None = None,
+        query: str | None = None,
+        page: int = 1,
+        page_size: int = 25,
+    ) -> GapItemPage:
+        """One page of outstanding items.
+
+        Args:
+            kind: A gap kind, ``expired`` (assignments expired since the last sync), or None for all.
+            status: ``pending`` or ``failed``.
+            query: Substring over group, principal, securable, and value.
+            page: 1-based page.
+            page_size: Rows per page (1-200).
+
+        Returns:
+            The page and total.
+
+        Raises:
+            InvalidRequestError: For an unknown kind or status.
+        """
+        page = max(1, page)
+        page_size = min(max(1, page_size), 200)
+        offset = (page - 1) * page_size
+        kind = (kind or "").strip().lower() or None
+        status = (status or "").strip().lower() or None
+        if status and status not in {s.value for s in GapStatus}:
+            raise InvalidRequestError("status must be pending or failed")
+        if kind == "expired":
+            return self._expired_page(query=query, page=page, page_size=page_size)
+        if kind and kind not in {k.value for k in GapKind}:
+            raise InvalidRequestError(f"Unknown kind '{kind}'")
+        items, total = self._storage.data_access_state.gap_page(
+            kind=kind, status=status, query=query, limit=page_size, offset=offset
+        )
+        return GapItemPage(items=items, total=total, page=page, page_size=page_size)
+
+    def _expired_page(self, *, query: str | None, page: int, page_size: int) -> GapItemPage:
+        """Expired-since-sync assignments as removal items."""
+        settings = self._settings()
+        meta = self._storage.data_access_state.gap_meta()
+        needle = (query or "").strip().lower()
+        rows: list[GapItem] = []
+        for a in self._expired_since_sync(settings, meta):
+            group = group_name(settings.group_prefix, a.attribute_value) or ""
+            if needle and needle not in a.principal_name.lower() and needle not in group.lower() and (
+                needle not in a.attribute_value.lower()
+            ):
+                continue
+            rows.append(
+                GapItem(
+                    item_key=f"expired|{a.assignment_id}",
+                    kind=GapKind.MEMBER_REMOVE,
+                    group_name=group,
+                    principal_name=a.principal_name,
+                    principal_type=a.principal_type.value,
+                    value=a.attribute_value,
+                    reason=f"assignment expired {a.expires_at:%Y-%m-%d %H:%M} UTC; removed at the next sync",
+                    computed_at=a.expires_at or datetime.now(UTC),
+                )
+            )
+        start = (page - 1) * page_size
+        return GapItemPage(
+            items=rows[start : start + page_size], total=len(rows), page=page, page_size=page_size
+        )
+
+    def tag_changes(
+        self, *, change: str | None = None, scope: str = "latest", page: int = 1, page_size: int = 25
+    ) -> TagChangePage:
+        """One page of tables whose data-access tagging changed, newest first.
+
+        Args:
+            change: ``newly_eligible``, ``no_longer_eligible``, ``value_changed``, or None.
+            scope: ``latest`` (last sync only) or ``all`` (retention window).
+            page: 1-based page.
+            page_size: Rows per page (1-200).
+
+        Returns:
+            The page and total.
+
+        Raises:
+            InvalidRequestError: For an unknown scope.
+        """
+        if scope not in {"latest", "all"}:
+            raise InvalidRequestError("scope must be latest or all")
+        page = max(1, page)
+        page_size = min(max(1, page_size), 200)
+        state = self._storage.data_access_state
+        run_id: str | None = None
+        if scope == "latest":
+            meta = state.gap_meta()
+            if meta is None:
+                return TagChangePage(page=page, page_size=page_size)
+            run_id = meta.run_id
+        items, total = state.tag_changes_page(
+            change=(change or "").strip().lower() or None,
+            run_id=run_id,
+            limit=page_size,
+            offset=(page - 1) * page_size,
+        )
+        return TagChangePage(items=items, total=total, page=page, page_size=page_size)
+
+    def access_status(self, assignments: list[IdentityAttributeAssignment]) -> list[AccessStatus]:
+        """Whether each data-access assignment gives access yet (other attributes are skipped).
+
+        Args:
+            assignments: Assignments to report on (any attribute, any state).
+
+        Returns:
+            One status per data-access assignment, in input order.
+        """
+        settings = self._settings()
+        key = self._data_access_key(settings)
+        if key is None:
+            return []
+        relevant = [a for a in assignments if a.attribute_key.lower() == key.lower()]
+        if not relevant:
+            return []
+        state = self._storage.data_access_state
+        meta = state.gap_meta()
+        since = meta.computed_at if meta is not None else datetime.min.replace(tzinfo=UTC)
+        created = {
+            e.group_name.lower()
+            for e in state.membership_events_since(since)
+            if e.group_created and e.status == MembershipEventStatus.APPLIED
+        }
+        structure_values = state.gap_structure_values()
+        events = state.latest_membership_events([a.assignment_id for a in relevant])
+        by_principal: dict[str, list[GapItem]] = {}
+        for item in state.member_gap_items(sorted({a.principal_name for a in relevant})):
+            by_principal.setdefault((item.principal_name or "").lower(), []).append(item)
+        now = datetime.now(UTC)
+        return [
+            compute_access_status(
+                a,
+                prefix=settings.group_prefix,
+                separator=settings.hierarchy_separator,
+                meta=meta,
+                structure_values=structure_values,
+                groups_created_since_sync=created,
+                event=events.get(a.assignment_id),
+                member_items=by_principal.get(a.principal_name.lower(), []),
+                now=now,
+            )
+            for a in relevant
+        ]
 
     @staticmethod
     def _normalize_mode_filter(mode: str | None) -> str | None:
@@ -1061,13 +1532,19 @@ class DataAccessService:
     def _apply_plan_impl(self, settings: DataAccessSettings, plan: DataAccessPlan) -> DataAccessPlan:
         """Create/nest account groups, sync membership, GRANT/REVOKE. Collects per-step errors."""
         errors: list[str] = []
-        group_ids = self._ensure_groups(plan.groups, errors)
-        self._nest_groups(plan.groups, group_ids, errors)
-        self._apply_membership(plan.membership_changes, group_ids, errors)
-        self._apply_grants(plan.grants_to_add, plan.grants_to_revoke, errors)
-        return plan.model_copy(update={"apply_errors": errors})
+        failures: dict[str, str] = {}
+        group_ids = self._ensure_groups(plan.groups, errors, failures)
+        self._nest_groups(plan.groups, group_ids, errors, failures)
+        self._apply_membership(plan.membership_changes, group_ids, errors, failures)
+        self._apply_grants(plan.grants_to_add, plan.grants_to_revoke, errors, failures)
+        return plan.model_copy(update={"apply_errors": errors, "apply_failures": failures})
 
-    def _ensure_groups(self, groups: list[PlannedGroup], errors: list[str]) -> dict[str, str]:
+    def _ensure_groups(
+        self,
+        groups: list[PlannedGroup],
+        errors: list[str],
+        failures: dict[str, str] | None = None,
+    ) -> dict[str, str]:
         """Create missing account groups; return display-name(lower) → SCIM id map."""
         ids: dict[str, str] = {}
         try:
@@ -1102,6 +1579,8 @@ class DataAccessService:
                 except Exception:  # noqa: BLE001
                     pass
                 errors.append(f"create group {planned.name}: {exc}")
+                if failures is not None:
+                    failures[group_key(GapKind.GROUP_CREATE, planned.name)] = str(exc)
         return ids
 
     def _nest_groups(
@@ -1109,15 +1588,19 @@ class DataAccessService:
         groups: list[PlannedGroup],
         group_ids: dict[str, str],
         errors: list[str],
+        failures: dict[str, str] | None = None,
     ) -> None:
         """Nest each parent ``dac_*`` group into its child (idempotent ADD)."""
         for planned in groups:
             if not planned.parent_group:
                 continue
+            key = nest_key(planned.name, planned.parent_group)
             child_id = group_ids.get(planned.name.lower())
             parent_id = group_ids.get(planned.parent_group.lower())
             if not child_id or not parent_id:
                 errors.append(f"nest {planned.parent_group} → {planned.name}: missing group id")
+                if failures is not None:
+                    failures[key] = "missing group id"
                 continue
             try:
                 self._account_scim_patch_group(
@@ -1129,26 +1612,34 @@ class DataAccessService:
                 if "already" in message or "exists" in message or "409" in message:
                     continue
                 errors.append(f"nest {planned.parent_group} → {planned.name}: {exc}")
+                if failures is not None:
+                    failures[key] = str(exc)
 
     def _apply_membership(
         self,
         changes: list[MembershipChange],
         group_ids: dict[str, str],
         errors: list[str],
+        failures: dict[str, str] | None = None,
     ) -> None:
         """Add/remove principals on managed account groups via Account SCIM patch.
 
         Resolves each change to a SCIM id first, then collapses ADD+REMOVE pairs that
         refer to the same person under different names (email vs display name).
         """
+        sink: dict[str, str] = failures if failures is not None else {}
         resolved: list[tuple[str, str, MembershipChange]] = []
         for change in changes:
+            key = member_key(change.action, change.group, change.principal_name)
             group_id = group_ids.get(change.group.lower())
             if not group_id:
                 errors.append(f"membership {change.action.value} {change.principal_name}: missing group")
+                sink[key] = "missing group"
                 continue
+            before = len(errors)
             member_id = self._resolve_principal_id(change.principal_name, change.principal_type, errors)
             if not member_id:
+                sink[key] = errors[-1] if len(errors) > before else "principal not found"
                 continue
             resolved.append((group_id, member_id, change))
 
@@ -1171,6 +1662,7 @@ class DataAccessService:
                 errors.append(
                     f"membership {change.action.value} {change.principal_name} on {change.group}: {exc}"
                 )
+                sink[member_key(change.action, change.group, change.principal_name)] = str(exc)
 
     def _resolve_principal_id(self, name: str, principal_type: str, errors: list[str]) -> str | None:
         """Resolve a user/group/SP display name to a SCIM id."""
@@ -1212,20 +1704,24 @@ class DataAccessService:
         to_add: list[PlannedGrant],
         to_revoke: list[PlannedGrant],
         errors: list[str],
+        failures: dict[str, str] | None = None,
     ) -> None:
         """Issue GRANT / REVOKE SQL for planned privileges."""
+        sink: dict[str, str] = failures if failures is not None else {}
         for grant in to_add:
             sql = self._grant_sql("GRANT", grant)
             try:
                 self._sql.execute(sql)
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"GRANT {grant.privilege} on {grant.full_name}: {exc}")
+                sink[grant_key(GapKind.GRANT_ADD, grant)] = str(exc)
         for grant in to_revoke:
             sql = self._grant_sql("REVOKE", grant)
             try:
                 self._sql.execute(sql)
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"REVOKE {grant.privilege} on {grant.full_name}: {exc}")
+                sink[grant_key(GapKind.GRANT_REVOKE, grant)] = str(exc)
 
     @staticmethod
     def _grant_sql(verb: str, grant: PlannedGrant) -> str:
