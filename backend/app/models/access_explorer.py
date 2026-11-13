@@ -184,6 +184,9 @@ class SuggestedAttribute(ApiModel):
         reason: Human-readable explanation, including who would review it.
         requestable: True when a request can be submitted now (value is allowed and, for
             row filters, the dimension definition exists).
+        already_held: True when the user already holds this value, so no request is
+            needed. Such suggestions are not requestable, and the UI shows "Already held"
+            rather than a reviewer.
         request_path: Frontend route that pre-fills the request form; None when not
             requestable.
         column_names: Columns the suggestion would unmask or reveal rows for.
@@ -199,6 +202,7 @@ class SuggestedAttribute(ApiModel):
     attribute_value: str
     reason: str
     requestable: bool = False
+    already_held: bool = False
     request_path: str | None = None
     column_names: list[str] = []
     covers_paths: list[str] = []

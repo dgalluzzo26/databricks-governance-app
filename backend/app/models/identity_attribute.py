@@ -266,13 +266,15 @@ class AttributeAssignmentFilter(ApiModel):
     """Filter for listing attribute assignments; None fields do not filter.
 
     Attributes:
-        principal_name: Only assignments for this principal.
+        principal_name: Only assignments for this principal (exact, case-insensitive).
+        principal_search: Only principals whose name contains this text (case-insensitive).
         principal_type: Only assignments for this kind of principal.
         attribute_key: Only assignments of this attribute key.
         include_inactive: Include revoked and expired assignments when True.
     """
 
     principal_name: str | None = None
+    principal_search: str | None = None
     principal_type: PrincipalKind | None = None
     attribute_key: str | None = None
     include_inactive: bool = False

@@ -26,6 +26,9 @@ import type {
 import { Alert, Badge, Card, ErrorAlert, PageHeader, Spinner } from "@/components/ui";
 import styles from "../identity/IdentityPage.module.css";
 import { OutstandingWorkPanel } from "./DataAccessOutstanding";
+import { useTableView, type TableColumn } from "@/hooks/useTableView";
+import { DataTableHead } from "@/components/ui/DataTableHead";
+import { useServerTableView, type ServerTableView } from "@/hooks/useServerTableView";
 
 type DataAccessTab = "dry-run" | "live" | "outstanding";
 
@@ -52,8 +55,10 @@ export function DataAccessPage() {
   const readiness = useDataAccessReadiness();
   const dryLatest = useDataAccessLatestRun("dry_run");
   const liveLatest = useDataAccessLatestRun("apply");
-  const dryHistory = useDataAccessRuns("dry_run", dryPage);
-  const liveHistory = useDataAccessRuns("apply", livePage);
+  const dryView = useServerTableView(RUN_HISTORY_COLUMNS, { onChange: () => setDryPage(1) });
+  const liveView = useServerTableView(RUN_HISTORY_COLUMNS, { onChange: () => setLivePage(1) });
+  const dryHistory = useDataAccessRuns("dry_run", dryPage, dryView.query);
+  const liveHistory = useDataAccessRuns("apply", livePage, liveView.query);
   const drySelected = useDataAccessRun(drySelectedId);
   const liveSelected = useDataAccessRun(liveSelectedId);
   const save = useSaveDataAccessSettings();
@@ -174,6 +179,7 @@ export function DataAccessPage() {
             title="Dry-run logs"
             emptyHint="No dry-run logs in the last 30 days."
             history={dryHistory.data}
+            view={dryView}
             isPending={dryHistory.isPending}
             error={dryHistory.error}
             page={dryPage}
@@ -190,6 +196,7 @@ export function DataAccessPage() {
           applyAvailable={settingsQuery.data?.applyAvailable === true}
           setupReady={readiness.data?.setupReady === true}
           history={liveHistory.data}
+          historyView={liveView}
           historyPending={liveHistory.isPending}
           historyError={liveHistory.error}
           page={livePage}
@@ -212,11 +219,21 @@ export function DataAccessPage() {
 /**
  * Live apply: readiness, membership preview from latest apply plan, confirm + Run apply.
  */
+/** Run-history columns. Keys match the backend `RUN_HISTORY_READERS` whitelist. */
+const RUN_HISTORY_COLUMNS: TableColumn<unknown>[] = [
+  { key: "when", label: "When", sortable: true, filterable: true },
+  { key: "elapsed", label: "Elapsed", sortable: true, filterable: true },
+  { key: "status", label: "Status", sortable: true, filterable: true },
+  { key: "trigger", label: "Trigger", sortable: true, filterable: true },
+  { key: "changes", label: "Add / revoke / conflicts", sortable: true, filterable: true },
+];
+
 function LiveTab(props: {
   readiness: ReturnType<typeof useDataAccessReadiness>;
   applyAvailable: boolean;
   setupReady: boolean;
   history: DataAccessRunList | undefined;
+  historyView: ServerTableView;
   historyPending: boolean;
   historyError: Error | null;
   page: number;
@@ -236,6 +253,7 @@ function LiveTab(props: {
     applyAvailable,
     setupReady,
     history,
+    historyView,
     historyPending,
     historyError,
     page,
@@ -337,6 +355,7 @@ function LiveTab(props: {
         title="Live apply logs"
         emptyHint="No apply logs in the last 30 days."
         history={history}
+        view={historyView}
         isPending={historyPending}
         error={historyError}
         page={page}
@@ -350,6 +369,7 @@ function LiveTab(props: {
 
 function RunHistoryCard(props: {
   history: DataAccessRunList | undefined;
+  view: ServerTableView;
   title: string;
   emptyHint: string;
   isPending: boolean;
@@ -361,6 +381,7 @@ function RunHistoryCard(props: {
 }) {
   const {
     history,
+    view,
     title,
     emptyHint,
     isPending,
@@ -387,15 +408,7 @@ function RunHistoryCard(props: {
           </p>
           <div className={styles.tableWrap}>
             <table className={styles.table} aria-label={title}>
-              <thead>
-                <tr>
-                  <th>When</th>
-                  <th>Elapsed</th>
-                  <th>Status</th>
-                  <th>Trigger</th>
-                  <th>Add / revoke / conflicts</th>
-                </tr>
-              </thead>
+              <DataTableHead view={view} />
               <tbody>
                 {history.runs.map((item) => (
                   <tr
@@ -838,19 +851,19 @@ function summarizeGrantSample(
 }
 
 function GrantTable(props: { caption: string; headers: string[]; rows: string[][] }) {
+  const columns: TableColumn<string[]>[] = props.headers.map((header, index) => ({
+    key: `${index}-${header}`,
+    label: header,
+    value: (row: string[]) => row[index] ?? "",
+  }));
+  const view = useTableView(props.rows, columns, { paginate: false });
   return (
     <div className={styles.tableWrap}>
       <table className={styles.table} aria-label={props.caption}>
         <caption className={styles.label}>{props.caption}</caption>
-        <thead>
-          <tr>
-            {props.headers.map((h) => (
-              <th key={h}>{h}</th>
-            ))}
-          </tr>
-        </thead>
+        <DataTableHead view={view} />
         <tbody>
-          {props.rows.map((row, index) => (
+          {view.rows.map((row, index) => (
             <tr key={`${row[0]}-${index}`}>
               {row.map((cell) => (
                 <td key={cell}>{cell}</td>

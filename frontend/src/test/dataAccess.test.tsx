@@ -1,7 +1,7 @@
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
-import { fakeServices, renderApp, testDataAccessRun } from "./renderApp";
+import { describe, expect, it, vi } from "vitest";
+import { fakeServices, renderApp, testDataAccessRun, testDataAccessSettings } from "./renderApp";
 
 describe("Data access dry-run", () => {
   it("shows settings, readiness, and the latest plan on Dry-run", async () => {
@@ -51,5 +51,39 @@ describe("Data access dry-run", () => {
     expect(screen.getByRole("button", { name: "Run apply" })).toBeEnabled();
     expect(screen.getByText("Live apply logs")).toBeInTheDocument();
     expect(screen.getByText("No apply logs in the last 30 days.")).toBeInTheDocument();
+  });
+});
+
+describe("Data access settings save", () => {
+  it("sends the tuning fields the form does not edit, so saving cannot reset them", async () => {
+    const user = userEvent.setup();
+    const services = fakeServices({
+      dataAccessSettings: {
+        ...testDataAccessSettings,
+        settings: {
+          ...testDataAccessSettings.settings,
+          grantConcurrency: 16,
+          membershipConcurrency: 4,
+          warehouseAutoscale: true,
+          warehouseMaxClusters: 6,
+          warehouseBaselineClusters: 3,
+        },
+      },
+    });
+    const save = vi.spyOn(services.dataAccess, "saveSettings");
+    renderApp("/data-access", services);
+
+    expect(await screen.findByDisplayValue("data_access_control")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save settings" }));
+
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save.mock.calls[0]?.[0]).toMatchObject({
+      grantConcurrency: 16,
+      membershipConcurrency: 4,
+      warehouseAutoscale: true,
+      warehouseMaxClusters: 6,
+      warehouseBaselineClusters: 3,
+      dryRun: true,
+    });
   });
 });

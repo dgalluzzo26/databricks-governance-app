@@ -26,6 +26,7 @@ from backend.app.repositories.data_access_state import (
     DataAccessStateRepository,
     InMemoryDataAccessStateRepository,
 )
+from backend.app.services.table_query import TableQuery
 
 
 class SettingsRepository(ABC):
@@ -525,13 +526,16 @@ class DataAccessViewsReader(ABC):
     """Paged reads from the data-access SQL views (Lakebase only)."""
 
     @abstractmethod
-    def runs_page(self, *, mode: str | None, limit: int, offset: int) -> tuple[list[dict[str, Any]], int]:
+    def runs_page(
+        self, *, mode: str | None, limit: int, offset: int, table_query: TableQuery | None = None
+    ) -> tuple[list[dict[str, Any]], int]:
         """Read ``data_access_runs_v`` newest first.
 
         Args:
             mode: Optional ``dry_run`` or ``apply`` filter.
             limit: Page size.
             offset: Rows to skip.
+            table_query: Optional column sort and filters.
 
         Returns:
             The page rows and the total matching row count.
@@ -539,7 +543,13 @@ class DataAccessViewsReader(ABC):
 
     @abstractmethod
     def grants_page(
-        self, *, mode: str | None, change: str | None, limit: int, offset: int
+        self,
+        *,
+        mode: str | None,
+        change: str | None,
+        limit: int,
+        offset: int,
+        table_query: TableQuery | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         """Read ``data_access_run_grants_v`` newest run first.
 
@@ -548,6 +558,7 @@ class DataAccessViewsReader(ABC):
             change: Optional ``add`` or ``revoke`` filter.
             limit: Page size.
             offset: Rows to skip.
+            table_query: Optional column sort and filters.
 
         Returns:
             The page rows and the total matching row count.

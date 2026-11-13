@@ -109,7 +109,7 @@ def create_app(config: AppConfig | None = None, container: ServiceContainer | No
         Yields:
             Control to the running application between startup and shutdown.
         """
-        await run_in_threadpool(container.startup)
+        await run_in_threadpool(container.startup, mirror_in_background=True)
         logger.info(
             "%s %s started (storage=%s, auth=%s, admin_sp=%s)",
             config.app_name,

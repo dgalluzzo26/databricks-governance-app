@@ -15,6 +15,9 @@ import {
 } from "@/api/queries";
 import type { GapItem, GapKind, PendingCounts, TagChangeKind } from "@/api/types";
 import { Alert, Badge, Card, ErrorAlert, Spinner, TablePager } from "@/components/ui";
+import { DataTableHead } from "@/components/ui/DataTableHead";
+import type { TableColumn } from "@/hooks/useTableView";
+import { useServerTableView } from "@/hooks/useServerTableView";
 import type { TablePageSize } from "@/components/ui";
 import identityStyles from "../identity/IdentityPage.module.css";
 import styles from "./DataAccessAnalyticsPage.module.css";
@@ -70,6 +73,24 @@ export function describeGapItem(item: GapItem): string {
       return `REVOKE ${item.privilege ?? ""} on ${item.securableType ?? ""} ${item.fullName ?? ""} from ${item.groupName ?? ""}`;
   }
 }
+
+/** Outstanding-items columns. Keys match the backend `GAP_ITEM_COLUMNS` whitelist. */
+const ITEM_COLUMNS: TableColumn<unknown>[] = [
+  { key: "kind", label: "Kind", sortable: true, filterable: true },
+  { key: "change", label: "Change", sortable: true, filterable: true },
+  { key: "path", label: "Path", sortable: true, filterable: true },
+  { key: "status", label: "Status", sortable: true, filterable: true },
+  { key: "reason", label: "Reason", sortable: true, filterable: true },
+];
+
+/** Tag-change columns. Keys match the backend `TAG_CHANGE_COLUMNS` whitelist. */
+const TAG_CHANGE_COLUMNS: TableColumn<unknown>[] = [
+  { key: "table", label: "Table", sortable: true, filterable: true },
+  { key: "change", label: "Change", sortable: true, filterable: true },
+  { key: "before", label: "Before", sortable: true, filterable: true },
+  { key: "after", label: "After", sortable: true, filterable: true },
+  { key: "detected", label: "Detected", sortable: true, filterable: true },
+];
 
 /** Shared pager wiring: converts the server's 1-based page to TablePager's 0-based index. */
 function usePaging() {
@@ -169,12 +190,14 @@ function OutstandingItemsTable({
   const [failedOnly, setFailedOnly] = useState(false);
   const [search, setSearch] = useState("");
   const paging = usePaging();
+  const view = useServerTableView(ITEM_COLUMNS, { onChange: () => paging.setPageIndex(0) });
   const query = useDataAccessPendingItems({
     kind: kind === "all" ? undefined : kind,
     status: failedOnly && kind !== "expired" ? "failed" : undefined,
     q: search.trim() || undefined,
     page: paging.page,
     pageSize: paging.pageSize,
+    ...view.query,
   });
   const data = query.data;
   const items = data?.items ?? [];
@@ -240,15 +263,7 @@ function OutstandingItemsTable({
       {items.length > 0 && (
         <div className={identityStyles.tableWrap}>
           <table className={identityStyles.table} aria-label="Outstanding items">
-            <thead>
-              <tr>
-                <th>Kind</th>
-                <th>Change</th>
-                <th>Path</th>
-                <th>Status</th>
-                <th>Reason</th>
-              </tr>
-            </thead>
+            <DataTableHead view={view} />
             <tbody>
               {items.map((item) => (
                 <tr key={item.itemKey}>
@@ -290,11 +305,13 @@ function TagChangesTable() {
   const [change, setChange] = useState<TagChangeKind | "all">("all");
   const [scope, setScope] = useState<"latest" | "all">("latest");
   const paging = usePaging();
+  const view = useServerTableView(TAG_CHANGE_COLUMNS, { onChange: () => paging.setPageIndex(0) });
   const query = useDataAccessTagChanges({
     change: change === "all" ? undefined : change,
     scope,
     page: paging.page,
     pageSize: paging.pageSize,
+    ...view.query,
   });
   const data = query.data;
   const items = data?.items ?? [];
@@ -350,15 +367,7 @@ function TagChangesTable() {
       {items.length > 0 && (
         <div className={identityStyles.tableWrap}>
           <table className={identityStyles.table} aria-label="Tag changes">
-            <thead>
-              <tr>
-                <th>Table</th>
-                <th>Change</th>
-                <th>Before</th>
-                <th>After</th>
-                <th>Detected</th>
-              </tr>
-            </thead>
+            <DataTableHead view={view} />
             <tbody>
               {items.map((item) => (
                 <tr key={`${item.runId}-${item.fullName}`}>

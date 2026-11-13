@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+import time
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
@@ -25,6 +27,7 @@ from backend.app.models.data_access import (
 )
 from backend.app.repositories.memory import InMemoryStorageProvider
 from backend.app.services.data_access import DataAccessService, collapse_membership_by_principal_id
+from backend.app.services.data_access_gap import GapKind, grant_key
 from backend.app.services.data_access_planner import (
     ActualGrant,
     ActualMember,
@@ -34,6 +37,7 @@ from backend.app.services.data_access_planner import (
     normalize_privilege,
     plan_data_access,
 )
+from backend.app.services.data_access_profile import RunProfiler, profiling
 from backend.tests.conftest import headers_for
 
 
@@ -70,6 +74,23 @@ def test_plan_grants_select_only_on_tables() -> None:
     assert parents["finance.budget"] == "dac_finance"
     assert "public" in parents
     assert plan.summary.eligible_objects == 3
+
+
+def test_plan_marks_existing_nests_from_actual_members() -> None:
+    tags = [
+        *_reviewed("table", "sandbox", "finance", "root", "finance"),
+        *_reviewed("table", "sandbox", "finance", "budget", "finance.budget"),
+    ]
+    members = [
+        ActualMember(group_name="dac_finance_budget", principal_name="dac_finance", principal_type="GROUP"),
+    ]
+    plan = plan_data_access(
+        DataAccessSettings(), tags, [], {"dac_finance", "dac_finance_budget"}, actual_members=members
+    )
+    by_name = {g.name: g for g in plan.groups}
+    assert by_name["dac_finance_budget"].parent_group == "dac_finance"
+    assert by_name["dac_finance_budget"].nest_exists is True
+    assert by_name["dac_finance"].nest_exists is False
 
 
 def test_plan_skips_unreviewed_objects() -> None:
@@ -702,6 +723,53 @@ def test_save_settings_persists_and_returns_view() -> None:
     assert svc.get_settings().settings.interval_minutes == 30
 
 
+def test_save_settings_keeps_tuning_fields_the_request_omits() -> None:
+    """A partial save changes only the fields it sends; tuned concurrency and warehouse values stay."""
+    svc = _service(sql=_SqlFake({"ORDER BY catalog_name": []}))
+    svc.save_settings(
+        DataAccessSettings(
+            grant_concurrency=16,
+            membership_concurrency=4,
+            warehouse_autoscale=True,
+            warehouse_max_clusters=6,
+            warehouse_baseline_clusters=3,
+        ),
+        ADMIN,
+    )
+    svc.save_settings(DataAccessSettings(interval_minutes=30), ADMIN)
+    stored = svc.get_settings().settings
+    assert stored.interval_minutes == 30
+    assert stored.grant_concurrency == 16
+    assert stored.membership_concurrency == 4
+    assert stored.warehouse_autoscale is True
+    assert stored.warehouse_max_clusters == 6
+    assert stored.warehouse_baseline_clusters == 3
+
+
+def test_put_settings_without_tuning_fields_keeps_them(client: TestClient) -> None:
+    """An API client that does not send the tuning fields must not reset them."""
+    admin = headers_for("admin@example.com")
+    current = client.get("/api/data-access/settings", headers=admin).json()["settings"]
+    tuned = client.put(
+        "/api/data-access/settings",
+        headers=admin,
+        json={**current, "grantConcurrency": 16, "warehouseAutoscale": True, "warehouseMaxClusters": 6},
+    )
+    assert tuned.status_code == 200
+
+    partial = client.put(
+        "/api/data-access/settings",
+        headers=admin,
+        json={"intervalMinutes": 20, "enrollmentCatalogTagKey": "data_access_controlled", "enrollmentCatalogTagValue": "true"},
+    )
+    assert partial.status_code == 200
+    saved = partial.json()["settings"]
+    assert saved["intervalMinutes"] == 20
+    assert saved["grantConcurrency"] == 16
+    assert saved["warehouseAutoscale"] is True
+    assert saved["warehouseMaxClusters"] == 6
+
+
 def test_list_enrolled_catalogs_filters_system_and_malformed_rows() -> None:
     sql = _SqlFake(
         {
@@ -1328,8 +1396,11 @@ def test_ensure_groups_creates_missing_and_recovers_races() -> None:
 
 
 def test_nest_groups_skips_existing_links_and_reports_failures() -> None:
+    patches: list[str] = []
+
     def _handler(method, path, query, body):  # noqa: ANN001, ANN202
         del method, query, body
+        patches.append(path)
         if path.endswith("/g-already"):
             raise DatabricksError("already a member")
         if path.endswith("/g-denied"):
@@ -1339,6 +1410,8 @@ def test_nest_groups_skips_existing_links_and_reports_failures() -> None:
     svc = _service(admin=_admin(_ScimApi(_handler)))
     groups = [
         PlannedGroup(name="dac_already", value="a", parent_group="dac_parent"),
+        # Inventory already shows this nest; apply must not PATCH Account SCIM for it.
+        PlannedGroup(name="dac_present", value="p", parent_group="dac_parent", nest_exists=True),
         PlannedGroup(name="dac_denied", value="d", parent_group="dac_parent"),
         PlannedGroup(name="dac_gone", value="g", parent_group="dac_parent"),
         PlannedGroup(name="dac_root", value="r"),
@@ -1346,17 +1419,26 @@ def test_nest_groups_skips_existing_links_and_reports_failures() -> None:
     errors: list[str] = []
     svc._nest_groups(  # noqa: SLF001
         groups,
-        {"dac_already": "g-already", "dac_denied": "g-denied", "dac_parent": "g-parent"},
+        {
+            "dac_already": "g-already",
+            "dac_present": "g-present",
+            "dac_denied": "g-denied",
+            "dac_parent": "g-parent",
+        },
         errors,
     )
     assert len(errors) == 2
     assert any("dac_denied" in e for e in errors)
     assert any("missing group id" in e for e in errors)
+    assert not any(path.endswith("/g-present") for path in patches)
 
 
 def test_apply_membership_handles_duplicates_removals_and_resolution_failures() -> None:
     def _handler(method, path, query, body):  # noqa: ANN001, ANN202
-        del method, path, query
+        del query
+        if method == "GET":
+            # Account SCIM user lookups return nothing here, so the workspace fallback resolves users.
+            return {"Resources": []}
         op = body["Operations"][0]
         if op["op"] == "remove":
             raise DatabricksError("forbidden")
@@ -1463,6 +1545,8 @@ def test_apply_plan_creates_nests_members_and_grants() -> None:
 
     def _handler(method, path, query, body):  # noqa: ANN001, ANN202
         del query
+        if method == "GET" and path.endswith("/Users"):
+            return {"Resources": []}
         if method == "GET":
             return {"Resources": [{"displayName": "dac_finance", "id": "g-parent"}]}
         if method == "POST":
@@ -1559,6 +1643,174 @@ def test_apply_grants_collects_failures_per_statement() -> None:
     )
     assert errors == ["GRANT USE CATALOG on sandbox: no privilege"]
     assert sql.executed[-1] == "REVOKE USE CATALOG ON CATALOG `sandbox` FROM `dac_x`"
+
+
+class _ConcurrentSql:
+    """Thread-safe warehouse stand-in: tracks peak in-flight statements and fails ``bad`` tables."""
+
+    def __init__(self, *, delay: float = 0.02, bad: tuple[str, ...] = ()) -> None:
+        self.delay = delay
+        self.bad = bad
+        self.executed: list[str] = []
+        self.in_flight = 0
+        self.peak = 0
+        self._lock = threading.Lock()
+
+    def execute(self, statement: str, parameters: dict[str, Any] | None = None) -> None:
+        del parameters
+        with self._lock:
+            self.in_flight += 1
+            self.peak = max(self.peak, self.in_flight)
+            self.executed.append(statement)
+        try:
+            time.sleep(self.delay)
+            if any(f"`{name}`" in statement for name in self.bad):
+                raise RuntimeError("denied by warehouse")
+        finally:
+            with self._lock:
+                self.in_flight -= 1
+
+
+def _table_grants(count: int, principal: str = "dac_x") -> list[PlannedGrant]:
+    return [
+        PlannedGrant(
+            securable_type="table",
+            full_name=f"sandbox.perf.t{i:04d}",
+            principal=principal,
+            privilege="SELECT",
+        )
+        for i in range(count)
+    ]
+
+
+def test_apply_grants_runs_statements_concurrently_and_maps_failures() -> None:
+    sql = _ConcurrentSql(bad=("t0003",))
+    svc = _service(sql=sql)
+    failures: dict[str, str] = {}
+    errors: list[str] = []
+    to_add = _table_grants(20)
+    to_revoke = _table_grants(5)
+    svc._apply_grants(to_add, to_revoke, errors, failures, concurrency=8)  # noqa: SLF001
+
+    assert len(sql.executed) == 25
+    assert sql.peak > 1  # really parallel, not one at a time
+    assert sql.peak <= 8  # never above the configured concurrency
+    # t0003 is in both lists, so its GRANT and its REVOKE each fail and are keyed separately.
+    assert sorted(errors) == [
+        "GRANT SELECT on sandbox.perf.t0003: denied by warehouse",
+        "REVOKE SELECT on sandbox.perf.t0003: denied by warehouse",
+    ]
+    assert failures == {
+        grant_key(GapKind.GRANT_ADD, to_add[3]): "denied by warehouse",
+        grant_key(GapKind.GRANT_REVOKE, to_revoke[3]): "denied by warehouse",
+    }
+
+
+def test_apply_grants_concurrency_is_capped_by_the_number_of_statements() -> None:
+    sql = _ConcurrentSql(delay=0.0)
+    svc = _service(sql=sql)
+    svc._apply_grants(_table_grants(2), [], [], {}, concurrency=32)  # noqa: SLF001
+    assert len(sql.executed) == 2
+    svc._apply_grants([], [], [], {}, concurrency=32)  # noqa: SLF001
+    assert len(sql.executed) == 2
+
+
+def test_apply_grants_records_call_timings_on_the_run_profile() -> None:
+    sql = _ConcurrentSql(delay=0.0, bad=("t0001",))
+    svc = _service(sql=sql)
+    profiler = RunProfiler()
+    with profiling(profiler):
+        svc._apply_grants(_table_grants(3), _table_grants(1, "dac_y"), [], {}, concurrency=4)  # noqa: SLF001
+    assert profiler.calls["sql.grant_table"] == 3
+    assert profiler.calls["sql.revoke_table"] == 1
+    assert profiler.sizes["grant_concurrency"] == 4
+
+
+def test_account_scim_user_lookup_is_tried_before_the_workspace_list() -> None:
+    def _handler(method, path, query, body):  # noqa: ANN001, ANN202
+        del body
+        if method == "GET" and path.endswith("/Users"):
+            assert query["filter"] == 'userName eq "outside@example.com"'
+            return {"Resources": [{"id": "acct-42", "userName": "outside@example.com"}]}
+        return {"Resources": []}
+
+    # The workspace list knows nobody, so only the account lookup can resolve this user.
+    svc = _service(admin=_admin(_ScimApi(_handler), users=()))
+    errors: list[str] = []
+    assert svc._resolve_principal_id("outside@example.com", "USER", errors) == "acct-42"  # noqa: SLF001
+    assert errors == []
+
+
+def test_apply_membership_runs_patches_for_different_groups_concurrently() -> None:
+    patches: list[str] = []
+    in_flight = 0
+    peak = 0
+    lock = threading.Lock()
+
+    def _handler(method, path, query, body):  # noqa: ANN001, ANN202
+        nonlocal in_flight, peak
+        del query, body
+        if method == "GET":
+            return {"Resources": []}
+        with lock:
+            in_flight += 1
+            peak = max(peak, in_flight)
+            patches.append(path)
+        try:
+            time.sleep(0.05)
+        finally:
+            with lock:
+                in_flight -= 1
+        return {}
+
+    users = [SimpleNamespace(id=f"u-{i}", user_name=f"u{i}@example.com") for i in range(6)]
+    svc = _service(admin=_admin(_ScimApi(_handler), users=users))
+    changes = [
+        MembershipChange(
+            group=f"dac_{i % 3}",
+            principal_name=f"u{i}@example.com",
+            principal_type="USER",
+            action=MembershipAction.ADD,
+        )
+        for i in range(6)
+    ]
+    errors: list[str] = []
+    svc._apply_membership(  # noqa: SLF001
+        changes,
+        {"dac_0": "g0", "dac_1": "g1", "dac_2": "g2"},
+        errors,
+        concurrency=4,
+    )
+    assert errors == []
+    assert len(patches) == 6
+    assert peak > 1  # different groups run at the same time
+    assert peak <= 3  # at most one worker per group
+
+
+def test_member_type_comes_from_ref_before_the_display_name_guess() -> None:
+    # Real Account SCIM shape: no ``type``, ``$ref`` says Groups/ or Users/. An account group
+    # such as "bc-oil-gas-analysts" must not be treated as a user (removals then fail).
+    member = DataAccessService._member_principal_type  # noqa: SLF001
+    group_ref = {"display": "bc-oil-gas-analysts", "value": "1", "$ref": "Groups/1"}
+    user_ref = {"display": "David Galluzzo", "value": "2", "$ref": "Users/2"}
+    sp_ref = {"display": "app-sp", "value": "3", "$ref": "ServicePrincipals/3"}
+    assert member(group_ref, "bc-oil-gas-analysts", "dac") == "GROUP"
+    assert member(user_ref, "David Galluzzo", "dac") == "USER"
+    assert member(sp_ref, "app-sp", "dac") == "SERVICE_PRINCIPAL"
+    assert member({"type": "GROUP", "display": "x"}, "x", "dac") == "GROUP"
+    # No usable hint: fall back to the managed-prefix guess.
+    assert member({"display": "dac_sub"}, "dac_sub", "dac") == "GROUP"
+    assert member({"display": "Plain Name"}, "Plain Name", "dac") == "USER"
+
+
+def test_account_scim_user_lookup_falls_back_when_the_account_api_fails() -> None:
+    api = _ScimApi(_raise_on_call(DatabricksError("account api denied")))
+    users = [SimpleNamespace(id="u-ws", user_name="ws@example.com")]
+    svc = _service(admin=_admin(api, users=users))
+    errors: list[str] = []
+    assert svc._resolve_principal_id("ws@example.com", "USER", errors) == "u-ws"  # noqa: SLF001
+    assert errors == []
+    assert svc._account_scim_find_user("nobody@example.com") is None  # noqa: SLF001
 
 
 def test_grant_sql_quotes_identifiers_and_strips_principal_backticks() -> None:

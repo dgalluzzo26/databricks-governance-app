@@ -25,6 +25,8 @@ import { Alert, Card, ErrorAlert, PageHeader, Spinner } from "@/components/ui";
 import identityStyles from "../identity/IdentityPage.module.css";
 import { GrantChangesTable, RunHistoryTable } from "./DataAccessViewTables";
 import styles from "./DataAccessAnalyticsPage.module.css";
+import { useTableView, type TableColumn } from "@/hooks/useTableView";
+import { DataTableHead } from "@/components/ui/DataTableHead";
 
 const WINDOW_OPTIONS = [7, 14, 30] as const;
 type ModeFilter = "all" | "dry_run" | "apply";
@@ -215,22 +217,22 @@ function DurationChart({ rows }: { rows: ChartDayRow[] }) {
 
 /** Table of the most recent failed runs. */
 function FailuresTable({ data }: { data: DataAccessAnalytics }) {
+  const columns: TableColumn<(typeof data.failures)[number]>[] = [
+    { key: "started", label: "Started", value: (f) => f.startedAt, filterText: (f) => formatWhen(f.startedAt) },
+    { key: "mode", label: "Mode", value: (f) => (f.mode === "apply" ? "Live" : "Dry run") },
+    { key: "triggeredBy", label: "Triggered by", value: (f) => f.triggeredBy },
+    { key: "error", label: "Error", value: (f) => f.error ?? "" },
+  ];
+  const view = useTableView(data.failures, columns, { paginate: false });
   if (data.failures.length === 0) {
     return <p className={identityStyles.muted}>No failed runs in this window.</p>;
   }
   return (
     <div className={identityStyles.tableWrap}>
       <table className={identityStyles.table} aria-label="Recent failed sync runs">
-        <thead>
-          <tr>
-            <th>Started</th>
-            <th>Mode</th>
-            <th>Triggered by</th>
-            <th>Error</th>
-          </tr>
-        </thead>
+        <DataTableHead view={view} />
         <tbody>
-          {data.failures.map((failure) => (
+          {view.rows.map((failure) => (
             <tr key={failure.runId}>
               <td>{formatWhen(failure.startedAt)}</td>
               <td>{failure.mode === "apply" ? "Live" : "Dry run"}</td>
@@ -246,22 +248,22 @@ function FailuresTable({ data }: { data: DataAccessAnalytics }) {
 
 /** Table of desired-state fingerprints with how often each appeared. */
 function FingerprintTable({ data }: { data: DataAccessAnalytics }) {
+  const columns: TableColumn<(typeof data.fingerprints)[number]>[] = [
+    { key: "fingerprint", label: "Fingerprint", value: (fp) => fp.fingerprint },
+    { key: "runs", label: "Runs", value: (fp) => fp.runs },
+    { key: "firstSeen", label: "First seen", value: (fp) => fp.firstSeen, filterText: (fp) => formatWhen(fp.firstSeen) },
+    { key: "lastSeen", label: "Last seen", value: (fp) => fp.lastSeen, filterText: (fp) => formatWhen(fp.lastSeen) },
+  ];
+  const view = useTableView(data.fingerprints, columns, { paginate: false });
   if (data.fingerprints.length === 0) {
     return <p className={identityStyles.muted}>No successful runs in this window.</p>;
   }
   return (
     <div className={identityStyles.tableWrap}>
       <table className={identityStyles.table} aria-label="Desired-state fingerprints">
-        <thead>
-          <tr>
-            <th>Fingerprint</th>
-            <th>Runs</th>
-            <th>First seen</th>
-            <th>Last seen</th>
-          </tr>
-        </thead>
+        <DataTableHead view={view} />
         <tbody>
-          {data.fingerprints.map((fp) => (
+          {view.rows.map((fp) => (
             <tr key={fp.fingerprint}>
               <td>
                 <code>{fp.fingerprint}</code>

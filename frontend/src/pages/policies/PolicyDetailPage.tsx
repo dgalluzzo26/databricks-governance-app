@@ -7,7 +7,8 @@ import { Link, useParams } from "react-router-dom";
 import { usePolicy } from "@/api/queries";
 import type { AffectedAsset } from "@/api/types";
 import { Alert, Badge, Card, DescriptionList, ErrorAlert, PageHeader, Spinner, TablePager } from "@/components/ui";
-import { useClientPagination } from "@/hooks/useClientPagination";
+import { DataTableHead } from "@/components/ui/DataTableHead";
+import { useTableView, type TableColumn } from "@/hooks/useTableView";
 import { formatPolicyType, formatTag, policyTypeTone } from "./policyLabels";
 import styles from "./PolicyDetailPage.module.css";
 
@@ -216,7 +217,16 @@ function AffectedAssetsCard({
   /** Optional informational note from the API, shown above the table. */
   note: string | null;
 }) {
-  const pager = useClientPagination(assets);
+  const columns: TableColumn<(typeof assets)[number]>[] = [
+    { key: "type", label: "Type", value: (asset) => asset.assetType },
+    { key: "catalog", label: "Catalog", value: (asset) => cell(asset.catalogName) },
+    { key: "schema", label: "Schema", value: (asset) => cell(asset.schemaName) },
+    { key: "table", label: "Table", value: (asset) => cell(asset.tableName) },
+    { key: "column", label: "Column", value: (asset) => cell(asset.columnName) },
+    { key: "tag", label: "Tag", value: (asset) => cell(asset.matchedTagKey) },
+    { key: "tagValue", label: "Tag value", value: (asset) => cell(asset.matchedTagValue) },
+  ];
+  const pager = useTableView(assets, columns);
 
   return (
     <Card title="Affected assets" actions={assets.length ? <Badge>{assets.length}</Badge> : null}>
@@ -230,17 +240,7 @@ function AffectedAssetsCard({
         <>
           <div className={styles.tableWrap}>
             <table className={styles.table} aria-label="Affected assets">
-              <thead>
-                <tr>
-                  <th>Type</th>
-                  <th>Catalog</th>
-                  <th>Schema</th>
-                  <th>Table</th>
-                  <th>Column</th>
-                  <th>Tag</th>
-                  <th>Tag value</th>
-                </tr>
-              </thead>
+              <DataTableHead view={pager} />
               <tbody>
                 {pager.rows.map((asset) => (
                   <tr key={`${asset.assetType}:${asset.fullName}:${asset.matchedTagKey}:${asset.matchedTagValue}`}>

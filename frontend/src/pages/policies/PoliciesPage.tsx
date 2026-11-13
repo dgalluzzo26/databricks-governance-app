@@ -8,7 +8,8 @@ import { Link, useSearchParams } from "react-router-dom";
 import { usePolicies } from "@/api/queries";
 import type { PolicyScopeKind, PolicySummary } from "@/api/types";
 import { Badge, Card, ErrorAlert, PageHeader, Spinner, TablePager } from "@/components/ui";
-import { useClientPagination } from "@/hooks/useClientPagination";
+import { DataTableHead } from "@/components/ui/DataTableHead";
+import { useTableView, type TableColumn } from "@/hooks/useTableView";
 import { formatPolicyType, formatTag, policyTypeTone } from "./policyLabels";
 import styles from "./PoliciesPage.module.css";
 
@@ -36,7 +37,29 @@ function PolicyTable({
   /** Changes when filters or scope change so the pager returns to the first page. */
   resetKey: string;
 }) {
-  const pager = useClientPagination(policies, { resetKey });
+  const columns: TableColumn<PolicySummary>[] = [
+    { key: "name", label: "Name", value: (policy) => policy.name },
+    { key: "type", label: "Type", value: (policy) => formatPolicyType(policy.policyType) },
+    {
+      key: "scope",
+      label: showCatalog ? "Catalog / scope" : "Scope",
+      value: (policy) => policy.onSecurableFullname,
+      filterText: (policy) => `${policy.onSecurableType} ${policy.onSecurableFullname}`,
+    },
+    {
+      key: "principals",
+      label: "Principals",
+      value: (policy) => policy.toPrincipals.join(", "),
+      filterText: (policy) => `${policy.toPrincipals.join(" ")} ${policy.exceptPrincipals.join(" ")}`,
+    },
+    {
+      key: "tags",
+      label: "Tags",
+      value: (policy) => policy.governedTags.map(formatTag).join(", "),
+    },
+    { key: "condition", label: "Condition", value: (policy) => policy.whenCondition ?? "" },
+  ];
+  const pager = useTableView(policies, columns, { resetKey });
 
   if (!policies.length) {
     return (
@@ -51,16 +74,7 @@ function PolicyTable({
     <>
       <div className={styles.tableWrap}>
         <table className={styles.table}>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Type</th>
-              <th>{showCatalog ? "Catalog / scope" : "Scope"}</th>
-              <th>Principals</th>
-              <th>Tags</th>
-              <th>Condition</th>
-            </tr>
-          </thead>
+          <DataTableHead view={pager} />
           <tbody>
             {pager.rows.map((policy) => (
               <tr key={policy.id}>

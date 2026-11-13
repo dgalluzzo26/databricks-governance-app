@@ -1,0 +1,46 @@
+.sortButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.sortButton:hover {
+  text-decoration: underline;
+}
+
+.sortButton:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+.sortIndicator {
+  font-size: 10px;
+  opacity: 0.6;
+}
+
+.filterRow th {
+  padding-top: 4px;
+  padding-bottom: 6px;
+  font-weight: normal;
+}
+
+.filterInput {
+  width: 100%;
+  min-width: 80px;
+  box-sizing: border-box;
+  padding: 3px 6px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: normal;
+  background: var(--color-surface);
+  color: inherit;
+}

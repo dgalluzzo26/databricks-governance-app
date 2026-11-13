@@ -109,6 +109,7 @@ def list_assignments(
     _: Admin,
     container: Container,
     principal_name: str | None = None,
+    principal_search: str | None = None,
     principal_type: PrincipalTypeQuery = None,
     attribute_key: str | None = None,
     include_inactive: bool = False,
@@ -119,7 +120,8 @@ def list_assignments(
 
     Args:
         container: Process-scoped service container (dependency injection).
-        principal_name: Optional principal name filter.
+        principal_name: Optional exact principal name filter.
+        principal_search: Optional partial principal name filter (case-insensitive contains).
         principal_type: Optional principal kind filter (user/group/sp).
         attribute_key: Optional attribute definition key filter.
         include_inactive: When true, include revoked/expired assignments.
@@ -132,6 +134,7 @@ def list_assignments(
     """
     return container.identity_attributes.list_assignments(
         principal_name=principal_name,
+        principal_search=principal_search,
         principal_type=principal_type,
         attribute_key=attribute_key,
         include_inactive=include_inactive,

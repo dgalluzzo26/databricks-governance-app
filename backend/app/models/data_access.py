@@ -94,6 +94,17 @@ class DataAccessSettings(ApiModel):
     schedule_mode: ScheduleMode = ScheduleMode.DRY_RUN
     conflict_policy: ConflictPolicy = ConflictPolicy.HOLD
     dry_run: bool = True
+    # Concurrent GRANT/REVOKE statements during apply (1 = sequential).
+    # Hard cap on in-flight GRANT/REVOKE statements; actual workers = size × clusters, up to this.
+    grant_concurrency: int = Field(default=64, ge=1, le=64)
+    # Parallel membership resolve and patch workers (patches to the same group stay sequential).
+    membership_concurrency: int = Field(default=8, ge=1, le=32)
+    # Raise the SQL warehouse's max clusters for the grants phase, then leave the baseline.
+    warehouse_autoscale: bool = False
+    # Ceiling during the grants phase (leave headroom so UI users are not starved by the sync).
+    warehouse_max_clusters: int = Field(default=8, ge=1, le=10)
+    # Ceiling after the grants phase, and the cluster count used for grant concurrency.
+    warehouse_baseline_clusters: int = Field(default=4, ge=1, le=10)
 
     @field_validator(
         "access_tag_key",
@@ -222,12 +233,14 @@ class PlannedGroup(ApiModel):
         value: Access-tag value this group represents.
         parent_group: Group that should be nested into this one, if any.
         exists: True when the group already exists in the account.
+        nest_exists: True when ``parent_group`` is already a member of this group.
     """
 
     name: str
     value: str
     parent_group: str | None = None
     exists: bool = False
+    nest_exists: bool = False
 
 
 class PlannedGrant(ApiModel):
@@ -357,6 +370,26 @@ class DataAccessPlan(ApiModel):
     apply_failures: dict[str, str] = Field(default_factory=dict, exclude=True)
 
 
+class DataAccessRunProfile(ApiModel):
+    """Where one sync run spent its time, for performance analysis.
+
+    Attributes:
+        phases: Wall seconds per phase (``load.tags``, ``apply.grants``, ``job.startup``, ...).
+        calls: Number of external calls per kind (``sql.grant``, ``scim.patch_group``, ...).
+        call_seconds: Total wall seconds spent in each call kind.
+        call_max_seconds: Slowest single call per kind.
+        sizes: Row and item counts (tag rows, grants read, plan sizes, gap items, ...).
+        notes: Warnings worth reading next to the numbers (for example truncated SCIM pages).
+    """
+
+    phases: dict[str, float] = Field(default_factory=dict)
+    calls: dict[str, int] = Field(default_factory=dict)
+    call_seconds: dict[str, float] = Field(default_factory=dict)
+    call_max_seconds: dict[str, float] = Field(default_factory=dict)
+    sizes: dict[str, int] = Field(default_factory=dict)
+    notes: list[str] = Field(default_factory=list)
+
+
 class DataAccessRun(ApiModel):
     """One stored sync execution (dry-run or apply).
 
@@ -372,6 +405,7 @@ class DataAccessRun(ApiModel):
         summary: Plan counts when the planner finished.
         plan: Truncated plan; omitted from history list entries.
         fingerprint: Desired-state hash from the plan.
+        profile: Phase timings, call counts, and sizes; None for runs before profiling existed.
         duration_seconds: Elapsed wall time when finished; omitted from stored JSON.
     """
 
@@ -386,6 +420,7 @@ class DataAccessRun(ApiModel):
     summary: DataAccessPlanSummary | None = None
     plan: DataAccessPlan | None = None
     fingerprint: str | None = None
+    profile: DataAccessRunProfile | None = None
 
     @computed_field
     @property

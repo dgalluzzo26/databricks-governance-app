@@ -62,6 +62,7 @@ from backend.app.repositories.data_access_state import (
     DataAccessStateRepository,
 )
 from backend.app.repositories.lakebase_views import VIEW_DEFINITIONS, drop_statements
+from backend.app.services.table_query import SqlColumn, TableQuery, filter_sql, order_sql
 
 logger = logging.getLogger(__name__)
 
@@ -450,6 +451,31 @@ class LakebasePerformanceRepository(PerformanceRepository):
         return int(rows[0]["n"]) if rows else 0
 
 
+# Sortable and filterable columns for the sync run and planned grant tables. Keys are the
+# frontend column keys; values are SQL over the view (never user input).
+RUNS_VIEW_COLUMNS: dict[str, SqlColumn] = {
+    "started": SqlColumn("started_at"),
+    "mode": SqlColumn("mode"),
+    "status": SqlColumn("status"),
+    "triggeredBy": SqlColumn("triggered_by"),
+    "duration": SqlColumn("duration_seconds"),
+    "grants": SqlColumn("grants_to_add", "concat_ws(' ', grants_to_add, grants_to_revoke)"),
+    "members": SqlColumn("members_to_add", "concat_ws(' ', members_to_add, members_to_remove)"),
+    "errors": SqlColumn("apply_error_count", "COALESCE(error, '')"),
+    "fingerprint": SqlColumn("fingerprint"),
+}
+GRANTS_VIEW_COLUMNS: dict[str, SqlColumn] = {
+    "started": SqlColumn("started_at"),
+    "mode": SqlColumn("mode"),
+    "change": SqlColumn("change"),
+    "securable": SqlColumn("securable_type"),
+    "fullName": SqlColumn("full_name"),
+    "principal": SqlColumn("principal"),
+    "privilege": SqlColumn("privilege"),
+    "reason": SqlColumn("COALESCE(reason, '')"),
+}
+
+
 class LakebaseDataAccessViews(DataAccessViewsReader):
     """Paged reads from the data-access views created by ``lakebase_views``.
 
@@ -460,38 +486,72 @@ class LakebaseDataAccessViews(DataAccessViewsReader):
     def __init__(self, pg: _Pg) -> None:
         self._pg = pg
 
-    def runs_page(self, *, mode: str | None, limit: int, offset: int) -> tuple[list[dict[str, Any]], int]:
-        """Read one page of ``data_access_runs_v`` newest first."""
-        where = "WHERE mode = %(mode)s" if mode else ""
+    def runs_page(
+        self, *, mode: str | None, limit: int, offset: int, table_query: TableQuery | None = None
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Read one page of ``data_access_runs_v`` (newest first unless sorted)."""
+        query = table_query or TableQuery()
+        clauses = ["mode = %(mode)s"] if mode else []
         params: dict[str, Any] = {"mode": mode, "limit": limit, "offset": offset}
+        clauses += filter_sql(query, RUNS_VIEW_COLUMNS, params)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        order = order_sql(query, RUNS_VIEW_COLUMNS, "started_at DESC")
         total = self._pg.fetch(f"SELECT count(*) AS n FROM {{schema}}.data_access_runs_v {where}", params)
         rows = self._pg.fetch(
-            f"SELECT * FROM {{schema}}.data_access_runs_v {where} "
-            "ORDER BY started_at DESC LIMIT %(limit)s OFFSET %(offset)s",
+            f"SELECT * FROM {{schema}}.data_access_runs_v {where} {order} LIMIT %(limit)s OFFSET %(offset)s",
             params,
         )
         return rows, int(total[0]["n"]) if total else 0
 
     def grants_page(
-        self, *, mode: str | None, change: str | None, limit: int, offset: int
+        self,
+        *,
+        mode: str | None,
+        change: str | None,
+        limit: int,
+        offset: int,
+        table_query: TableQuery | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
-        """Read one page of ``data_access_run_grants_v`` newest run first."""
+        """Read one page of ``data_access_run_grants_v`` (newest run first unless sorted)."""
+        query = table_query or TableQuery()
         clauses = []
         if mode:
             clauses.append("mode = %(mode)s")
         if change:
             clauses.append("change = %(change)s")
-        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         params: dict[str, Any] = {"mode": mode, "change": change, "limit": limit, "offset": offset}
+        clauses += filter_sql(query, GRANTS_VIEW_COLUMNS, params)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        order = order_sql(query, GRANTS_VIEW_COLUMNS, "started_at DESC, change, full_name, principal")
         total = self._pg.fetch(
             f"SELECT count(*) AS n FROM {{schema}}.data_access_run_grants_v {where}", params
         )
         rows = self._pg.fetch(
-            f"SELECT * FROM {{schema}}.data_access_run_grants_v {where} "
-            "ORDER BY started_at DESC, change, full_name, principal LIMIT %(limit)s OFFSET %(offset)s",
+            f"SELECT * FROM {{schema}}.data_access_run_grants_v {where} {order} "
+            "LIMIT %(limit)s OFFSET %(offset)s",
             params,
         )
         return rows, int(total[0]["n"]) if total else 0
+
+
+_GAP_CHANGE_SQL = "concat_ws(' ', group_name, principal_name, full_name, privilege, securable_type)"
+_GAP_REASON_SQL = "concat_ws(' ', reason, error)"
+# Outstanding-items columns (frontend keys). Same text as ``GAP_ITEM_READERS`` in-memory.
+GAP_ITEM_COLUMNS: dict[str, SqlColumn] = {
+    "kind": SqlColumn("kind"),
+    "change": SqlColumn(_GAP_CHANGE_SQL),
+    "path": SqlColumn("value"),
+    "status": SqlColumn("status"),
+    "reason": SqlColumn(_GAP_REASON_SQL),
+}
+# Tag-change columns (frontend keys).
+TAG_CHANGE_COLUMNS: dict[str, SqlColumn] = {
+    "table": SqlColumn("full_name"),
+    "change": SqlColumn("change"),
+    "before": SqlColumn("old_value"),
+    "after": SqlColumn("new_value"),
+    "detected": SqlColumn("detected_at"),
+}
 
 
 class LakebaseDataAccessStateRepository(DataAccessStateRepository):
@@ -585,9 +645,17 @@ class LakebaseDataAccessStateRepository(DataAccessStateRepository):
         return counts
 
     def gap_page(
-        self, *, kind: str | None, status: str | None, query: str | None, limit: int, offset: int
+        self,
+        *,
+        kind: str | None,
+        status: str | None,
+        query: str | None,
+        limit: int,
+        offset: int,
+        table_query: TableQuery | None = None,
     ) -> tuple[list[GapItem], int]:
-        """Filtered page plus total, ordered by kind then key."""
+        """Filtered page plus total, ordered by kind then key unless sorted."""
+        table_query = table_query or TableQuery()
         clauses = ["TRUE"]
         params: dict[str, Any] = {"limit": limit, "offset": offset}
         if kind:
@@ -603,13 +671,15 @@ class LakebaseDataAccessStateRepository(DataAccessStateRepository):
                 "OR full_name ILIKE %(q)s OR value ILIKE %(q)s)"
             )
             params["q"] = f"%{needle}%"
+        clauses += filter_sql(table_query, GAP_ITEM_COLUMNS, params)
         where = " AND ".join(clauses)
+        order = order_sql(table_query, GAP_ITEM_COLUMNS, "kind, item_key")
         total_rows = self._pg.fetch(
             f"SELECT count(*) AS n FROM {{schema}}.data_access_gap_items WHERE {where}", params
         )
         rows = self._pg.fetch(
             f"SELECT {self._GAP_COLUMNS} FROM {{schema}}.data_access_gap_items WHERE {where} "
-            "ORDER BY kind, item_key LIMIT %(limit)s OFFSET %(offset)s",
+            f"{order} LIMIT %(limit)s OFFSET %(offset)s",
             params,
         )
         return [GapItem(**row) for row in rows], int(total_rows[0]["n"]) if total_rows else 0
@@ -708,9 +778,16 @@ class LakebaseDataAccessStateRepository(DataAccessStateRepository):
                 )
 
     def tag_changes_page(
-        self, *, change: str | None, run_id: str | None, limit: int, offset: int
+        self,
+        *,
+        change: str | None,
+        run_id: str | None,
+        limit: int,
+        offset: int,
+        table_query: TableQuery | None = None,
     ) -> tuple[list[TagChange], int]:
-        """Filtered page, newest first, plus total."""
+        """Filtered page, newest first unless sorted, plus total."""
+        table_query = table_query or TableQuery()
         clauses = ["TRUE"]
         params: dict[str, Any] = {"limit": limit, "offset": offset}
         if change:
@@ -719,14 +796,16 @@ class LakebaseDataAccessStateRepository(DataAccessStateRepository):
         if run_id:
             clauses.append("run_id = %(run_id)s")
             params["run_id"] = run_id
+        clauses += filter_sql(table_query, TAG_CHANGE_COLUMNS, params)
         where = " AND ".join(clauses)
+        order = order_sql(table_query, TAG_CHANGE_COLUMNS, "detected_at DESC, full_name DESC")
         total_rows = self._pg.fetch(
             f"SELECT count(*) AS n FROM {{schema}}.data_access_tag_changes WHERE {where}", params
         )
         rows = self._pg.fetch(
             "SELECT run_id, detected_at, full_name, change, old_value, new_value "
             f"FROM {{schema}}.data_access_tag_changes WHERE {where} "
-            "ORDER BY detected_at DESC, full_name DESC LIMIT %(limit)s OFFSET %(offset)s",
+            f"{order} LIMIT %(limit)s OFFSET %(offset)s",
             params,
         )
         return [TagChange(**row) for row in rows], int(total_rows[0]["n"]) if total_rows else 0
@@ -991,6 +1070,10 @@ class LakebaseIdentityAttributeRepository(IdentityAttributeRepository):
         if criteria.principal_name:
             clauses.append("lower(principal_name) = lower(%(principal_name)s)")
             params["principal_name"] = criteria.principal_name
+        if criteria.principal_search:
+            escaped = criteria.principal_search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            clauses.append("principal_name ILIKE %(principal_search)s ESCAPE '\\'")
+            params["principal_search"] = f"%{escaped}%"
         if criteria.principal_type:
             clauses.append("principal_type = %(principal_type)s")
             params["principal_type"] = criteria.principal_type.value

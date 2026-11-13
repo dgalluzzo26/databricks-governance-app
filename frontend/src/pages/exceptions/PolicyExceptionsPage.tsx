@@ -17,7 +17,8 @@ import {
 import type { PolicyException, PrincipalKind } from "@/api/types";
 import { PrincipalPicker } from "@/components/PrincipalPicker";
 import { Alert, Badge, Card, ErrorAlert, PageHeader, Spinner, TablePager } from "@/components/ui";
-import { useClientPagination } from "@/hooks/useClientPagination";
+import { DataTableHead } from "@/components/ui/DataTableHead";
+import { useTableView, type TableColumn } from "@/hooks/useTableView";
 import styles from "../identity/IdentityPage.module.css";
 
 /** Principal kinds selectable when adding a configured policy exception. */
@@ -38,21 +39,25 @@ function ExceptionsTable({
   /** Called with the exception id when the user clicks Remove. */
   onRemove: (exceptionId: string) => void;
 }) {
-  const pager = useClientPagination(exceptions);
+  const columns: TableColumn<(typeof exceptions)[number]>[] = [
+    {
+      key: "principal",
+      label: "Principal",
+      value: (item) => item.principalName,
+      filterText: (item) => `${item.principalType} ${item.principalName}`,
+    },
+    { key: "type", label: "Type", value: (item) => item.principalType },
+    { key: "note", label: "Note", value: (item) => item.note ?? "" },
+    { key: "source", label: "Source", value: (item) => (item.system ? "system" : "configured") },
+    { key: "actions", label: "" },
+  ];
+  const pager = useTableView(exceptions, columns);
 
   return (
     <>
       <div className={styles.tableWrap}>
         <table className={styles.table} aria-label="Policy exceptions">
-          <thead>
-            <tr>
-              <th>Principal</th>
-              <th>Type</th>
-              <th>Note</th>
-              <th>Source</th>
-              <th />
-            </tr>
-          </thead>
+          <DataTableHead view={pager} />
           <tbody>
             {pager.rows.map((item) => (
               <tr key={item.exceptionId}>

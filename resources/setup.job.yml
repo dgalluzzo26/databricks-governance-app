@@ -11,7 +11,7 @@ resources:
             python_file: ../provisioning/run_setup.py
             parameters:
               - --warehouse-id
-              - ${var.warehouse_id}
+              - ${resources.sql_warehouses.app_warehouse.id}
               - --app-name
               - ${resources.apps.governance_app.name}
               - --app-catalog

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
+import time
 from dataclasses import dataclass
 
 from backend.app.clients.auth import AuthStrategy, build_auth_strategy
@@ -17,6 +19,7 @@ from backend.app.repositories.base import StorageProvider
 from backend.app.repositories.factory import build_storage
 from backend.app.services.access_explorer import AccessExplorerService
 from backend.app.services.access_requests import AccessRequestService
+from backend.app.services.app_cost import AppCostService
 from backend.app.services.app_info import AppInfoService
 from backend.app.services.attribute_explorer import AttributeExplorerService
 from backend.app.services.data_access import DataAccessService
@@ -84,6 +87,7 @@ class ServiceContainer:
     data_access: DataAccessService
     recovery: RecoveryService
     performance: PerformanceService
+    app_cost: AppCostService
     metrics: MetricsRecorder
     identity_uc_sync: IdentityUcSync | None = None
 
@@ -145,6 +149,7 @@ class ServiceContainer:
             identity_attributes,
             sync_job_id=config.data_access_sync_job_id,
         )
+        app_cost = AppCostService(sql, workspace, config, data_access)
         attribute_explorer = AttributeExplorerService(
             storage, identity_attributes, access_requests, data_access
         )
@@ -176,6 +181,7 @@ class ServiceContainer:
             data_access=data_access,
             recovery=RecoveryService(config, storage, workspace),
             performance=PerformanceService(storage, workspace, config),
+            app_cost=app_cost,
             metrics=MetricsRecorder(
                 sink=storage.performance.record_many,
                 pruner=storage.performance.prune,
@@ -183,7 +189,14 @@ class ServiceContainer:
             identity_uc_sync=uc_sync,
         )
 
-    def startup(self, *, migrate_storage: bool = True, sync_schedule: bool = True) -> None:
+    def startup(
+        self,
+        *,
+        migrate_storage: bool = True,
+        sync_schedule: bool = True,
+        mirror_uc: bool = True,
+        mirror_in_background: bool = False,
+    ) -> None:
         """Prepare external state before serving requests or running a sync Job.
 
         Loads Account Admin SP credentials, initializes storage, and mirrors identity
@@ -193,6 +206,9 @@ class ServiceContainer:
         Args:
             migrate_storage: When False, open storage without DDL (sync Job path).
             sync_schedule: When False, skip pushing settings to the Job schedule (Job path).
+            mirror_uc: When False, skip the UC mirror resync (the grants sync Job never reads it).
+            mirror_in_background: Resync the UC mirror on a daemon thread so the app can serve
+                requests meanwhile; incremental writes keep it current afterwards.
         """
         self._ensure_admin_credentials()
         try:
@@ -200,6 +216,19 @@ class ServiceContainer:
         except Exception:
             # Keep serving so the UI can show the storage problem instead of a dead app.
             logger.exception("Storage backend %s failed to initialize", self.storage.kind)
+        if mirror_uc and mirror_in_background:
+            threading.Thread(target=self._mirror_to_uc, name="uc-mirror-resync", daemon=True).start()
+        elif mirror_uc:
+            self._mirror_to_uc()
+        if sync_schedule:
+            self.data_access.sync_job_schedule_from_storage()
+        if migrate_storage:
+            # Serving path only; the sync Job does not handle requests, so it records nothing.
+            self.metrics.start()
+
+    def _mirror_to_uc(self) -> None:
+        """Resync identity attributes and mask rules into their UC mirrors (logs failures)."""
+        started = time.perf_counter()
         if self.identity_uc_sync is not None:
             try:
                 self.identity_attributes.sync_to_uc()
@@ -213,11 +242,7 @@ class ServiceContainer:
                 self.mask_rules.sync_to_uc()
         except Exception:
             logger.exception("Failed to sync mask rules to UC mirror")
-        if sync_schedule:
-            self.data_access.sync_job_schedule_from_storage()
-        if migrate_storage:
-            # Serving path only; the sync Job does not handle requests, so it records nothing.
-            self.metrics.start()
+        logger.info("UC mirror resync finished in %.1fs", time.perf_counter() - started)
 
     def shutdown(self) -> None:
         """Flush request metrics, then release storage resources such as connection pools."""

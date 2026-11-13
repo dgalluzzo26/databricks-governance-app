@@ -35,14 +35,18 @@ import type {
   AccessRequest,
   AttributeDefinition,
   CategoryApprover,
+  GovernedTagSummary,
   IdentityAttributeAssignment,
   PrincipalKind,
   ValueSource,
 } from "@/api/types";
 import { AccessStatusBadge } from "@/components/AccessStatusBadge";
+import { accessStatusLabel } from "@/components/AccessStatusBadge";
 import { PrincipalPicker } from "@/components/PrincipalPicker";
 import { Alert, Badge, Card, ErrorAlert, PageHeader, Spinner, TablePager } from "@/components/ui";
-import { useClientPagination } from "@/hooks/useClientPagination";
+import { DataTableHead } from "@/components/ui/DataTableHead";
+import { useTableView, type TableColumn } from "@/hooks/useTableView";
+import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import styles from "./IdentityPage.module.css";
 
 /**
@@ -234,23 +238,34 @@ function MyAttributesPanel() {
  * Paginated table of the signed-in user's effective attribute assignments.
  */
 function MyAttributesTable({ assignments }: { assignments: IdentityAttributeAssignment[] }) {
-  const pager = useClientPagination(assignments);
   const access = useMyAccessStatus();
   const statusById = new Map((access.data?.statuses ?? []).map((s) => [s.assignmentId, s]));
+  const columns: TableColumn<IdentityAttributeAssignment>[] = [
+    { key: "attribute", label: "Attribute", value: (item) => item.attributeKey },
+    { key: "value", label: "Value", value: (item) => item.attributeValue },
+    {
+      key: "via",
+      label: "Via",
+      value: (item) => item.principalName,
+      filterText: (item) => `${item.principalType} ${item.principalName}`,
+    },
+    { key: "expires", label: "Expires", value: (item) => item.expiresAt, filterText: (item) => formatWhen(item.expiresAt) },
+    {
+      key: "access",
+      label: "Data access",
+      value: (item) => {
+        const status = statusById.get(item.assignmentId);
+        return status ? accessStatusLabel(status).label : null;
+      },
+    },
+  ];
+  const pager = useTableView(assignments, columns);
 
   return (
     <>
       <div className={styles.tableWrap}>
         <table className={styles.table}>
-          <thead>
-            <tr>
-              <th>Attribute</th>
-              <th>Value</th>
-              <th>Via</th>
-              <th>Expires</th>
-              <th>Data access</th>
-            </tr>
-          </thead>
+          <DataTableHead view={pager} />
           <tbody>
             {pager.rows.map((item) => (
               <tr key={item.assignmentId}>
@@ -482,23 +497,36 @@ function MyRequestsTable({
   cancelling: boolean;
   onCancel: (requestId: string) => void;
 }) {
-  const pager = useClientPagination(requests);
+  const columns: TableColumn<AccessRequest>[] = [
+    { key: "attribute", label: "Attribute", value: (item) => item.attributeKey },
+    { key: "value", label: "Value", value: (item) => item.attributeValue },
+    {
+      key: "routed",
+      label: "Routed to",
+      value: (item) =>
+        item.routedTo === "category_approvers"
+          ? item.resolvedCategory
+            ? `category ${item.resolvedCategory}`
+            : "category approvers"
+          : "app admins",
+    },
+    { key: "status", label: "Status", value: (item) => item.status },
+    {
+      key: "requestedExpiry",
+      label: "Requested expiry",
+      value: (item) => item.requestedExpiresAt,
+      filterText: (item) => formatWhen(item.requestedExpiresAt),
+    },
+    { key: "submitted", label: "Submitted", value: (item) => item.createdAt, filterText: (item) => formatWhen(item.createdAt) },
+    { key: "actions", label: "" },
+  ];
+  const pager = useTableView(requests, columns);
 
   return (
     <>
       <div className={styles.tableWrap}>
         <table className={styles.table} aria-label="My access requests">
-          <thead>
-            <tr>
-              <th>Attribute</th>
-              <th>Value</th>
-              <th>Routed to</th>
-              <th>Status</th>
-              <th>Requested expiry</th>
-              <th>Submitted</th>
-              <th />
-            </tr>
-          </thead>
+          <DataTableHead view={pager} />
           <tbody>
             {pager.rows.map((item) => (
               <tr key={item.requestId}>
@@ -766,21 +794,20 @@ function ApproversTable({
   removing: boolean;
   onRemove: (approverId: string) => void;
 }) {
-  const pager = useClientPagination(approvers);
+  const columns: TableColumn<CategoryApprover>[] = [
+    { key: "attribute", label: "Attribute", value: (item) => item.attributeKey },
+    { key: "path", label: "Path / dimension", value: (item) => item.categoryPath },
+    { key: "principal", label: "Principal", value: (item) => item.principalName },
+    { key: "type", label: "Type", value: (item) => item.principalType },
+    { key: "actions", label: "" },
+  ];
+  const pager = useTableView(approvers, columns);
 
   return (
     <>
       <div className={styles.tableWrap}>
         <table className={styles.table} aria-label="Approvers">
-          <thead>
-            <tr>
-              <th>Attribute</th>
-              <th>Path / dimension</th>
-              <th>Principal</th>
-              <th>Type</th>
-              <th />
-            </tr>
-          </thead>
+          <DataTableHead view={pager} />
           <tbody>
             {pager.rows.map((item) => (
               <tr key={item.approverId}>
@@ -842,25 +869,47 @@ function ApproversTable({
 function AssignmentsPanel() {
   const definitions = useAttributeDefinitions();
   const [principalName, setPrincipalName] = useState("");
+  // The box filters as you type: the query waits briefly after the last keystroke.
+  const principalSearch = useDebouncedValue(principalName.trim(), 300);
   const [principalType, setPrincipalType] = useState<PrincipalKind | "">("");
   const [attributeKey, setAttributeKey] = useState("");
   const [includeInactive, setIncludeInactive] = useState(false);
 
   const params = useMemo(
     () => ({
-      principalName: principalName.trim() || undefined,
+      principalSearch: principalSearch || undefined,
       principalType: principalType || undefined,
       attributeKey: attributeKey || undefined,
       includeInactive,
     }),
-    [principalName, principalType, attributeKey, includeInactive],
+    [principalSearch, principalType, attributeKey, includeInactive],
   );
   const { data, isPending, error } = useAttributeAssignments(params);
   const assign = useAssignAttribute();
   const revoke = useRevokeAttribute();
   const assignments = data?.assignments ?? [];
-  const pager = useClientPagination(assignments, {
-    resetKey: `${principalName}|${principalType}|${attributeKey}|${includeInactive}`,
+  const columns: TableColumn<IdentityAttributeAssignment>[] = [
+    {
+      key: "principal",
+      label: "Principal",
+      value: (item) => item.principalName,
+      filterText: (item) => `${item.principalType} ${item.principalName}`,
+    },
+    { key: "attribute", label: "Attribute", value: (item) => item.attributeKey },
+    { key: "value", label: "Value", value: (item) => item.attributeValue },
+    { key: "status", label: "Status", value: (item) => (item.active ? "Active" : "Inactive") },
+    { key: "access", label: "Data access", sortable: false, filterable: false },
+    {
+      key: "granted",
+      label: "Granted",
+      value: (item) => item.createdAt,
+      filterText: (item) => `${item.grantedBy ?? ""} ${formatWhen(item.createdAt)}`,
+    },
+    { key: "expires", label: "Expires", value: (item) => item.expiresAt, filterText: (item) => formatWhen(item.expiresAt) },
+    { key: "actions", label: "" },
+  ];
+  const pager = useTableView(assignments, columns, {
+    resetKey: `${principalSearch}|${principalType}|${attributeKey}|${includeInactive}`,
   });
   const access = useAccessStatus(pager.rows.map((item) => item.assignmentId));
   const statusById = new Map((access.data?.statuses ?? []).map((s) => [s.assignmentId, s]));
@@ -1003,7 +1052,7 @@ function AssignmentsPanel() {
               className={styles.input}
               value={principalName}
               onChange={(event) => setPrincipalName(event.target.value)}
-              placeholder="Filter by principal"
+              placeholder="Type part of a name or email"
             />
           </label>
           <label className={styles.field}>
@@ -1055,18 +1104,7 @@ function AssignmentsPanel() {
           <>
             <div className={styles.tableWrap}>
               <table className={styles.table} aria-label="Assignments">
-                <thead>
-                  <tr>
-                    <th>Principal</th>
-                    <th>Attribute</th>
-                    <th>Value</th>
-                    <th>Status</th>
-                    <th>Data access</th>
-                    <th>Granted</th>
-                    <th>Expires</th>
-                    <th />
-                  </tr>
-                </thead>
+                <DataTableHead view={pager} />
                 <tbody>
                   {pager.rows.map((item) => (
                     <tr key={item.assignmentId}>
@@ -1153,21 +1191,39 @@ function DefinitionsTable({
   onEdit: (key: string) => void;
   onDelete: (key: string) => void;
 }) {
-  const pager = useClientPagination(definitions);
+  const columns: TableColumn<AttributeDefinition>[] = [
+    {
+      key: "key",
+      label: "Key",
+      value: (item) => item.key,
+      filterText: (item) => `${item.key} ${item.description ?? ""}`,
+    },
+    {
+      key: "purpose",
+      label: "Purpose",
+      value: (item) => definitionPurpose(item, accessTagKey).replaceAll("_", " "),
+    },
+    {
+      key: "valueSource",
+      label: "Value source",
+      value: (item) =>
+        item.valueSource !== "governed_tags" ? VALUE_SOURCE_LABELS[item.valueSource] : item.governedTagKeys.join(" "),
+    },
+    {
+      key: "allowedValues",
+      label: "Allowed values",
+      value: (item) => item.allowedValues.length,
+      filterText: (item) => item.allowedValues.join(" "),
+    },
+    { key: "actions", label: "" },
+  ];
+  const pager = useTableView(definitions, columns);
 
   return (
     <>
       <div className={styles.tableWrap}>
         <table className={styles.table} aria-label="Attribute definitions">
-          <thead>
-            <tr>
-              <th>Key</th>
-              <th>Purpose</th>
-              <th>Value source</th>
-              <th>Allowed values</th>
-              <th />
-            </tr>
-          </thead>
+          <DataTableHead view={pager} />
           <tbody>
             {pager.rows.map((item) => {
               const purposeLabel = definitionPurpose(item, accessTagKey);
@@ -1418,6 +1474,18 @@ function DefinitionsPanel() {
   };
 
   const visibleTags = tags.data?.tags ?? [];
+  const tagColumns: TableColumn<GovernedTagSummary>[] = [
+    { key: "select", label: "" },
+    { key: "tag", label: "Tag", value: (tag) => tag.tagKey },
+    { key: "description", label: "Description", value: (tag) => tag.description ?? "" },
+    {
+      key: "values",
+      label: "Values",
+      value: (tag) => tag.valueCount,
+      filterText: (tag) => tag.values.join(" "),
+    },
+  ];
+  const tagView = useTableView(visibleTags, tagColumns, { paginate: false });
   const canSave =
     !purposeAlreadyExists &&
     selectedTags.length > 0 &&
@@ -1587,16 +1655,9 @@ function DefinitionsPanel() {
             {visibleTags.length > 0 && (
               <div className={styles.tableWrap}>
                 <table className={styles.table}>
-                  <thead>
-                    <tr>
-                      <th />
-                      <th>Tag</th>
-                      <th>Description</th>
-                      <th>Values</th>
-                    </tr>
-                  </thead>
+                  <DataTableHead view={tagView} />
                   <tbody>
-                    {visibleTags.map((tag) => (
+                    {tagView.rows.map((tag) => (
                       <tr key={tag.tagKey}>
                         <td>
                           <input

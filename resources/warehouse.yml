@@ -1,0 +1,21 @@
+# Dedicated SQL warehouse for the app and its sync job. Nothing else uses it, so its billing
+# records (usage_metadata.warehouse_id) are the app's own cost for the cost report.
+#
+# The app's service principal gets CAN_USE through the app's sql-warehouse resource. The
+# Account Admin SP (runs the sync job and reads billing) gets CAN_USE below. The warehouse
+# scaler adjusts cluster counts at runtime; a deploy resets them to the values here.
+resources:
+  sql_warehouses:
+    app_warehouse:
+      name: ${var.app_name}-warehouse
+      cluster_size: Small
+      warehouse_type: PRO
+      enable_serverless_compute: true
+      min_num_clusters: 1
+      max_num_clusters: 1
+      auto_stop_mins: 10
+      permissions:
+        - service_principal_name: ${resources.apps.governance_app.service_principal_client_id}
+          level: CAN_USE
+        - service_principal_name: ${var.sync_job_run_as_sp}
+          level: CAN_USE

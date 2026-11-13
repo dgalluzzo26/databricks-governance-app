@@ -29,6 +29,7 @@ import type {
   GapKind,
   GapStatus,
   PrincipalKind,
+  TableQueryParams,
   TagChangeKind,
 } from "./types";
 
@@ -41,6 +42,14 @@ import type {
  * `["mask-rules"]` cover every key in those families. Governed-tag and Access Explorer keys
  * are built inline in their hooks and are not listed here.
  */
+/**
+ * Cache-key fragment for a table's sort and filters, so each sort or filter change is cached
+ * separately. Keep in sync with `tableQuery` in `services.ts`.
+ */
+export function tableQueryKey(params?: TableQueryParams): string {
+  return JSON.stringify([params?.sort ?? "", params?.direction ?? "", params?.filters ?? {}]);
+}
+
 export const queryKeys = {
   me: ["me"] as const,
   appInfo: ["app-info"] as const,
@@ -65,27 +74,28 @@ export const queryKeys = {
   dataAccessSettings: ["data-access", "settings"] as const,
   recoverySettings: ["recovery", "settings"] as const,
   dataAccessReadiness: ["data-access", "readiness"] as const,
-  dataAccessRuns: (mode: "dry_run" | "apply", page: number) =>
-    ["data-access", "runs", mode, page] as const,
+  dataAccessRuns: (mode: "dry_run" | "apply", page: number, table: string) =>
+    ["data-access", "runs", mode, page, table] as const,
   dataAccessLatestRun: (mode: "dry_run" | "apply") =>
     ["data-access", "runs", "latest", mode] as const,
   dataAccessRun: (runId: string) => ["data-access", "runs", "id", runId] as const,
   dataAccessAnalytics: (days: number) => ["data-access", "analytics", days] as const,
-  dataAccessAnalyticsRuns: (mode: string, page: number, pageSize: number) =>
-    ["data-access", "analytics", "runs", mode, page, pageSize] as const,
-  dataAccessAnalyticsGrants: (mode: string, change: string, page: number, pageSize: number) =>
-    ["data-access", "analytics", "grants", mode, change, page, pageSize] as const,
+  dataAccessAnalyticsRuns: (mode: string, page: number, pageSize: number, table: string) =>
+    ["data-access", "analytics", "runs", mode, page, pageSize, table] as const,
+  dataAccessAnalyticsGrants: (mode: string, change: string, page: number, pageSize: number, table: string) =>
+    ["data-access", "analytics", "grants", mode, change, page, pageSize, table] as const,
   dataAccessPending: ["data-access", "pending"] as const,
-  dataAccessPendingItems: (kind: string, status: string, q: string, page: number, pageSize: number) =>
-    ["data-access", "pending", "items", kind, status, q, page, pageSize] as const,
-  dataAccessTagChanges: (change: string, scope: string, page: number, pageSize: number) =>
-    ["data-access", "tag-changes", change, scope, page, pageSize] as const,
+  dataAccessPendingItems: (kind: string, status: string, q: string, page: number, pageSize: number, table: string) =>
+    ["data-access", "pending", "items", kind, status, q, page, pageSize, table] as const,
+  dataAccessTagChanges: (change: string, scope: string, page: number, pageSize: number, table: string) =>
+    ["data-access", "tag-changes", change, scope, page, pageSize, table] as const,
   myAccessStatus: ["data-access", "access-status", "me"] as const,
   accessStatus: (ids: string) => ["data-access", "access-status", ids] as const,
   performanceSummary: (hours: number) => ["performance", "summary", hours] as const,
-  performanceSlowRequests: (hours: number, page: number, pageSize: number) =>
-    ["performance", "slow-requests", hours, page, pageSize] as const,
+  performanceSlowRequests: (hours: number, page: number, pageSize: number, table: string) =>
+    ["performance", "slow-requests", hours, page, pageSize, table] as const,
   performanceCapacity: ["performance", "capacity"] as const,
+  performanceAppCost: (days: number) => ["performance", "app-cost", days] as const,
   directoryPrincipals: (q: string, kind?: string) => ["directory", "principals", q, kind ?? ""] as const,
 };
 
@@ -174,11 +184,12 @@ export function useDataAccessReadiness() {
  * @param page - 1-based page index.
  * @returns The query result for {@link DataAccessRunList}.
  */
-export function useDataAccessRuns(mode: "dry_run" | "apply", page = 1) {
+export function useDataAccessRuns(mode: "dry_run" | "apply", page = 1, table?: TableQueryParams) {
   const api = useApi();
   return useQuery({
-    queryKey: queryKeys.dataAccessRuns(mode, page),
-    queryFn: ({ signal }) => api.dataAccess.listRuns({ mode, page, pageSize: 20 }, signal),
+    queryKey: queryKeys.dataAccessRuns(mode, page, tableQueryKey(table)),
+    queryFn: ({ signal }) => api.dataAccess.listRuns({ mode, page, pageSize: 20, ...table }, signal),
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -216,14 +227,21 @@ export function useDataAccessAnalytics(days: number) {
  * @param params - Optional mode filter, 1-based page, and page size.
  * @returns The query result for {@link DataAccessViewPage}. Keeps the previous page on screen while the next loads.
  */
-export function useDataAccessAnalyticsRuns(params: {
-  mode?: "dry_run" | "apply";
-  page: number;
-  pageSize: number;
-}) {
+export function useDataAccessAnalyticsRuns(
+  params: {
+    mode?: "dry_run" | "apply";
+    page: number;
+    pageSize: number;
+  } & TableQueryParams,
+) {
   const api = useApi();
   return useQuery({
-    queryKey: queryKeys.dataAccessAnalyticsRuns(params.mode ?? "all", params.page, params.pageSize),
+    queryKey: queryKeys.dataAccessAnalyticsRuns(
+      params.mode ?? "all",
+      params.page,
+      params.pageSize,
+      tableQueryKey(params),
+    ),
     queryFn: ({ signal }) => api.dataAccess.analyticsRuns(params, signal),
     placeholderData: keepPreviousData,
   });
@@ -235,12 +253,14 @@ export function useDataAccessAnalyticsRuns(params: {
  * @param params - Optional mode and change filters, 1-based page, and page size.
  * @returns The query result for {@link DataAccessViewPage}. Keeps the previous page on screen while the next loads.
  */
-export function useDataAccessAnalyticsGrants(params: {
-  mode?: "dry_run" | "apply";
-  change?: "add" | "revoke";
-  page: number;
-  pageSize: number;
-}) {
+export function useDataAccessAnalyticsGrants(
+  params: {
+    mode?: "dry_run" | "apply";
+    change?: "add" | "revoke";
+    page: number;
+    pageSize: number;
+  } & TableQueryParams,
+) {
   const api = useApi();
   return useQuery({
     queryKey: queryKeys.dataAccessAnalyticsGrants(
@@ -248,6 +268,7 @@ export function useDataAccessAnalyticsGrants(params: {
       params.change ?? "all",
       params.page,
       params.pageSize,
+      tableQueryKey(params),
     ),
     queryFn: ({ signal }) => api.dataAccess.analyticsGrants(params, signal),
     placeholderData: keepPreviousData,
@@ -274,10 +295,12 @@ export function usePerformanceSummary(hours: number) {
  * @param params - Window in hours, 1-based page, and page size.
  * @returns The query result for the slow-request page. Keeps the previous page on screen while the next loads.
  */
-export function usePerformanceSlowRequests(params: { hours: number; page: number; pageSize: number }) {
+export function usePerformanceSlowRequests(
+  params: { hours: number; page: number; pageSize: number } & TableQueryParams,
+) {
   const api = useApi();
   return useQuery({
-    queryKey: queryKeys.performanceSlowRequests(params.hours, params.page, params.pageSize),
+    queryKey: queryKeys.performanceSlowRequests(params.hours, params.page, params.pageSize, tableQueryKey(params)),
     queryFn: ({ signal }) => api.performance.slowRequests(params, signal),
     placeholderData: keepPreviousData,
   });
@@ -293,6 +316,21 @@ export function usePerformanceCapacity() {
   return useQuery({
     queryKey: queryKeys.performanceCapacity,
     queryFn: ({ signal }) => api.performance.capacity(signal),
+  });
+}
+
+/**
+ * Fetches app cost for a window (`GET /performance/app-cost`). Billing is slow to read, so the
+ * result is kept for five minutes rather than refetched on every focus.
+ *
+ * @param days - Window length in UTC days.
+ */
+export function usePerformanceAppCost(days: number) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.performanceAppCost(days),
+    queryFn: ({ signal }) => api.performance.appCost(days, signal),
+    staleTime: 5 * 60 * 1000,
   });
 }
 
@@ -347,13 +385,15 @@ export function useDataAccessPending() {
  * @param params - Kind (or `expired`), status, search text, and page (1-based).
  * @returns The query result for {@link GapItemPage}; keeps the previous page while loading.
  */
-export function useDataAccessPendingItems(params: {
-  kind?: GapKind | "expired";
-  status?: GapStatus;
-  q?: string;
-  page: number;
-  pageSize: number;
-}) {
+export function useDataAccessPendingItems(
+  params: {
+    kind?: GapKind | "expired";
+    status?: GapStatus;
+    q?: string;
+    page: number;
+    pageSize: number;
+  } & TableQueryParams,
+) {
   const api = useApi();
   return useQuery({
     queryKey: queryKeys.dataAccessPendingItems(
@@ -362,6 +402,7 @@ export function useDataAccessPendingItems(params: {
       params.q ?? "",
       params.page,
       params.pageSize,
+      tableQueryKey(params),
     ),
     queryFn: ({ signal }) => api.dataAccess.pendingItems(params, signal),
     placeholderData: keepPreviousData,
@@ -374,15 +415,23 @@ export function useDataAccessPendingItems(params: {
  * @param params - Change kind, scope, and page (1-based).
  * @returns The query result for {@link TagChangePage}; keeps the previous page while loading.
  */
-export function useDataAccessTagChanges(params: {
-  change?: TagChangeKind;
-  scope: "latest" | "all";
-  page: number;
-  pageSize: number;
-}) {
+export function useDataAccessTagChanges(
+  params: {
+    change?: TagChangeKind;
+    scope: "latest" | "all";
+    page: number;
+    pageSize: number;
+  } & TableQueryParams,
+) {
   const api = useApi();
   return useQuery({
-    queryKey: queryKeys.dataAccessTagChanges(params.change ?? "all", params.scope, params.page, params.pageSize),
+    queryKey: queryKeys.dataAccessTagChanges(
+      params.change ?? "all",
+      params.scope,
+      params.page,
+      params.pageSize,
+      tableQueryKey(params),
+    ),
     queryFn: ({ signal }) => api.dataAccess.tagChanges(params, signal),
     placeholderData: keepPreviousData,
   });

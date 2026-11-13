@@ -30,6 +30,7 @@ import type {
   PendingSummary,
   TagChangeKind,
   TagChangePage,
+  AppCostReport,
   PerformanceCapacity,
   PerformanceSlowRequestPage,
   PerformanceSummary,
@@ -83,6 +84,7 @@ import type {
   TreeCatalogList,
   TreeSchemaList,
   TreeTableList,
+  TableQueryParams,
 } from "./types";
 
 /**
@@ -98,6 +100,19 @@ function toQuery(params: Record<string, string | undefined>): string {
   }
   const text = search.toString();
   return text ? `?${text}` : "";
+}
+
+/**
+ * Sort and filter query values for a paged endpoint. Blank filters are dropped, and
+ * `direction` is only sent with a sort column.
+ */
+function tableQuery(params: TableQueryParams | undefined): Record<string, string | undefined> {
+  const active = Object.entries(params?.filters ?? {}).filter(([, text]) => text.trim() !== "");
+  return {
+    sort: params?.sort,
+    direction: params?.sort ? (params.direction ?? "asc") : undefined,
+    filters: active.length ? JSON.stringify(Object.fromEntries(active)) : undefined,
+  };
 }
 
 /** Current-user identity endpoint. */
@@ -217,7 +232,7 @@ export class DataAccessApi {
    * @returns The page of run rows, or an unavailable page on other storage backends.
    */
   analyticsRuns(
-    params?: { mode?: "dry_run" | "apply"; page?: number; pageSize?: number },
+    params?: { mode?: "dry_run" | "apply"; page?: number; pageSize?: number } & TableQueryParams,
     signal?: AbortSignal,
   ): Promise<DataAccessViewPage> {
     return this.http.get<DataAccessViewPage>(
@@ -225,6 +240,7 @@ export class DataAccessApi {
         mode: params?.mode,
         page: params?.page != null ? String(params.page) : undefined,
         page_size: params?.pageSize != null ? String(params.pageSize) : undefined,
+        ...tableQuery(params),
       })}`,
       signal,
     );
@@ -243,7 +259,7 @@ export class DataAccessApi {
       change?: "add" | "revoke";
       page?: number;
       pageSize?: number;
-    },
+    } & TableQueryParams,
     signal?: AbortSignal,
   ): Promise<DataAccessViewPage> {
     return this.http.get<DataAccessViewPage>(
@@ -252,6 +268,7 @@ export class DataAccessApi {
         change: params?.change,
         page: params?.page != null ? String(params.page) : undefined,
         page_size: params?.pageSize != null ? String(params.pageSize) : undefined,
+        ...tableQuery(params),
       })}`,
       signal,
     );
@@ -265,7 +282,7 @@ export class DataAccessApi {
    * @returns Paginated run list.
    */
   listRuns(
-    params?: { mode?: "dry_run" | "apply"; page?: number; pageSize?: number },
+    params?: { mode?: "dry_run" | "apply"; page?: number; pageSize?: number } & TableQueryParams,
     signal?: AbortSignal,
   ): Promise<DataAccessRunList> {
     return this.http.get<DataAccessRunList>(
@@ -273,6 +290,7 @@ export class DataAccessApi {
         mode: params?.mode,
         page: params?.page != null ? String(params.page) : undefined,
         page_size: params?.pageSize != null ? String(params.pageSize) : undefined,
+        ...tableQuery(params),
       })}`,
       signal,
     );
@@ -331,7 +349,13 @@ export class DataAccessApi {
    * @returns The page and total.
    */
   pendingItems(
-    params: { kind?: GapKind | "expired"; status?: GapStatus; q?: string; page: number; pageSize: number },
+    params: {
+      kind?: GapKind | "expired";
+      status?: GapStatus;
+      q?: string;
+      page: number;
+      pageSize: number;
+    } & TableQueryParams,
     signal?: AbortSignal,
   ): Promise<GapItemPage> {
     return this.http.get<GapItemPage>(
@@ -341,6 +365,7 @@ export class DataAccessApi {
         q: params.q || undefined,
         page: String(params.page),
         page_size: String(params.pageSize),
+        ...tableQuery(params),
       })}`,
       signal,
     );
@@ -354,7 +379,12 @@ export class DataAccessApi {
    * @returns The page and total.
    */
   tagChanges(
-    params: { change?: TagChangeKind; scope: "latest" | "all"; page: number; pageSize: number },
+    params: {
+      change?: TagChangeKind;
+      scope: "latest" | "all";
+      page: number;
+      pageSize: number;
+    } & TableQueryParams,
     signal?: AbortSignal,
   ): Promise<TagChangePage> {
     return this.http.get<TagChangePage>(
@@ -363,6 +393,7 @@ export class DataAccessApi {
         scope: params.scope,
         page: String(params.page),
         page_size: String(params.pageSize),
+        ...tableQuery(params),
       })}`,
       signal,
     );
@@ -509,6 +540,7 @@ export class IdentityAttributesApi {
     return this.http.get<AttributeAssignmentList>(
       `/identity/assignments${toQuery({
         principal_name: params.principalName,
+        principal_search: params.principalSearch,
         principal_type: params.principalType,
         attribute_key: params.attributeKey,
         include_inactive: params.includeInactive ? "true" : undefined,
@@ -1209,7 +1241,7 @@ export class PerformanceApi {
    * @param signal - Optional abort signal.
    */
   slowRequests(
-    params: { hours: number; page: number; pageSize: number },
+    params: { hours: number; page: number; pageSize: number } & TableQueryParams,
     signal?: AbortSignal,
   ): Promise<PerformanceSlowRequestPage> {
     return this.http.get<PerformanceSlowRequestPage>(
@@ -1217,6 +1249,7 @@ export class PerformanceApi {
         hours: String(params.hours),
         page: String(params.page),
         page_size: String(params.pageSize),
+        ...tableQuery(params),
       })}`,
       signal,
     );
@@ -1229,6 +1262,16 @@ export class PerformanceApi {
    */
   capacity(signal?: AbortSignal): Promise<PerformanceCapacity> {
     return this.http.get<PerformanceCapacity>("/performance/capacity", signal);
+  }
+
+  /**
+   * `GET /performance/app-cost` — daily app compute, and warehouse and job cost per sync.
+   *
+   * @param days - Window length in UTC days (1–30).
+   * @param signal - Optional abort signal.
+   */
+  appCost(days: number, signal?: AbortSignal): Promise<AppCostReport> {
+    return this.http.get<AppCostReport>(`/performance/app-cost?days=${days}`, signal);
   }
 }
 

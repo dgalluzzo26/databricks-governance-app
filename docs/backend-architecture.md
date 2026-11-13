@@ -132,7 +132,11 @@ in process memory.
 | `PolicyService` | `services/policies.py` | `policies.get_policy`, `information_schema` reads (read-only explorer) |
 | `AccessExplorerService` | `services/access_explorer.py` | `information_schema` columns / tags / catalogs / schemas / tables |
 | `AttributeExplorerService` | `services/attribute_explorer.py` | Storage + grants-sync tag inventory |
-| `DataAccessService` | `services/data_access.py` | `information_schema` tags and privileges, Account SCIM Groups, `users.list`, `service_principals.list`, SQL `GRANT` / `REVOKE` |
+| `DataAccessService` | `services/data_access.py` | `information_schema` tags and privileges, Account SCIM Groups and Users, `users.list` (fallback), `service_principals.list`, SQL `GRANT` / `REVOKE` (parallel, `grant_concurrency`) |
+| `WarehouseScaler` | `services/warehouse_scaling.py` | `warehouses.get` / `warehouses.edit` (Admin SP): raises `max_num_clusters` for the grants step, then restores it |
+| `RunProfiler` | `services/data_access_profile.py` | None (in-process timers and counters per sync run; thread-local, so worker threads report through the run thread) |
+| `PerformanceService` | `services/performance.py` | `apps.get`, `postgres.get_endpoint`, `warehouses.get` (Admin SP) for capacity; request metrics from storage |
+| `AppCostService` | `services/app_cost.py` | `system.billing.usage` and `system.billing.list_prices` (Admin SP, billing admin); `apps.get` for the app ID |
 | `AppInfoService` | `services/app_info.py` | Storage health, deployment info |
 
 All SQL goes through `SqlExecutor` (`clients/sql.py`): Statement Execution API on
@@ -156,9 +160,27 @@ through `quote_identifier` and literals through `string_literal`; never interpol
 | Data access analytics | `/api/data-access/analytics*` | `DataAccessService`, `lakebase_views` | Grants sync |
 | Data access outstanding work | `/api/data-access/pending*`, `/api/data-access/tag-changes` | `DataAccessService`, `data_access_gap` | Grants sync |
 | Identity access status | `/api/data-access/access-status*` | `DataAccessService`, `data_access_status` | Grants sync |
-| Performance | `/api/performance` | `PerformanceService`, `performance_analytics` | Request timing (below) |
+| Performance | `/api/performance` | `PerformanceService`, `performance_analytics`, `AppCostService` | Performance and app cost (below) |
 | App status | `/api/app-info`, `/api/health` | `AppInfoService` | |
 | Help | `/api/help` | Route only | This page |
+
+---
+
+## Performance and app cost
+
+- **Request timing.** `RequestTimingMiddleware` (`core/perf.py`) times every API request and names it
+  with an activity from `core/activities.py`, which has an expected time. `MetricsRecorder` queues
+  the samples and writes them to storage every 5 seconds, in batches of 200.
+  `performance_analytics` builds the summary, hourly roll-up, and slow-request pages from them. A
+  request slower than its expected time is flagged for review; it is not an error.
+- **Capacity.** `PerformanceService.capacity()` reads the app's compute size, the Lakebase endpoint,
+  and the SQL warehouse size through the Account Admin SP. Each read fails separately.
+- **App cost.** `AppCostService` (`services/app_cost.py`) reports app compute per UTC day, and the
+  warehouse and job cost of each sync. App compute is matched by `usage_metadata.app_id`, warehouse
+  cost by the dedicated warehouse, and job cost by the sync job. Warehouse and job cost count toward
+  a sync only inside that run's start and finish time, pro-rated by time. Costs use list prices, not
+  invoice amounts, and billing data lags by up to about a day. Reports are cached for 15 minutes;
+  failed reads are reported as unavailable and are not cached.
 
 ---
 
@@ -166,9 +188,10 @@ through `quote_identifier` and literals through `string_literal`; never interpol
 
 | Task | Where | Trigger |
 | --- | --- | --- |
-| Identity mirror full sync | `ServiceContainer.startup` | App start (Lakebase backend) |
+| Identity UC mirror resync | `ServiceContainer.startup` (background thread `uc-mirror-resync`) | App start (Lakebase backend); each table is replaced with one `INSERT OVERWRITE` (staged for large sources) under a lock shared with incremental writes. The sync Job does not run it (`mirror_uc=False`) |
 | Mask registry mirror | `ServiceContainer.startup` | App start when rules exist |
 | Grants sync scheduler | `DataAccessService.start_scheduler` | Every `interval_minutes` when `schedule_enabled` |
+| Grants sync Job | Lakeflow Job `data-governance-app-data-access-sync` (`backend/jobs/run_data_access_sync.py`) | Schedule and manual runs; the Job preflights Lakebase and the Admin SP, then runs the sync with `mirror_uc=False` |
 | Immediate group membership | `DataAccessService.on_assignment_event` (Identity listener) | Each data-access approval, assign, or revoke |
 | Outstanding work and tag snapshot | `DataAccessService._record_state` | End of every sync run |
 | Request metrics flush | `MetricsRecorder` (daemon thread) | Every 5 seconds; queued metrics are written in batches of 200 |

@@ -64,6 +64,14 @@ Stored as JSON in the app settings store under `data_access`.
 | `interval_minutes` | 15 (min 5) | Scheduler interval |
 | `schedule_enabled` | true | Pause switch for the scheduler |
 | `schedule_mode` | `dry_run` | `dry_run` = plan only; `apply` = plan then mutate in the same run |
+| `grant_concurrency` | 64 (1–64) | Hard cap on in-flight GRANT/REVOKE statements; actual workers = size × clusters |
+| `membership_concurrency` | 8 (1–32) | Parallel membership resolve/patch workers (patches to the same group stay sequential) |
+| `warehouse_autoscale` | false | Raise the SQL warehouse's `max_num_clusters` for the grants step, then leave the baseline |
+| `warehouse_max_clusters` | 8 (1–10) | Ceiling during the grants phase (leave headroom so UI users are not starved by the sync) |
+| `warehouse_baseline_clusters` | 4 (1–10) | Ceiling after the grants phase, and the cluster count used for grant concurrency |
+
+Saving settings replaces only the fields the request sends. Fields it leaves out keep their stored
+values, so a client that does not know a newer setting cannot reset it to the default.
 
 ---
 
@@ -253,26 +261,69 @@ sequenceDiagram
   loop each group with parent_group
     S->>SCIM: PATCH /Groups/{child} add members [parent]
   end
-  loop each membership change
+  loop each membership change (membership_concurrency at a time; one group's patches stay sequential)
     S->>SCIM: resolve principal id (Groups filter / users.list / service_principals.list)
     S->>SCIM: PATCH /Groups/{group} add or remove member
   end
-  loop each grant to add
-    S->>SQL: GRANT privilege ON securable TO dac_group
-  end
-  loop each grant to revoke
-    S->>SQL: REVOKE privilege ON securable FROM dac_group
+  loop each grant to add or revoke (grant_concurrency at a time)
+    S->>SQL: GRANT / REVOKE privilege ON securable TO dac_group
   end
 ```
 
 | Step | API | Idempotency |
 | --- | --- | --- |
 | Create groups | `POST /api/2.0/account/scim/v2/Groups` | On failure re-lists by `displayName eq` and reuses the id |
-| Nest groups | `PATCH /Groups/{child}` `op=add path=members` | "already exists" responses are ignored |
+| Nest groups | `PATCH /Groups/{child}` `op=add path=members` | Links already in the inventory (`nest_exists`) are skipped; "already exists" responses are ignored |
 | Members | `PATCH /Groups/{group}` add / `remove members[value eq "id"]` | Add ignores "already exists" |
-| Resolve users | `users.list(filter=userName eq / displayName eq)` | |
+| Resolve users | Account SCIM `GET /api/2.0/account/scim/v2/Users?filter=userName eq "…"`, then `users.list` on the workspace as a fallback | Account users who are not provisioned to this workspace are found by the first call |
 | Resolve SPs | `service_principals.list(filter=applicationId eq / displayName eq)` | |
 | GRANT / REVOKE | Statement Execution API on `DATABRICKS_WAREHOUSE_ID` | UC treats repeats as no-ops |
+
+### Parallel grants
+
+The grants step is the largest cost at scale (one statement per table and principal), so
+statements run through a thread pool. Each statement is independent, and the warehouse queues
+whatever it cannot run yet.
+
+- Pool size is `12 × warehouse_baseline_clusters`, capped by `grant_concurrency` (default 12×4=48).
+  Concurrency uses the baseline, not the sync ceiling, so the sync does not fill every cluster.
+  12 per cluster comes from a Small serverless probe; a stage 1 apply at 16×4=64 raised average
+  grant latency to ~1.6 s.
+- During sync the warehouse ceiling is raised to `warehouse_max_clusters` (default 8) so UI users
+  still have room. After sync it is set to `warehouse_baseline_clusters` (default 4), not back to 1.
+- Results are handled on the run's own thread: failures are appended to `error` and keyed for
+  the outstanding list exactly as before, so one failed statement never stops the rest.
+- A failed statement is retried by the next run, as before.
+
+### Parallel membership
+
+Membership changes are resolved and patched through a thread pool, sized by `membership_concurrency`
+(default 8, range 1–32). Resolving a principal to its SCIM id and patching a group both run in
+parallel. Patches to the same group stay sequential, so two edits never race on one group.
+
+Before a run, ADD and REMOVE pairs for the same person under different names (email and display
+name) are collapsed. Nests that the inventory already shows as present are skipped.
+
+### Warehouse capacity and scaling
+
+Grant statements are small, so throughput comes from how many run at once. The bundle creates a **dedicated** SQL warehouse for the app and its sync job (`resources/warehouse.yml`, named `<app name>-warehouse`: Small, serverless, auto-stop after 10 minutes). Nothing else uses it, so scaling it does not affect BI users, and its billing records are the app's own cost. The grants phase works like this:
+
+1. The run plans the changes and counts the grant statements.
+2. The Account Admin SP reads the warehouse size and current `max_num_clusters`.
+3. If `warehouse_autoscale` is on and there are grants, it raises `max_num_clusters` to
+   `warehouse_max_clusters` (default 8) so the sync and UI can share capacity.
+4. Grant concurrency is `12 × warehouse_baseline_clusters` (default 48), capped by
+   `grant_concurrency`, so the sync does not consume the full ceiling.
+5. After the grants phase (including on error), `max_num_clusters` is set to
+   `warehouse_baseline_clusters` (default 4) so the app always keeps room to scale.
+
+Scaling is best-effort. If the warehouse cannot be read or edited, the notice is recorded on the
+run profile and grants run with baseline concurrency. Cluster size stays Small; horizontal scaling
+fits many small statements better than a larger cluster.
+
+Scaling applies to apply runs only (dry runs issue no grant statements). A deploy resets the cluster range to the bundle's values (1 to 1); the next apply run raises it again when `warehouse_autoscale` is on.
+
+
 
 Groups must be **account** groups. Workspace-local groups created with the workspace Groups API
 are invisible to Unity Catalog and fail `GRANT` with `PRINCIPAL_DOES_NOT_EXIST`.
@@ -331,6 +382,31 @@ never overlap. Locks older than 30 minutes are treated as stale.
 Runs are pruned on write: older than 30 days or beyond 500 records. Each stored plan keeps up to
 25 sample rows per list; `summary` always holds the full counts and `truncated` says whether
 samples were cut.
+
+### Run profile and progress logs
+
+Each run stores a `profile` next to its summary (failed runs keep theirs) and the same JSON is
+logged once as a `data_access_profile` line. It answers "where did the time go" without
+re-running:
+
+| Field | Contents |
+| --- | --- |
+| `phases` | Seconds per step: `inventory`, `plan`, `apply.groups`, `apply.nest`, `apply.membership`, `apply.grants`, `state.*`, and `job.*` preflight steps for Job runs |
+| `calls` / `call_seconds` / `call_max_seconds` | Count, total, and slowest single call per API or SQL statement type (for example `sql.grant_table`, `scim.patch_group`, `sql.read_table_privileges`) |
+| `sizes` | Row and item counts (tables, grants, members, `grant_concurrency`, warehouse cluster ceilings) |
+| `notes` | Warnings to read with the numbers, such as a warehouse that could not be resized |
+
+While a step runs, the log shows progress at about 5% intervals with elapsed time and an estimate:
+
+```text
+progress grants 250 of 2500 (10%) elapsed=41s eta=371s
+apply plan: groups_to_create=1 nests=0 membership=250 grants_add=2547 grants_revoke=0
+```
+
+The Job writes its preflight timings (Lakebase env, Admin SP secrets, container build, container
+startup) into the same profile, so the time before planning is visible too.
+
+Use `scripts/perf_grants.py report` to print the stored profiles of recorded performance runs.
 
 ---
 
@@ -403,3 +479,6 @@ Per data-access assignment, two states:
 | Old group keeps SELECT after retag | Grant was not direct or prefix differs | Check `inherited_from` and `group_prefix`; dry-run shows it under revoke |
 | User not in group | No active data-access assignment, or value is `*` | Assign a concrete value in Identity |
 | Scheduled apply never runs | `schedule_enabled` false, `schedule_mode` dry_run, or readiness failing | Fix settings or readiness; skipped ticks are logged |
+| `resolve principal <group>: not found` on a membership removal | Member was typed as a user. Account SCIM member entries carry `$ref` (`Groups/{id}`), not `type`; older builds guessed from the display name | Fixed by reading `$ref` first; the next apply retries anything still failing |
+| Apply slow in `apply.nest` with the same nests every run | Nest PATCHes are issued for every planned parent→child link, including links that already exist (Account SCIM ignores the duplicate) | Known cost (about 3 s per link); skipping links that the child already contains is a planned follow-up |
+| Apply slow in `apply.grants` with `warehouse not resized` in notes | Admin SP cannot edit the warehouse, or it is a shared warehouse | Use a dedicated warehouse for the app and grant the Admin SP `CAN MANAGE`; the grants still run at the current size |

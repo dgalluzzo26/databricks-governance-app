@@ -498,6 +498,7 @@ class AccessExplorerService:
             attribute_value=access_value,
             reason=reason,
             requestable=requestable,
+            already_held=already,
             request_path=f"/identity?tab=request&key={attribute_key}&value={access_value}"
             if requestable
             else None,

@@ -24,6 +24,7 @@ from backend.app.models.data_access_pending import (
     PendingSummary,
     TagChangePage,
 )
+from backend.app.services.table_query import parse_table_query
 
 router = APIRouter(prefix="/data-access", tags=["data-access"])
 
@@ -80,6 +81,11 @@ def list_runs(
         ge=1,
         le=RUN_HISTORY_PAGE_SIZE_MAX,
     ),
+    sort: str | None = Query(default=None, description="Column key to sort by (table column)"),
+    direction: str | None = Query(default=None, description="asc or desc"),
+    filters: str | None = Query(
+        default=None, description='JSON object of column key to filter text, e.g. {"status":"fail"}'
+    ),
 ) -> DataAccessRunList:
     """List syncs for the last 30 days, newest first (summaries only).
 
@@ -90,11 +96,16 @@ def list_runs(
         mode: Optional ``dry_run`` or ``apply``.
         page: 1-based page.
         page_size: Rows per page.
+        sort: Optional column key to sort by.
+        direction: ``asc`` or ``desc``.
+        filters: Optional JSON object of column filters.
 
     Returns:
         Paginated runs without full plans.
     """
-    return container.data_access.list_runs(mode=mode, page=page, page_size=page_size)
+    return container.data_access.list_runs(
+        mode=mode, page=page, page_size=page_size, table_query=parse_table_query(sort, direction, filters)
+    )
 
 
 @router.get("/analytics", response_model=DataAccessAnalytics)
@@ -124,6 +135,11 @@ def analytics_runs(
     mode: str | None = Query(default=None, description="dry_run or apply"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=100),
+    sort: str | None = Query(default=None, description="Column key to sort by (table column)"),
+    direction: str | None = Query(default=None, description="asc or desc"),
+    filters: str | None = Query(
+        default=None, description='JSON object of column key to filter text, e.g. {"status":"fail"}'
+    ),
 ) -> DataAccessViewPage:
     """One page of ``data_access_runs_v`` (one row per sync run), newest first.
 
@@ -134,11 +150,20 @@ def analytics_runs(
         mode: Optional ``dry_run`` or ``apply`` filter.
         page: 1-based page.
         page_size: Rows per page.
+        sort: Optional column key to sort by.
+        direction: ``asc`` or ``desc``.
+        filters: Optional JSON object of column filters.
 
     Returns:
         The page of run rows.
     """
-    return container.data_access.view_page(kind="runs", mode=mode, page=page, page_size=page_size)
+    return container.data_access.view_page(
+        kind="runs",
+        mode=mode,
+        page=page,
+        page_size=page_size,
+        table_query=parse_table_query(sort, direction, filters),
+    )
 
 
 @router.get("/analytics/grants", response_model=DataAccessViewPage)
@@ -149,6 +174,11 @@ def analytics_grants(
     change: str | None = Query(default=None, description="add or revoke"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=100),
+    sort: str | None = Query(default=None, description="Column key to sort by (table column)"),
+    direction: str | None = Query(default=None, description="asc or desc"),
+    filters: str | None = Query(
+        default=None, description='JSON object of column key to filter text, e.g. {"status":"fail"}'
+    ),
 ) -> DataAccessViewPage:
     """One page of ``data_access_run_grants_v`` (one row per planned grant change), newest run first.
 
@@ -160,12 +190,20 @@ def analytics_grants(
         change: Optional ``add`` or ``revoke`` filter.
         page: 1-based page.
         page_size: Rows per page.
+        sort: Optional column key to sort by.
+        direction: ``asc`` or ``desc``.
+        filters: Optional JSON object of column filters.
 
     Returns:
         The page of grant-change rows.
     """
     return container.data_access.view_page(
-        kind="grants", mode=mode, change=change, page=page, page_size=page_size
+        kind="grants",
+        mode=mode,
+        change=change,
+        page=page,
+        page_size=page_size,
+        table_query=parse_table_query(sort, direction, filters),
     )
 
 
@@ -257,6 +295,11 @@ def pending_items(
     q: str | None = Query(default=None, description="Search group, principal, securable, or value"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=200),
+    sort: str | None = Query(default=None, description="Column key to sort by (table column)"),
+    direction: str | None = Query(default=None, description="asc or desc"),
+    filters: str | None = Query(
+        default=None, description='JSON object of column key to filter text, e.g. {"status":"fail"}'
+    ),
 ) -> GapItemPage:
     """One page of outstanding items.
 
@@ -269,12 +312,20 @@ def pending_items(
         q: Optional search text.
         page: 1-based page.
         page_size: Rows per page.
+        sort: Optional column key to sort by.
+        direction: ``asc`` or ``desc``.
+        filters: Optional JSON object of column filters.
 
     Returns:
         The page and total.
     """
     return container.data_access.pending_items(
-        kind=kind, status=status, query=q, page=page, page_size=page_size
+        kind=kind,
+        status=status,
+        query=q,
+        page=page,
+        page_size=page_size,
+        table_query=parse_table_query(sort, direction, filters),
     )
 
 
@@ -288,6 +339,11 @@ def tag_changes(
     scope: str = Query(default="latest", description="latest (last sync) or all (30 days)"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=200),
+    sort: str | None = Query(default=None, description="Column key to sort by (table column)"),
+    direction: str | None = Query(default=None, description="asc or desc"),
+    filters: str | None = Query(
+        default=None, description='JSON object of column key to filter text, e.g. {"status":"fail"}'
+    ),
 ) -> TagChangePage:
     """Tables whose data-access tagging changed, newest first.
 
@@ -299,11 +355,20 @@ def tag_changes(
         scope: ``latest`` or ``all``.
         page: 1-based page.
         page_size: Rows per page.
+        sort: Optional column key to sort by.
+        direction: ``asc`` or ``desc``.
+        filters: Optional JSON object of column filters.
 
     Returns:
         The page and total.
     """
-    return container.data_access.tag_changes(change=change, scope=scope, page=page, page_size=page_size)
+    return container.data_access.tag_changes(
+        change=change,
+        scope=scope,
+        page=page,
+        page_size=page_size,
+        table_query=parse_table_query(sort, direction, filters),
+    )
 
 
 @router.get("/access-status/me", response_model=AccessStatusList)

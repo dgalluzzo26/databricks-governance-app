@@ -8,10 +8,15 @@ cron/pause when settings are saved.
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
+import time
 import uuid
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from databricks.sdk.errors import DatabricksError
 from databricks.sdk.service.iam import GroupSchema, PatchSchema
@@ -32,6 +37,7 @@ from backend.app.models.data_access import (
     DataAccessReadiness,
     DataAccessRun,
     DataAccessRunList,
+    DataAccessRunProfile,
     DataAccessSettings,
     DataAccessSettingsView,
     DataAccessViewPage,
@@ -63,6 +69,7 @@ from backend.app.models.identity_attribute import (
 )
 from backend.app.models.user import CurrentUser
 from backend.app.repositories.base import StorageProvider
+from backend.app.repositories.data_access_state import GAP_ITEM_READERS
 from backend.app.services.catalog_enrollment import enrolled_catalogs_sql
 from backend.app.services.data_access_analytics import build_analytics
 from backend.app.services.data_access_gap import (
@@ -83,9 +90,21 @@ from backend.app.services.data_access_planner import (
     plan_data_access,
     truncate_plan,
 )
+from backend.app.services.data_access_profile import (
+    Progress,
+    RunProfiler,
+    note,
+    phase,
+    profiling,
+    record_call,
+    record_size,
+    timed_call,
+)
 from backend.app.services.data_access_schedule import quartz_cron_for_interval_minutes, snap_interval_minutes
 from backend.app.services.data_access_status import compute_access_status
 from backend.app.services.identity_attributes import ASSIGNMENT_ASSIGNED, IdentityAttributeService
+from backend.app.services.table_query import TableQuery, sort_and_filter
+from backend.app.services.warehouse_scaling import WarehouseScaler
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +152,31 @@ _ORPHAN_RUNNING = timedelta(minutes=2)
 _EXCLUDED_CATALOGS = ("system", "samples", "__databricks_internal")
 
 
+def _run_elapsed_seconds(run: DataAccessRun) -> float | None:
+    if run.duration_seconds is not None:
+        return run.duration_seconds
+    if run.finished_at is None:
+        return None
+    return max(0.0, (run.finished_at - run.started_at).total_seconds())
+
+
+def _run_changes_text(run: DataAccessRun) -> str:
+    if run.summary is None:
+        return run.error or ""
+    summary = run.summary
+    return f"{summary.grants_to_add} / {summary.grants_to_revoke} / {summary.conflicts}"
+
+
+# In-memory readers for the run history table. Keys match the frontend column keys.
+RUN_HISTORY_READERS: dict[str, Callable[[DataAccessRun], Any]] = {
+    "when": lambda run: run.started_at,
+    "elapsed": _run_elapsed_seconds,
+    "status": lambda run: run.status.value,
+    "trigger": lambda run: run.trigger.value,
+    "changes": _run_changes_text,
+}
+
+
 class DataAccessService:
     """Settings, readiness probes, and sync orchestration for data-access groups.
 
@@ -157,6 +201,7 @@ class DataAccessService:
         self._storage = storage
         self._sql = sql
         self._factory = factory
+        self._warehouse = WarehouseScaler(factory.admin, getattr(sql, "warehouse_id", None))
         self._identity = identity_attributes
         self._sync_job_id = (sync_job_id or "").strip() or None
         self._lock = threading.Lock()
@@ -187,6 +232,9 @@ class DataAccessService:
     def save_settings(self, body: DataAccessSettings, actor: CurrentUser) -> DataAccessSettingsView:
         """Validate and persist settings (including preferred dry_run flag).
 
+        Fields the request leaves out keep their stored values. A client that does not know a
+        newer setting (for example, grant concurrency) therefore cannot reset it to the default.
+
         Args:
             body: Settings posted by an admin.
             actor: Admin performing the write.
@@ -194,11 +242,14 @@ class DataAccessService:
         Returns:
             The stored settings view.
         """
-        self._storage.settings.put_many({_SETTINGS_KEY: body.model_dump(mode="json")}, actor.user_name)
-        self.sync_job_schedule(body)
+        stored = self._settings().model_dump(mode="json")
+        incoming = body.model_dump(mode="json", exclude_unset=True)
+        settings = DataAccessSettings.model_validate({**stored, **incoming})
+        self._storage.settings.put_many({_SETTINGS_KEY: settings.model_dump(mode="json")}, actor.user_name)
+        self.sync_job_schedule(settings)
         logger.info("Data-access settings updated by %s", actor.user_name)
         return DataAccessSettingsView(
-            settings=body,
+            settings=settings,
             apply_available=True,
             enrolled_catalogs=self.list_enrolled_catalogs(body),
         )
@@ -216,12 +267,13 @@ class DataAccessService:
         if not self._sql.configured:
             return []
         try:
-            rows = self._sql.query(
-                enrolled_catalogs_sql(
-                    cfg.enrollment_catalog_tag_key,
-                    cfg.enrollment_catalog_tag_value,
+            with timed_call("sql.enrolled_catalogs"):
+                rows = self._sql.query(
+                    enrolled_catalogs_sql(
+                        cfg.enrollment_catalog_tag_key,
+                        cfg.enrollment_catalog_tag_value,
+                    )
                 )
-            )
         except (NotConfiguredError, DatabricksError) as exc:
             logger.warning("Could not list enrolled catalogs: %s", exc)
             return []
@@ -303,6 +355,7 @@ class DataAccessService:
         mode: str | None = None,
         page: int = 1,
         page_size: int = RUN_HISTORY_PAGE_SIZE_DEFAULT,
+        table_query: TableQuery | None = None,
     ) -> DataAccessRunList:
         """Return paginated sync runs for the last retention window.
 
@@ -310,15 +363,18 @@ class DataAccessService:
             mode: Optional ``dry_run`` or ``apply`` filter.
             page: 1-based page index.
             page_size: Rows per page (clamped).
+            table_query: Optional column sort and filters applied before paging.
 
         Returns:
-            Summaries only (no full plans), newest first.
+            Summaries only (no full plans), newest first unless sorted.
         """
         mode_filter = self._normalize_mode_filter(mode)
         page = max(1, page)
         page_size = min(max(1, page_size), RUN_HISTORY_PAGE_SIZE_MAX)
         self._reconcile_stale_runs()
-        filtered = self._filtered_runs(mode=mode_filter)
+        filtered = sort_and_filter(
+            self._filtered_runs(mode=mode_filter), table_query or TableQuery(), RUN_HISTORY_READERS
+        )
         total = len(filtered)
         start = (page - 1) * page_size
         page_rows = filtered[start : start + page_size]
@@ -368,6 +424,7 @@ class DataAccessService:
         change: str | None = None,
         page: int = 1,
         page_size: int = 25,
+        table_query: TableQuery | None = None,
     ) -> DataAccessViewPage:
         """Read one page of a data-access SQL view (Lakebase only).
 
@@ -377,6 +434,7 @@ class DataAccessService:
             change: Optional ``add`` or ``revoke`` filter (grants only).
             page: 1-based page index.
             page_size: Rows per page (clamped to 1..100).
+            table_query: Optional column sort and filters, applied in SQL.
 
         Returns:
             Converted rows and the total count, or an unavailable page on other backends.
@@ -396,9 +454,13 @@ class DataAccessService:
         mode_filter = self._normalize_mode_filter(mode)
         offset = (current - 1) * size
         if kind == "runs":
-            rows, total = reader.runs_page(mode=mode_filter, limit=size, offset=offset)
+            rows, total = reader.runs_page(
+                mode=mode_filter, limit=size, offset=offset, table_query=table_query
+            )
         else:
-            rows, total = reader.grants_page(mode=mode_filter, change=change, limit=size, offset=offset)
+            rows, total = reader.grants_page(
+                mode=mode_filter, change=change, limit=size, offset=offset, table_query=table_query
+            )
         return DataAccessViewPage(
             rows=[{to_camel(key): value for key, value in row.items()} for row in rows],
             total=total,
@@ -552,6 +614,7 @@ class DataAccessService:
         trigger: SyncTrigger,
         mode: str = "dry_run",
         run_id: str | None = None,
+        preflight: dict[str, float] | None = None,
     ) -> DataAccessRun:
         """Inventory, plan, optionally apply, and persist the run.
 
@@ -560,6 +623,7 @@ class DataAccessService:
             trigger: Manual or scheduled.
             mode: ``dry_run`` (plan only) or ``apply`` (mutate groups/grants/members).
             run_id: Optional predetermined id (Job Run now passes one so the app can wait).
+            preflight: Seconds spent before this call (Job startup phases), stored on the profile.
 
         Returns:
             The stored run.
@@ -592,13 +656,75 @@ class DataAccessService:
             triggered_by=actor,
         )
         self._write_run(running)
+        profiler = RunProfiler()
+        for name, seconds in (preflight or {}).items():
+            profiler.add_phase(name, seconds)
         try:
-            settings = self._settings()
+            with profiling(profiler):
+                finished = self._run_sync_body(running, mode=mode, started=started)
+                with phase("write_run"):
+                    finished = finished.model_copy(update={"profile": profiler.snapshot()})
+                    self._write_run(finished)
+            finished = finished.model_copy(update={"profile": profiler.snapshot()})
+            summary = finished.summary
+            logger.info(
+                "Data-access %s %s finished: add=%s revoke=%s members+=%s members-=%s conflicts=%s",
+                mode,
+                run_id,
+                summary.grants_to_add if summary else 0,
+                summary.grants_to_revoke if summary else 0,
+                summary.members_to_add if summary else 0,
+                summary.members_to_remove if summary else 0,
+                summary.conflicts if summary else 0,
+            )
+            self._log_profile(mode, run_id, finished.profile)
+            return finished
+        except Exception as exc:  # noqa: BLE001 - persist failure, then re-raise as run record
+            failed = running.model_copy(
+                update={
+                    "status": SyncRunStatus.FAILED,
+                    "finished_at": datetime.now(UTC),
+                    "error": str(exc),
+                    "profile": profiler.snapshot(),
+                }
+            )
+            self._write_run(failed)
+            logger.exception("Data-access %s %s failed", mode, run_id)
+            self._log_profile(mode, run_id, failed.profile)
+            return failed
+        finally:
+            self._release_lock(run_id)
+
+    def _run_sync_body(self, running: DataAccessRun, *, mode: str, started: datetime) -> DataAccessRun:
+        """Inventory, plan, apply, and record state for one run; return the finished record."""
+        settings = self._settings()
+        with phase("load.tags"):
             tags = self._tag_loader(settings)
+        with phase("load.grants"):
             grants = self._grant_loader(settings)
+        with phase("load.groups"):
             groups = self._group_loader(settings)
+        with phase("load.assignments"):
             assignments = self._assignment_loader(settings)
+        with phase("load.members"):
             members = self._member_loader(settings, groups)
+        record_size("tag_rows", len(tags))
+        record_size("table_tag_rows", sum(1 for t in tags if t.level == "table"))
+        record_size("grants_read", len(grants))
+        record_size("groups_read", len(groups))
+        record_size("assignments_read", len(assignments))
+        record_size("members_read", len(members))
+        logger.info(
+            "inventory: table_tags=%d grants=%d groups=%d assignments=%d (users=%d groups=%d) members=%d",
+            sum(1 for t in tags if t.level == "table"),
+            len(grants),
+            len(groups),
+            len(assignments),
+            sum(1 for a in assignments if a.principal_type == "USER"),
+            sum(1 for a in assignments if a.principal_type == "GROUP"),
+            len(members),
+        )
+        with phase("plan"):
             previous = next(
                 (r for r in self._filtered_runs(mode=mode) if r.status == SyncRunStatus.SUCCESS),
                 None,
@@ -613,47 +739,48 @@ class DataAccessService:
                 assignments=assignments,
                 actual_members=members,
             )
-            if mode == "apply":
+        record_size("plan_groups", len(plan.groups))
+        record_size("plan_grants_to_add", len(plan.grants_to_add))
+        record_size("plan_grants_to_revoke", len(plan.grants_to_revoke))
+        record_size("plan_membership_changes", len(plan.membership_changes))
+        record_size("eligible_objects", plan.summary.eligible_objects)
+        if mode == "apply":
+            with phase("apply"):
                 plan = self._apply_plan(settings, plan)
+            record_size("apply_failures", len(plan.apply_failures))
+        with phase("record_state"):
             self._record_state(
-                settings, run_id=run_id, mode=mode, started=started, tags=tags, plan=plan, members=members
+                settings,
+                run_id=running.run_id,
+                mode=mode,
+                started=started,
+                tags=tags,
+                plan=plan,
+                members=members,
             )
-            plan = truncate_plan(plan)
-            finished = running.model_copy(
-                update={
-                    "status": SyncRunStatus.SUCCESS,
-                    "finished_at": datetime.now(UTC),
-                    "summary": plan.summary,
-                    "plan": plan,
-                    "fingerprint": plan.fingerprint,
-                    "error": "; ".join(plan.apply_errors) if plan.apply_errors else None,
-                }
-            )
-            self._write_run(finished)
-            logger.info(
-                "Data-access %s %s finished: add=%s revoke=%s members+=%s members-=%s conflicts=%s",
-                mode,
-                run_id,
-                plan.summary.grants_to_add,
-                plan.summary.grants_to_revoke,
-                plan.summary.members_to_add,
-                plan.summary.members_to_remove,
-                plan.summary.conflicts,
-            )
-            return finished
-        except Exception as exc:  # noqa: BLE001 - persist failure, then re-raise as run record
-            failed = running.model_copy(
-                update={
-                    "status": SyncRunStatus.FAILED,
-                    "finished_at": datetime.now(UTC),
-                    "error": str(exc),
-                }
-            )
-            self._write_run(failed)
-            logger.exception("Data-access %s %s failed", mode, run_id)
-            return failed
-        finally:
-            self._release_lock(run_id)
+        plan = truncate_plan(plan)
+        return running.model_copy(
+            update={
+                "status": SyncRunStatus.SUCCESS,
+                "finished_at": datetime.now(UTC),
+                "summary": plan.summary,
+                "plan": plan,
+                "fingerprint": plan.fingerprint,
+                "error": "; ".join(plan.apply_errors) if plan.apply_errors else None,
+            }
+        )
+
+    @staticmethod
+    def _log_profile(mode: str, run_id: str, profile: DataAccessRunProfile | None) -> None:
+        """One JSON line per run so Job output can be grepped for ``data_access_profile``."""
+        if profile is None:
+            return
+        logger.info(
+            "data_access_profile mode=%s run_id=%s %s",
+            mode,
+            run_id,
+            json.dumps(profile.model_dump(mode="json"), sort_keys=True),
+        )
 
     # Outstanding work, tag changes, immediate membership, and access status.
 
@@ -677,40 +804,49 @@ class DataAccessService:
         try:
             baseline = state.gap_meta() is None
             snapshot = snapshot_from_tags(settings, tags)
+            record_size("snapshot_tables", len(snapshot))
             if not baseline:
-                state.add_tag_changes(
-                    diff_snapshots(state.load_tag_snapshot(), snapshot, run_id=run_id, detected_at=started)
-                )
-            state.replace_tag_snapshot(snapshot)
+                with phase("state.tag_diff"):
+                    changes = diff_snapshots(
+                        state.load_tag_snapshot(), snapshot, run_id=run_id, detected_at=started
+                    )
+                    state.add_tag_changes(changes)
+                record_size("tag_changes", len(changes))
+            with phase("state.tag_snapshot_write"):
+                state.replace_tag_snapshot(snapshot)
 
-            gap = build_gap(
-                plan,
-                members,
-                applied=mode == "apply",
-                failures=plan.apply_failures,
-                run_id=run_id,
-                computed_at=started,
-            )
-            by_key = {item.item_key: item for item in gap}
-            for event in state.membership_events_since(started):
-                key = member_key(event.action, event.group_name, event.principal_name)
-                if event.status == MembershipEventStatus.APPLIED:
-                    by_key.pop(key, None)
-                elif event.status == MembershipEventStatus.FAILED and key not in by_key:
-                    by_key[key] = self._event_gap_item(event)
-            state.replace_gap(
-                list(by_key.values()),
-                GapMeta(
+            with phase("state.build_gap"):
+                gap = build_gap(
+                    plan,
+                    members,
+                    applied=mode == "apply",
+                    failures=plan.apply_failures,
                     run_id=run_id,
-                    mode=mode,
                     computed_at=started,
-                    tables_tracked=len(snapshot),
-                    tag_baseline=baseline,
-                ),
-            )
+                )
+                by_key = {item.item_key: item for item in gap}
+                for event in state.membership_events_since(started):
+                    key = member_key(event.action, event.group_name, event.principal_name)
+                    if event.status == MembershipEventStatus.APPLIED:
+                        by_key.pop(key, None)
+                    elif event.status == MembershipEventStatus.FAILED and key not in by_key:
+                        by_key[key] = self._event_gap_item(event)
+            record_size("gap_items", len(by_key))
+            with phase("state.gap_write"):
+                state.replace_gap(
+                    list(by_key.values()),
+                    GapMeta(
+                        run_id=run_id,
+                        mode=mode,
+                        computed_at=started,
+                        tables_tracked=len(snapshot),
+                        tag_baseline=baseline,
+                    ),
+                )
             cutoff = started - timedelta(days=RUN_HISTORY_RETENTION_DAYS)
-            state.prune_tag_changes(cutoff)
-            state.prune_membership_events(cutoff)
+            with phase("state.prune"):
+                state.prune_tag_changes(cutoff)
+                state.prune_membership_events(cutoff)
         except Exception:  # noqa: BLE001 - the run itself succeeded; status views catch up next run
             logger.exception("Recording data-access outstanding work for run %s failed", run_id)
 
@@ -950,6 +1086,7 @@ class DataAccessService:
         query: str | None = None,
         page: int = 1,
         page_size: int = 25,
+        table_query: TableQuery | None = None,
     ) -> GapItemPage:
         """One page of outstanding items.
 
@@ -959,6 +1096,7 @@ class DataAccessService:
             query: Substring over group, principal, securable, and value.
             page: 1-based page.
             page_size: Rows per page (1-200).
+            table_query: Optional column sort and filters applied before paging.
 
         Returns:
             The page and total.
@@ -974,15 +1112,27 @@ class DataAccessService:
         if status and status not in {s.value for s in GapStatus}:
             raise InvalidRequestError("status must be pending or failed")
         if kind == "expired":
-            return self._expired_page(query=query, page=page, page_size=page_size)
+            return self._expired_page(query=query, page=page, page_size=page_size, table_query=table_query)
         if kind and kind not in {k.value for k in GapKind}:
             raise InvalidRequestError(f"Unknown kind '{kind}'")
         items, total = self._storage.data_access_state.gap_page(
-            kind=kind, status=status, query=query, limit=page_size, offset=offset
+            kind=kind,
+            status=status,
+            query=query,
+            limit=page_size,
+            offset=offset,
+            table_query=table_query,
         )
         return GapItemPage(items=items, total=total, page=page, page_size=page_size)
 
-    def _expired_page(self, *, query: str | None, page: int, page_size: int) -> GapItemPage:
+    def _expired_page(
+        self,
+        *,
+        query: str | None,
+        page: int,
+        page_size: int,
+        table_query: TableQuery | None = None,
+    ) -> GapItemPage:
         """Expired-since-sync assignments as removal items."""
         settings = self._settings()
         meta = self._storage.data_access_state.gap_meta()
@@ -990,8 +1140,11 @@ class DataAccessService:
         rows: list[GapItem] = []
         for a in self._expired_since_sync(settings, meta):
             group = group_name(settings.group_prefix, a.attribute_value) or ""
-            if needle and needle not in a.principal_name.lower() and needle not in group.lower() and (
-                needle not in a.attribute_value.lower()
+            if (
+                needle
+                and needle not in a.principal_name.lower()
+                and needle not in group.lower()
+                and (needle not in a.attribute_value.lower())
             ):
                 continue
             rows.append(
@@ -1006,21 +1159,29 @@ class DataAccessService:
                     computed_at=a.expires_at or datetime.now(UTC),
                 )
             )
+        rows = sort_and_filter(rows, table_query or TableQuery(), GAP_ITEM_READERS)
         start = (page - 1) * page_size
         return GapItemPage(
             items=rows[start : start + page_size], total=len(rows), page=page, page_size=page_size
         )
 
     def tag_changes(
-        self, *, change: str | None = None, scope: str = "latest", page: int = 1, page_size: int = 25
+        self,
+        *,
+        change: str | None = None,
+        scope: str = "latest",
+        page: int = 1,
+        page_size: int = 25,
+        table_query: TableQuery | None = None,
     ) -> TagChangePage:
-        """One page of tables whose data-access tagging changed, newest first.
+        """One page of tables whose data-access tagging changed, newest first unless sorted.
 
         Args:
             change: ``newly_eligible``, ``no_longer_eligible``, ``value_changed``, or None.
             scope: ``latest`` (last sync only) or ``all`` (retention window).
             page: 1-based page.
             page_size: Rows per page (1-200).
+            table_query: Optional column sort and filters applied before paging.
 
         Returns:
             The page and total.
@@ -1044,6 +1205,7 @@ class DataAccessService:
             run_id=run_id,
             limit=page_size,
             offset=(page - 1) * page_size,
+            table_query=table_query,
         )
         return TagChangePage(items=items, total=total, page=page, page_size=page_size)
 
@@ -1105,6 +1267,19 @@ class DataAccessService:
     def _retention_cutoff(self) -> datetime:
         """UTC timestamp before which runs are hidden and pruned."""
         return datetime.now(UTC) - timedelta(days=RUN_HISTORY_RETENTION_DAYS)
+
+    def finished_runs_since(self, since: datetime) -> list[DataAccessRun]:
+        """Finished sync runs (dry-run and apply) that started at or after ``since``.
+
+        Used to attribute warehouse and job cost to each sync's start and finish window.
+
+        Args:
+            since: Earliest start time (timezone-aware).
+
+        Returns:
+            Runs with a finish time, newest first.
+        """
+        return [r for r in self._runs() if r.started_at >= since and r.finished_at is not None]
 
     def _filtered_runs(self, *, mode: str | None = None) -> list[DataAccessRun]:
         """Runs in the retention window, optionally filtered by mode, newest first."""
@@ -1231,14 +1406,15 @@ class DataAccessService:
         enrolled = self.list_enrolled_catalogs(settings)
         catalog_filter = self._catalog_sql(settings, "catalog_name", enrolled)
         rows: list[TagRow] = []
-        catalog_rows = self._sql.query(
-            f"""
-            SELECT catalog_name, tag_name, tag_value
-            FROM system.information_schema.catalog_tags
-            WHERE lower(tag_name) IN ({keys})
-              {catalog_filter}
-            """
-        )
+        with timed_call("sql.read_catalog_tags"):
+            catalog_rows = self._sql.query(
+                f"""
+                SELECT catalog_name, tag_name, tag_value
+                FROM system.information_schema.catalog_tags
+                WHERE lower(tag_name) IN ({keys})
+                  {catalog_filter}
+                """
+            )
         for row in catalog_rows:
             rows.append(
                 TagRow(
@@ -1250,14 +1426,15 @@ class DataAccessService:
                     tag_value="" if row.get("tag_value") is None else str(row["tag_value"]),
                 )
             )
-        schema_rows = self._sql.query(
-            f"""
-            SELECT catalog_name, schema_name, tag_name, tag_value
-            FROM system.information_schema.schema_tags
-            WHERE lower(tag_name) IN ({keys})
-              {catalog_filter}
-            """
-        )
+        with timed_call("sql.read_schema_tags"):
+            schema_rows = self._sql.query(
+                f"""
+                SELECT catalog_name, schema_name, tag_name, tag_value
+                FROM system.information_schema.schema_tags
+                WHERE lower(tag_name) IN ({keys})
+                  {catalog_filter}
+                """
+            )
         for row in schema_rows:
             rows.append(
                 TagRow(
@@ -1269,14 +1446,15 @@ class DataAccessService:
                     tag_value="" if row.get("tag_value") is None else str(row["tag_value"]),
                 )
             )
-        table_rows = self._sql.query(
-            f"""
-            SELECT catalog_name, schema_name, table_name, tag_name, tag_value
-            FROM system.information_schema.table_tags
-            WHERE lower(tag_name) IN ({keys})
-              {catalog_filter}
-            """
-        )
+        with timed_call("sql.read_table_tags"):
+            table_rows = self._sql.query(
+                f"""
+                SELECT catalog_name, schema_name, table_name, tag_name, tag_value
+                FROM system.information_schema.table_tags
+                WHERE lower(tag_name) IN ({keys})
+                  {catalog_filter}
+                """
+            )
         for row in table_rows:
             rows.append(
                 TagRow(
@@ -1301,14 +1479,16 @@ class DataAccessService:
         enrolled = self.list_enrolled_catalogs(settings)
         catalog_filter = self._catalog_sql(settings, "catalog_name", enrolled)
         table_catalog_filter = self._catalog_sql(settings, "table_catalog", enrolled)
-        for row in self._sql.query(
-            f"""
-            SELECT catalog_name, grantee, privilege_type, inherited_from
-            FROM system.information_schema.catalog_privileges
-            WHERE lower(grantee) LIKE {like_sql} ESCAPE '\\\\'
-              {catalog_filter}
-            """
-        ):
+        with timed_call("sql.read_catalog_privileges"):
+            catalog_privileges = self._sql.query(
+                f"""
+                SELECT catalog_name, grantee, privilege_type, inherited_from
+                FROM system.information_schema.catalog_privileges
+                WHERE lower(grantee) LIKE {like_sql} ESCAPE '\\\\'
+                  {catalog_filter}
+                """
+            )
+        for row in catalog_privileges:
             if self._is_inherited_privilege(row.get("inherited_from")):
                 continue
             grants.append(
@@ -1319,14 +1499,16 @@ class DataAccessService:
                     str(row["privilege_type"]),
                 )
             )
-        for row in self._sql.query(
-            f"""
-            SELECT catalog_name, schema_name, grantee, privilege_type, inherited_from
-            FROM system.information_schema.schema_privileges
-            WHERE lower(grantee) LIKE {like_sql} ESCAPE '\\\\'
-              {catalog_filter}
-            """
-        ):
+        with timed_call("sql.read_schema_privileges"):
+            schema_privileges = self._sql.query(
+                f"""
+                SELECT catalog_name, schema_name, grantee, privilege_type, inherited_from
+                FROM system.information_schema.schema_privileges
+                WHERE lower(grantee) LIKE {like_sql} ESCAPE '\\\\'
+                  {catalog_filter}
+                """
+            )
+        for row in schema_privileges:
             if self._is_inherited_privilege(row.get("inherited_from")):
                 continue
             grants.append(
@@ -1337,14 +1519,16 @@ class DataAccessService:
                     str(row["privilege_type"]),
                 )
             )
-        for row in self._sql.query(
-            f"""
-            SELECT table_catalog, table_schema, table_name, grantee, privilege_type, inherited_from
-            FROM system.information_schema.table_privileges
-            WHERE lower(grantee) LIKE {like_sql} ESCAPE '\\\\'
-              {table_catalog_filter}
-            """
-        ):
+        with timed_call("sql.read_table_privileges"):
+            table_privileges = self._sql.query(
+                f"""
+                SELECT table_catalog, table_schema, table_name, grantee, privilege_type, inherited_from
+                FROM system.information_schema.table_privileges
+                WHERE lower(grantee) LIKE {like_sql} ESCAPE '\\\\'
+                  {table_catalog_filter}
+                """
+            )
+        for row in table_privileges:
             if self._is_inherited_privilege(row.get("inherited_from")):
                 continue
             grants.append(
@@ -1387,19 +1571,55 @@ class DataAccessService:
         }
         if filter_expr:
             query["filter"] = filter_expr
-        payload = admin.api_client.do("GET", self._ACCOUNT_SCIM_GROUPS, query=query)
+        kind = "scim.list_groups_members" if "members" in attributes else "scim.list_groups"
+        with timed_call(kind):
+            payload = admin.api_client.do("GET", self._ACCOUNT_SCIM_GROUPS, query=query)
+        resources = list((payload.get("Resources") if isinstance(payload, dict) else None) or [])
+        total = payload.get("totalResults") if isinstance(payload, dict) else None
+        if isinstance(total, int) and total > len(resources):
+            message = (
+                f"Account SCIM Groups returned {len(resources)} of {total} "
+                f"(filter={filter_expr or 'none'}); later pages are not read"
+            )
+            logger.warning(message)
+            note(message)
+        return resources
+
+    def _account_scim_find_user(self, user_name: str) -> str | None:
+        """SCIM id of the account user with this ``userName``, or None.
+
+        Account users are not all provisioned to this workspace, so the workspace users API
+        misses some of them. The account SCIM filter finds every account user.
+        """
+        admin = self._factory.admin()
+        escaped = user_name.replace('"', '\\"')
+        try:
+            with timed_call("scim.find_user"):
+                payload = admin.api_client.do(
+                    "GET",
+                    self._ACCOUNT_SCIM_USERS,
+                    query={
+                        "filter": f'userName eq "{escaped}"',
+                        "attributes": "id,userName",
+                        "count": 1,
+                    },
+                )
+        except DatabricksError:
+            return None
         resources = payload.get("Resources") if isinstance(payload, dict) else None
-        return list(resources or [])
+        first = next(iter(resources or []), None)
+        return str(first["id"]) if isinstance(first, dict) and first.get("id") else None
 
     def _account_scim_get_user(self, user_id: str) -> dict | None:
         """Fetch one account user by SCIM id (for canonical userName)."""
         admin = self._factory.admin()
         try:
-            payload = admin.api_client.do(
-                "GET",
-                f"{self._ACCOUNT_SCIM_USERS}/{user_id}",
-                query={"attributes": "id,userName,displayName"},
-            )
+            with timed_call("scim.get_user"):
+                payload = admin.api_client.do(
+                    "GET",
+                    f"{self._ACCOUNT_SCIM_USERS}/{user_id}",
+                    query={"attributes": "id,userName,displayName"},
+                )
         except DatabricksError:
             return None
         return payload if isinstance(payload, dict) else None
@@ -1407,14 +1627,15 @@ class DataAccessService:
     def _account_scim_create_group(self, display_name: str) -> str:
         """Create an account group; return its SCIM id."""
         admin = self._factory.admin()
-        created = admin.api_client.do(
-            "POST",
-            self._ACCOUNT_SCIM_GROUPS,
-            body={
-                "displayName": display_name,
-                "schemas": [GroupSchema.URN_IETF_PARAMS_SCIM_SCHEMAS_CORE_2_0_GROUP.value],
-            },
-        )
+        with timed_call("scim.create_group"):
+            created = admin.api_client.do(
+                "POST",
+                self._ACCOUNT_SCIM_GROUPS,
+                body={
+                    "displayName": display_name,
+                    "schemas": [GroupSchema.URN_IETF_PARAMS_SCIM_SCHEMAS_CORE_2_0_GROUP.value],
+                },
+            )
         gid = created.get("id") if isinstance(created, dict) else None
         if not gid:
             raise RuntimeError(f"create account group {display_name}: missing id")
@@ -1423,14 +1644,15 @@ class DataAccessService:
     def _account_scim_patch_group(self, group_id: str, operations: list[dict]) -> None:
         """Patch an account group (add/remove members)."""
         admin = self._factory.admin()
-        admin.api_client.do(
-            "PATCH",
-            f"{self._ACCOUNT_SCIM_GROUPS}/{group_id}",
-            body={
-                "schemas": [PatchSchema.URN_IETF_PARAMS_SCIM_API_MESSAGES_2_0_PATCH_OP.value],
-                "Operations": operations,
-            },
-        )
+        with timed_call("scim.patch_group"):
+            admin.api_client.do(
+                "PATCH",
+                f"{self._ACCOUNT_SCIM_GROUPS}/{group_id}",
+                body={
+                    "schemas": [PatchSchema.URN_IETF_PARAMS_SCIM_API_MESSAGES_2_0_PATCH_OP.value],
+                    "Operations": operations,
+                },
+            )
 
     def _load_groups(self, settings: DataAccessSettings) -> set[str]:
         """List account groups whose names start with the managed prefix."""
@@ -1465,6 +1687,27 @@ class DataAccessService:
             for item in items
         ]
 
+    @staticmethod
+    def _member_principal_type(entry: dict, display: str, group_prefix: str) -> str:
+        """USER, GROUP, or SERVICE_PRINCIPAL for one Account SCIM group member entry.
+
+        Account SCIM members carry ``$ref`` (``Groups/{id}``, ``Users/{id}``) and usually no
+        ``type``. Only when neither says anything is the display name guessed from the prefix.
+        Guessing wrongly sent group members down the user path, where removals failed.
+        """
+        explicit = str(entry.get("type") or "").upper()
+        if explicit in {"USER", "GROUP", "SERVICE_PRINCIPAL"}:
+            return explicit
+        ref = str(entry.get("$ref") or "").lower()
+        if "/groups/" in ref or ref.startswith("groups/"):
+            return "GROUP"
+        if "/serviceprincipals/" in ref or ref.startswith("serviceprincipals/"):
+            return "SERVICE_PRINCIPAL"
+        if "/users/" in ref or ref.startswith("users/"):
+            return "USER"
+        prefix = group_prefix.lower() if group_prefix.endswith("_") else f"{group_prefix}_".lower()
+        return "GROUP" if display.lower().startswith(prefix) else "USER"
+
     def _load_members(self, settings: DataAccessSettings, existing_groups: set[str]) -> list[ActualMember]:
         """Load current members of managed account groups via Account SCIM.
 
@@ -1495,21 +1738,7 @@ class DataAccessService:
                     if not display:
                         continue
                     member_id = str(entry.get("value") or "").strip()
-                    raw_type = str(entry.get("type") or "UNKNOWN").upper()
-                    if raw_type in {"USER", "GROUP", "SERVICE_PRINCIPAL"}:
-                        principal_type = raw_type
-                    else:
-                        principal_type = (
-                            "GROUP"
-                            if str(display)
-                            .lower()
-                            .startswith(
-                                settings.group_prefix.lower()
-                                if settings.group_prefix.endswith("_")
-                                else f"{settings.group_prefix}_".lower()
-                            )
-                            else "USER"
-                        )
+                    principal_type = self._member_principal_type(entry, str(display), settings.group_prefix)
                     principal_name = str(display)
                     if principal_type == "USER" and member_id:
                         if member_id not in user_names:
@@ -1533,10 +1762,44 @@ class DataAccessService:
         """Create/nest account groups, sync membership, GRANT/REVOKE. Collects per-step errors."""
         errors: list[str] = []
         failures: dict[str, str] = {}
-        group_ids = self._ensure_groups(plan.groups, errors, failures)
-        self._nest_groups(plan.groups, group_ids, errors, failures)
-        self._apply_membership(plan.membership_changes, group_ids, errors, failures)
-        self._apply_grants(plan.grants_to_add, plan.grants_to_revoke, errors, failures)
+        logger.info(
+            "apply plan: groups_to_create=%d nests=%d membership=%d grants_add=%d grants_revoke=%d",
+            sum(1 for g in plan.groups if not g.exists),
+            sum(1 for g in plan.groups if g.parent_group),
+            len(plan.membership_changes),
+            len(plan.grants_to_add),
+            len(plan.grants_to_revoke),
+        )
+        with phase("apply.groups"):
+            group_ids = self._ensure_groups(plan.groups, errors, failures)
+        with phase("apply.nest"):
+            self._nest_groups(plan.groups, group_ids, errors, failures)
+        with phase("apply.membership"):
+            self._apply_membership(
+                plan.membership_changes,
+                group_ids,
+                errors,
+                failures,
+                concurrency=settings.membership_concurrency,
+            )
+        statements = len(plan.grants_to_add) + len(plan.grants_to_revoke)
+        with (
+            phase("apply.grants"),
+            self._warehouse.capacity_for(
+                statements,
+                enabled=settings.warehouse_autoscale,
+                sync_max_clusters=settings.warehouse_max_clusters,
+                baseline_clusters=settings.warehouse_baseline_clusters,
+                concurrency_cap=settings.grant_concurrency,
+            ) as capacity,
+        ):
+            self._apply_grants(
+                plan.grants_to_add,
+                plan.grants_to_revoke,
+                errors,
+                failures,
+                concurrency=capacity.concurrency,
+            )
         return plan.model_copy(update={"apply_errors": errors, "apply_failures": failures})
 
     def _ensure_groups(
@@ -1590,9 +1853,13 @@ class DataAccessService:
         errors: list[str],
         failures: dict[str, str] | None = None,
     ) -> None:
-        """Nest each parent ``dac_*`` group into its child (idempotent ADD)."""
+        """Nest each parent ``dac_*`` group into its child (idempotent ADD).
+
+        Links the inventory already shows as present (``nest_exists``) are skipped so a
+        stable hierarchy does not re-PATCH Account SCIM on every apply.
+        """
         for planned in groups:
-            if not planned.parent_group:
+            if not planned.parent_group or planned.nest_exists:
                 continue
             key = nest_key(planned.name, planned.parent_group)
             child_id = group_ids.get(planned.name.lower())
@@ -1621,53 +1888,143 @@ class DataAccessService:
         group_ids: dict[str, str],
         errors: list[str],
         failures: dict[str, str] | None = None,
+        *,
+        concurrency: int = 1,
     ) -> None:
         """Add/remove principals on managed account groups via Account SCIM patch.
 
         Resolves each change to a SCIM id first, then collapses ADD+REMOVE pairs that
-        refer to the same person under different names (email vs display name).
+        refer to the same person under different names (email vs display name). Resolve and
+        patch both run with a thread pool; patches that share a group stay sequential so two
+        edits never race on the same Account SCIM group.
         """
         sink: dict[str, str] = failures if failures is not None else {}
+        if not changes:
+            return
+        workers = max(1, min(concurrency, len(changes)))
+        record_size("membership_concurrency", workers)
+
         resolved: list[tuple[str, str, MembershipChange]] = []
-        for change in changes:
-            key = member_key(change.action, change.group, change.principal_name)
+        resolve_progress = Progress("membership.resolve", len(changes))
+        cache: dict[tuple[str, str], str | None] = {}
+        cache_lock = threading.Lock()
+
+        def resolve_one(
+            change: MembershipChange,
+        ) -> tuple[MembershipChange, str | None, str | None, Exception | None, float]:
+            """Return (change, group_id, member_id, resolve_error, seconds)."""
             group_id = group_ids.get(change.group.lower())
             if not group_id:
-                errors.append(f"membership {change.action.value} {change.principal_name}: missing group")
-                sink[key] = "missing group"
-                continue
-            before = len(errors)
-            member_id = self._resolve_principal_id(change.principal_name, change.principal_type, errors)
-            if not member_id:
-                sink[key] = errors[-1] if len(errors) > before else "principal not found"
-                continue
-            resolved.append((group_id, member_id, change))
+                return change, None, None, RuntimeError("missing group"), 0.0
+            cache_key = ((change.principal_type or "USER").upper(), change.principal_name.lower())
+            with cache_lock:
+                if cache_key in cache:
+                    cached = cache[cache_key]
+                    if cached is None:
+                        return (
+                            change,
+                            group_id,
+                            None,
+                            RuntimeError(f"resolve principal {change.principal_name}: not found"),
+                            0.0,
+                        )
+                    return change, group_id, cached, None, 0.0
+            local_errors: list[str] = []
+            started = time.perf_counter()
+            member_id = self._lookup_principal_id(
+                change.principal_name, (change.principal_type or "USER").upper(), local_errors
+            )
+            seconds = time.perf_counter() - started
+            with cache_lock:
+                cache[cache_key] = member_id
+            if member_id is None:
+                message = local_errors[-1] if local_errors else "principal not found"
+                return change, group_id, None, RuntimeError(message), seconds
+            return change, group_id, member_id, None, seconds
 
-        for group_id, member_id, change in collapse_membership_by_principal_id(resolved):
-            try:
-                if change.action == MembershipAction.ADD:
-                    self._account_scim_patch_group(
-                        group_id,
-                        [{"op": "add", "path": "members", "value": [{"value": member_id}]}],
-                    )
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="member-resolve") as pool:
+            futures = [pool.submit(resolve_one, change) for change in changes]
+            for future in as_completed(futures):
+                change, group_id, member_id, resolve_error, seconds = future.result()
+                kind = (change.principal_type or "USER").lower()
+                if seconds > 0:
+                    record_call(f"scim.resolve_{kind}", seconds)
+                key = member_key(change.action, change.group, change.principal_name)
+                if resolve_error is not None and group_id is None:
+                    errors.append(f"membership {change.action.value} {change.principal_name}: missing group")
+                    sink[key] = "missing group"
+                elif resolve_error is not None:
+                    errors.append(str(resolve_error))
+                    sink[key] = str(resolve_error)
                 else:
-                    self._account_scim_patch_group(
-                        group_id,
-                        [{"op": "remove", "path": f'members[value eq "{member_id}"]'}],
-                    )
-            except Exception as exc:  # noqa: BLE001
-                message = str(exc).lower()
-                if change.action == MembershipAction.ADD and ("already" in message or "exists" in message):
-                    continue
-                errors.append(
-                    f"membership {change.action.value} {change.principal_name} on {change.group}: {exc}"
-                )
-                sink[member_key(change.action, change.group, change.principal_name)] = str(exc)
+                    assert group_id is not None and member_id is not None
+                    resolved.append((group_id, member_id, change))
+                resolve_progress.tick()
+
+        collapsed = collapse_membership_by_principal_id(resolved)
+        if not collapsed:
+            return
+
+        by_group: dict[str, list[tuple[str, MembershipChange]]] = {}
+        for group_id, member_id, change in collapsed:
+            by_group.setdefault(group_id, []).append((member_id, change))
+        patch_progress = Progress("membership.patch", len(collapsed))
+        patch_workers = max(1, min(workers, len(by_group)))
+
+        def patch_one_group(
+            group_id: str, items: list[tuple[str, MembershipChange]]
+        ) -> list[tuple[MembershipChange, Exception | None, float]]:
+            """Apply every patch for one group in order; return per-change outcomes."""
+            outcomes: list[tuple[MembershipChange, Exception | None, float]] = []
+            for member_id, change in items:
+                started = time.perf_counter()
+                try:
+                    if change.action == MembershipAction.ADD:
+                        self._account_scim_patch_group(
+                            group_id,
+                            [{"op": "add", "path": "members", "value": [{"value": member_id}]}],
+                        )
+                    else:
+                        self._account_scim_patch_group(
+                            group_id,
+                            [{"op": "remove", "path": f'members[value eq "{member_id}"]'}],
+                        )
+                    outcomes.append((change, None, time.perf_counter() - started))
+                except Exception as exc:  # noqa: BLE001 - one failed patch must not stop the rest
+                    message = str(exc).lower()
+                    if change.action == MembershipAction.ADD and (
+                        "already" in message or "exists" in message
+                    ):
+                        outcomes.append((change, None, time.perf_counter() - started))
+                    else:
+                        outcomes.append((change, exc, time.perf_counter() - started))
+            return outcomes
+
+        with ThreadPoolExecutor(max_workers=patch_workers, thread_name_prefix="member-patch") as pool:
+            futures = {
+                pool.submit(patch_one_group, group_id, items): group_id
+                for group_id, items in by_group.items()
+            }
+            for future in as_completed(futures):
+                for change, exc, seconds in future.result():
+                    record_call("scim.patch_group", seconds)
+                    if exc is not None:
+                        errors.append(
+                            f"membership {change.action.value} {change.principal_name} "
+                            f"on {change.group}: {exc}"
+                        )
+                        sink[member_key(change.action, change.group, change.principal_name)] = str(exc)
+                    patch_progress.tick()
 
     def _resolve_principal_id(self, name: str, principal_type: str, errors: list[str]) -> str | None:
         """Resolve a user/group/SP display name to a SCIM id."""
-        admin = self._factory.admin()
         kind = (principal_type or "USER").upper()
+        with timed_call(f"scim.resolve_{kind.lower()}"):
+            return self._lookup_principal_id(name, kind, errors)
+
+    def _lookup_principal_id(self, name: str, kind: str, errors: list[str]) -> str | None:
+        """Look up one principal's SCIM id for ``_resolve_principal_id``."""
+        admin = self._factory.admin()
         escaped = name.replace('"', '\\"')
         try:
             if kind == "GROUP":
@@ -1686,6 +2043,10 @@ class DataAccessService:
                 )
                 found = next(iter(sps), None)
                 return str(found.id) if found and found.id else None
+            account_user = self._account_scim_find_user(name)
+            if account_user:
+                return account_user
+            # Fallback for users the account knows but the search above missed.
             users = admin.users.list(
                 filter=f'userName eq "{escaped}" or displayName eq "{escaped}"',
                 attributes="id,userName,displayName",
@@ -1705,23 +2066,41 @@ class DataAccessService:
         to_revoke: list[PlannedGrant],
         errors: list[str],
         failures: dict[str, str] | None = None,
+        *,
+        concurrency: int = 1,
     ) -> None:
-        """Issue GRANT / REVOKE SQL for planned privileges."""
+        """Issue GRANT / REVOKE SQL for planned privileges, up to ``concurrency`` at a time."""
         sink: dict[str, str] = failures if failures is not None else {}
-        for grant in to_add:
-            sql = self._grant_sql("GRANT", grant)
+        jobs: list[tuple[str, GapKind, PlannedGrant]] = [
+            ("GRANT", GapKind.GRANT_ADD, grant) for grant in to_add
+        ] + [("REVOKE", GapKind.GRANT_REVOKE, grant) for grant in to_revoke]
+        if not jobs:
+            return
+        workers = max(1, min(concurrency, len(jobs)))
+        record_size("grant_concurrency", workers)
+        progress = Progress("grants", len(jobs))
+
+        def run(job: tuple[str, GapKind, PlannedGrant]) -> tuple[Exception | None, float]:
+            verb, _kind, grant = job
+            started = time.perf_counter()
             try:
-                self._sql.execute(sql)
-            except Exception as exc:  # noqa: BLE001
-                errors.append(f"GRANT {grant.privilege} on {grant.full_name}: {exc}")
-                sink[grant_key(GapKind.GRANT_ADD, grant)] = str(exc)
-        for grant in to_revoke:
-            sql = self._grant_sql("REVOKE", grant)
-            try:
-                self._sql.execute(sql)
-            except Exception as exc:  # noqa: BLE001
-                errors.append(f"REVOKE {grant.privilege} on {grant.full_name}: {exc}")
-                sink[grant_key(GapKind.GRANT_REVOKE, grant)] = str(exc)
+                self._sql.execute(self._grant_sql(verb, grant))
+                return None, time.perf_counter() - started
+            except Exception as exc:  # noqa: BLE001 - one failed grant must not stop the rest
+                return exc, time.perf_counter() - started
+
+        # Statements are independent per securable and principal, so run them concurrently. The
+        # warehouse queues whatever it cannot run yet. Results are handled on this thread.
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="grant") as pool:
+            futures = {pool.submit(run, job): job for job in jobs}
+            for future in as_completed(futures):
+                verb, kind, grant = futures[future]
+                exc, seconds = future.result()
+                record_call(f"sql.{verb.lower()}_{grant.securable_type.lower()}", seconds)
+                if exc is not None:
+                    errors.append(f"{verb} {grant.privilege} on {grant.full_name}: {exc}")
+                    sink[grant_key(kind, grant)] = str(exc)
+                progress.tick()
 
     @staticmethod
     def _grant_sql(verb: str, grant: PlannedGrant) -> str:

@@ -27,6 +27,9 @@ describe("Access explorer", () => {
         name: "Select sensitivity=finance.budget.PII.Name",
       }),
     ).toBeChecked();
+    const dataAccess = screen.getByRole("table", { name: "Data access suggestions" });
+    expect(within(dataAccess).getByText("Already held")).toBeInTheDocument();
+    expect(within(dataAccess).queryByText("Not requestable yet")).not.toBeInTheDocument();
     const requestValue = within(sensitivity).getByRole("combobox", {
       name: "Request value for sensitivity=finance.budget.PII.Name",
     });
@@ -42,7 +45,7 @@ describe("Access explorer", () => {
     ).toBeChecked();
     // Concrete values stay hidden until the user searches.
     expect(screen.queryByRole("checkbox", { name: "Select state=CA" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Request/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^Request \d+ selected$|^Request$/ })).toBeDisabled();
     expect(screen.getByRole("link", { name: "My requests" })).toHaveAttribute(
       "href",
       "/identity?tab=my-requests",
@@ -52,7 +55,7 @@ describe("Access explorer", () => {
     const expiry = screen.getByLabelText("Requested expiry");
     await user.clear(expiry);
     await user.type(expiry, "2030-01-15T12:00");
-    await user.click(screen.getByRole("button", { name: /Request/ }));
+    await user.click(screen.getByRole("button", { name: /^Request \d+ selected$|^Request$/ }));
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({
         attributeKey: "sensitivity",

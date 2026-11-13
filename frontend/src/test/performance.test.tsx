@@ -2,10 +2,11 @@ import { screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { cloneElement } from "react";
-import { buildHourRows, formatMs, formatPercent } from "@/pages/performance/PerformancePage";
+import { buildHourRows, formatMs, formatPercent, formatUsd } from "@/pages/performance/PerformancePage";
 import {
   fakeServices,
   renderApp,
+  testAppCost,
   testDataAccessGrantsPage,
   testDataAccessRunsPage,
   testPerformanceSummary,
@@ -193,5 +194,40 @@ describe("Data access analytics paged tables", () => {
     );
     expect(await screen.findByText("No runs match these filters.")).toBeInTheDocument();
     expect(await screen.findByText("Could not load grant changes")).toBeInTheDocument();
+  });
+});
+
+describe("App cost card", () => {
+  it("shows per-sync and per-day cost from billing", async () => {
+    renderApp("/performance");
+    expect(await screen.findByText("App cost")).toBeInTheDocument();
+    expect(await screen.findByText("Avg cost per sync")).toBeInTheDocument();
+    expect(screen.getByText("$5.50")).toBeInTheDocument();
+    expect(screen.getByText("$1.50")).toBeInTheDocument();
+    expect(screen.getByText("$7.50")).toBeInTheDocument();
+    expect(screen.getByText("$2.50")).toBeInTheDocument();
+    expect(screen.getByText(testAppCost.lagNote)).toBeInTheDocument();
+  });
+
+  it("explains when billing cannot be read", async () => {
+    renderApp(
+      "/performance",
+      fakeServices({
+        performanceAppCost: {
+          ...testAppCost,
+          available: false,
+          detail: "system.billing.usage is not accessible",
+        },
+      }),
+    );
+    expect(await screen.findByText("App cost unavailable")).toBeInTheDocument();
+    expect(screen.getByText("system.billing.usage is not accessible")).toBeInTheDocument();
+    expect(screen.queryByText("Avg cost per sync")).not.toBeInTheDocument();
+  });
+
+  it("formats USD for display and shows a dash when there is no value", () => {
+    expect(formatUsd(5.5)).toBe("$5.50");
+    expect(formatUsd(0)).toBe("$0.00");
+    expect(formatUsd(null)).toBe("—");
   });
 });

@@ -539,6 +539,55 @@ def test_analyze_table_suggests_data_access(container) -> None:  # noqa: ANN001
     assert dac.attribute_key == "data_access"
     assert dac.attribute_value == "finance"
     assert dac.requestable is True
+    assert dac.already_held is False
+
+
+def test_analyze_table_dac_already_held_is_flagged(container) -> None:  # noqa: ANN001
+    """A value the user already holds is flagged so the UI can say "Already held"."""
+    service, sql = _explorer(container)
+    sql.table_tags = [
+        {"tag_name": "data_access_control", "tag_value": "finance"},
+        {"tag_name": "clr_review_status", "tag_value": "reviewed"},
+    ]
+    actor = _admin()
+    container.identity_attributes.upsert_definition(
+        UpsertAttributeDefinitionRequest(
+            key="data_access",
+            description="DAC",
+            value_source=ValueSource.FREE_FORM,
+            allowed_values=["finance", "finance.budget"],
+        ),
+        actor,  # type: ignore[arg-type]
+    )
+    stored = container.storage.identity_attributes.get_definition("data_access")
+    assert stored is not None
+    container.storage.identity_attributes.upsert_definition(
+        stored.model_copy(update={"governed_tag_keys": ["data_access_control"]})
+    )
+    container.identity_attributes.assign(
+        AssignAttributeRequest(
+            principal_name="analyst@example.com",
+            principal_type=PrincipalKind.USER,
+            attribute_key="data_access",
+            attribute_value="finance",
+        ),
+        actor,  # type: ignore[arg-type]
+        source=AttributeSource.MANUAL,
+    )
+    user = CurrentUser(
+        user_name="analyst@example.com",
+        email="analyst@example.com",
+        display_name="Analyst",
+        user_id="2",
+        groups=["users"],
+        is_admin=False,
+    )
+    insight = service.analyze_table(AnalyzeTableRequest(full_name="demo.default.customers"), user)
+    dac = next(s for s in insight.suggestions if s.kind.value == "data_access")
+    assert dac.already_held is True
+    assert dac.requestable is False
+    assert dac.request_path is None
+    assert "already hold" in dac.reason.lower()
 
 
 def test_analyze_table_dac_without_definition_does_not_fail(container) -> None:  # noqa: ANN001

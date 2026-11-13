@@ -24,7 +24,8 @@ import type {
   MaskRuleKind,
 } from "@/api/types";
 import { Alert, Badge, Card, ErrorAlert, PageHeader, Spinner, TablePager } from "@/components/ui";
-import { useClientPagination } from "@/hooks/useClientPagination";
+import { DataTableHead } from "@/components/ui/DataTableHead";
+import { useTableView, type TableColumn } from "@/hooks/useTableView";
 import styles from "../identity/IdentityPage.module.css";
 
 /** Builtin mask handlers offered in the rule form, with human-readable labels. */
@@ -236,21 +237,29 @@ function RulesTable({
   /** Deletes the rule with the given key. */
   onDelete: (ruleKey: string) => void;
 }) {
-  const pager = useClientPagination(rules);
+  const columns: TableColumn<(typeof rules)[number]>[] = [
+    {
+      key: "rule",
+      label: "Rule",
+      value: (rule) => rule.ruleKey,
+      filterText: (rule) => `${rule.ruleKey} ${rule.description ?? ""}`,
+    },
+    { key: "kind", label: "Kind", value: (rule) => rule.kind },
+    { key: "handler", label: "Handler", value: (rule) => rule.handler },
+    {
+      key: "expression",
+      label: "Expression / params",
+      value: (rule) => (rule.kind === "custom" ? rule.expression ?? "" : JSON.stringify(rule.params ?? {})),
+    },
+    ...(isAdmin ? [{ key: "actions", label: "" }] : []),
+  ];
+  const pager = useTableView(rules, columns);
 
   return (
     <>
       <div className={styles.tableWrap}>
         <table className={styles.table} aria-label="Mask rules">
-          <thead>
-            <tr>
-              <th>Rule</th>
-              <th>Kind</th>
-              <th>Handler</th>
-              <th>Expression / params</th>
-              {isAdmin && <th />}
-            </tr>
-          </thead>
+          <DataTableHead view={pager} />
           <tbody>
             {pager.rows.map((rule) => (
               <tr key={rule.ruleKey}>
@@ -345,6 +354,12 @@ function RuleForm({
   const [samples, setSamples] = useState<MaskHandlerSampleResult[]>([]);
   const [validationToken, setValidationToken] = useState<string | null>(null);
 
+  const sampleColumns: TableColumn<MaskHandlerSampleResult>[] = [
+    { key: "input", label: "Input", value: (sample) => sample.input },
+    { key: "output", label: "Output", value: (sample) => sample.output ?? "" },
+    { key: "error", label: "Error", value: (sample) => sample.error ?? "" },
+  ];
+  const sampleView = useTableView(samples, sampleColumns, { paginate: false });
   const keyOk = /^[a-z][a-z0-9_]{0,62}$/.test(ruleKey.trim().toLowerCase());
   const canSave =
     keyOk &&
@@ -477,15 +492,9 @@ function RuleForm({
       {kind === "custom" && samples.length > 0 && (
         <div className={styles.tableWrap}>
           <table className={styles.table} aria-label="Validation samples">
-            <thead>
-              <tr>
-                <th>Input</th>
-                <th>Output</th>
-                <th>Error</th>
-              </tr>
-            </thead>
+            <DataTableHead view={sampleView} />
             <tbody>
-              {samples.map((sample) => (
+              {sampleView.rows.map((sample) => (
                 <tr key={`${sample.input}-${sample.output}-${sample.error}`}>
                   <td>
                     <code>{sample.input}</code>

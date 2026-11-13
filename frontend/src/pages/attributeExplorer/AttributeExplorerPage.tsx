@@ -21,12 +21,18 @@ import type {
   UnlockedTable,
 } from "@/api/types";
 import { Alert, Badge, Card, ErrorAlert, PageHeader, Spinner, TablePager } from "@/components/ui";
-import { useClientPagination } from "@/hooks/useClientPagination";
+import { DataTableHead } from "@/components/ui/DataTableHead";
+import { useTableView, type TableColumn } from "@/hooks/useTableView";
 import styles from "../identity/IdentityPage.module.css";
 
 /**
  * Classify a definition for the attribute picker.
  */
+/** Formats an expiry for display, or an em dash when none is set. */
+function formatExpiry(value: string | null | undefined): string {
+  return value ? new Date(value).toLocaleString() : "—";
+}
+
 function definitionKind(
   item: AttributeDefinition,
   accessTagKey: string,
@@ -281,7 +287,20 @@ function HoldersTable({
   revokeError: Error | null;
   onRevoke: (assignmentId: string) => void;
 }) {
-  const pager = useClientPagination(holders, { resetKey });
+  const holderColumns: TableColumn<AttributeHolder>[] = [
+    {
+      key: "principal",
+      label: "Principal",
+      value: (item) => item.principalName,
+      filterText: (item) => `${item.principalType} ${item.principalName}`,
+    },
+    { key: "type", label: "Type", value: (item) => item.principalType },
+    { key: "value", label: "Assigned value", value: (item) => item.attributeValue },
+    { key: "match", label: "Match", value: (item) => item.match },
+    { key: "expires", label: "Expires", value: (item) => item.expiresAt, filterText: (item) => formatExpiry(item.expiresAt) },
+    { key: "actions", label: "Actions" },
+  ];
+  const pager = useTableView(holders, holderColumns, { resetKey });
   return (
     <Card title="Holders" actions={<Badge>{holders.length}</Badge>}>
       {holders.length === 0 ? (
@@ -290,16 +309,7 @@ function HoldersTable({
         <>
           <div className={styles.tableWrap}>
             <table className={styles.table} aria-label="Holders">
-              <thead>
-                <tr>
-                  <th>Principal</th>
-                  <th>Type</th>
-                  <th>Assigned value</th>
-                  <th>Match</th>
-                  <th>Expires</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
+              <DataTableHead view={pager} />
               <tbody>
                 {pager.rows.map((item) => (
                   <tr key={item.assignmentId}>
@@ -357,7 +367,18 @@ function PrincipalsTable({
   principals: AttributePrincipalSummary[];
   resetKey: string;
 }) {
-  const pager = useClientPagination(principals, { resetKey });
+  const principalColumns: TableColumn<AttributePrincipalSummary>[] = [
+    {
+      key: "principal",
+      label: "Principal",
+      value: (item) => item.principalName,
+      filterText: (item) => `${item.principalType} ${item.principalName}`,
+    },
+    { key: "type", label: "Type", value: (item) => item.principalType },
+    { key: "values", label: "Values", value: (item) => item.values.join(", ") },
+    { key: "expires", label: "Expires (soonest)", value: (item) => item.expiresAt, filterText: (item) => formatExpiry(item.expiresAt) },
+  ];
+  const pager = useTableView(principals, principalColumns, { resetKey });
   return (
     <Card title="Principals" actions={<Badge>{principals.length}</Badge>}>
       {principals.length === 0 ? (
@@ -366,14 +387,7 @@ function PrincipalsTable({
         <>
           <div className={styles.tableWrap}>
             <table className={styles.table} aria-label="Principals">
-              <thead>
-                <tr>
-                  <th>Principal</th>
-                  <th>Type</th>
-                  <th>Values</th>
-                  <th>Expires (soonest)</th>
-                </tr>
-              </thead>
+              <DataTableHead view={pager} />
               <tbody>
                 {pager.rows.map((item) => (
                   <tr key={`${item.principalType}:${item.principalName}`}>
@@ -415,7 +429,13 @@ function PrincipalsTable({
  * Reviewed tables unlocked by a data-access path.
  */
 function UnlockedTablesTable({ tables, resetKey }: { tables: UnlockedTable[]; resetKey: string }) {
-  const pager = useClientPagination(tables, { resetKey });
+  const unlockedColumns: TableColumn<UnlockedTable>[] = [
+    { key: "table", label: "Table", value: (item) => item.fullName },
+    { key: "tagValue", label: "Tag value", value: (item) => item.tagValue },
+    { key: "match", label: "Match", value: (item) => item.match },
+    { key: "group", label: "Group", value: (item) => item.groupName ?? "" },
+  ];
+  const pager = useTableView(tables, unlockedColumns, { resetKey });
   return (
     <Card title="Tables unlocked" actions={<Badge>{tables.length}</Badge>}>
       {tables.length === 0 ? (
@@ -426,14 +446,7 @@ function UnlockedTablesTable({ tables, resetKey }: { tables: UnlockedTable[]; re
         <>
           <div className={styles.tableWrap}>
             <table className={styles.table} aria-label="Tables unlocked">
-              <thead>
-                <tr>
-                  <th>Table</th>
-                  <th>Tag value</th>
-                  <th>Match</th>
-                  <th>Group</th>
-                </tr>
-              </thead>
+              <DataTableHead view={pager} />
               <tbody>
                 {pager.rows.map((item) => (
                   <tr key={item.fullName}>

@@ -43,12 +43,11 @@ On a metastore without Default Storage or a root location, set `catalog_managed_
 ## Configuration
 
 Deployment settings are bundle variables (`databricks.yml`). Override them per target or at
-deploy time, for example `./scripts/deploy.sh dev --var warehouse_id=<id>`.
+deploy time, for example `./scripts/deploy.sh dev --var admin_group=<group>`.
 
 | Variable | Default | |
 | --- | --- | --- |
 | `storage_backend` | `lakebase` | `lakebase` or `delta` |
-| `warehouse_id` | per target | SQL warehouse for metadata queries and Delta storage |
 | `app_catalog` / `app_schema` | `data_governance_app` / `app` | Delta storage location |
 | `catalog_managed_location` | empty | Storage location for new catalogs |
 | `lakebase_project_id`, `lakebase_database_id` | `data-governance-app`, `governance` | Lakebase storage |

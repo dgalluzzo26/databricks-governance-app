@@ -35,7 +35,7 @@ resources:
       resources:
         - name: sql-warehouse
           sql_warehouse:
-            id: ${var.warehouse_id}
+            id: ${resources.sql_warehouses.app_warehouse.id}
             permission: CAN_USE
         - name: postgres
           postgres:

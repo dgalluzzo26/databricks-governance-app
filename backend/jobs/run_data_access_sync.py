@@ -16,6 +16,7 @@ import argparse
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 
 # Bundle deploys this file under ``.../files/backend/jobs/``; repo root is two up.
@@ -125,15 +126,26 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("Invalid trigger %r (expected schedule or user)", args.trigger)
         return 1
 
+    preflight: dict[str, float] = {}
     try:
         _apply_env_from_args(args)
+        started = time.perf_counter()
         ensure_lakebase_env()
+        preflight["job.lakebase_env"] = time.perf_counter() - started
+        started = time.perf_counter()
         hydrate_admin_secrets()
+        preflight["job.admin_secrets"] = time.perf_counter() - started
         get_config.cache_clear()
         config = get_config()
+        started = time.perf_counter()
         container = ServiceContainer.build(config)
-        # App SP owns Lakebase tables and runs DDL; Job only needs a live connection.
-        container.startup(migrate_storage=False, sync_schedule=False)
+        preflight["job.container_build"] = time.perf_counter() - started
+        # App SP owns Lakebase tables and runs DDL; Job only needs a live connection. The UC
+        # mirror is for ABAC UDFs and the app keeps it current, so the grants sync skips it.
+        started = time.perf_counter()
+        container.startup(migrate_storage=False, sync_schedule=False, mirror_uc=False)
+        preflight["job.container_startup"] = time.perf_counter() - started
+        logger.info("Job preflight seconds: %s", {k: round(v, 2) for k, v in preflight.items()})
         try:
             settings = container.data_access.get_settings().settings
             if trigger == SyncTrigger.SCHEDULE and not settings.schedule_enabled:
@@ -148,6 +160,7 @@ def main(argv: list[str] | None = None) -> int:
                 trigger=trigger,
                 mode=mode,
                 run_id=run_id,
+                preflight=preflight,
             )
             if run.status == SyncRunStatus.FAILED:
                 logger.error("Data-access %s %s failed: %s", mode, run.run_id, run.error)

@@ -8,6 +8,9 @@ import { useState } from "react";
 import { useDataAccessAnalyticsGrants, useDataAccessAnalyticsRuns } from "@/api/queries";
 import type { DataAccessViewPage } from "@/api/types";
 import { Alert, ErrorAlert, Spinner, TablePager } from "@/components/ui";
+import { DataTableHead } from "@/components/ui/DataTableHead";
+import { useServerTableView } from "@/hooks/useServerTableView";
+import type { TableColumn } from "@/hooks/useTableView";
 import type { TablePageSize } from "@/components/ui";
 import identityStyles from "../identity/IdentityPage.module.css";
 import styles from "./DataAccessAnalyticsPage.module.css";
@@ -71,16 +74,43 @@ function usePaging() {
   };
 }
 
+/** Run-history columns. Keys match the backend `RUNS_VIEW_COLUMNS` whitelist. */
+const RUN_COLUMNS: TableColumn<unknown>[] = [
+  { key: "started", label: "Started", sortable: true, filterable: true },
+  { key: "mode", label: "Mode", sortable: true, filterable: true },
+  { key: "status", label: "Status", sortable: true, filterable: true },
+  { key: "triggeredBy", label: "Triggered by", sortable: true, filterable: true },
+  { key: "duration", label: "Duration", sortable: true, filterable: true },
+  { key: "grants", label: "Grants +/−", sortable: true, filterable: true },
+  { key: "members", label: "Members +/−", sortable: true, filterable: true },
+  { key: "errors", label: "Errors", sortable: true, filterable: true },
+  { key: "fingerprint", label: "Fingerprint", sortable: true, filterable: true },
+];
+
+/** Planned grant-change columns. Keys match the backend `GRANTS_VIEW_COLUMNS` whitelist. */
+const GRANT_COLUMNS: TableColumn<unknown>[] = [
+  { key: "started", label: "Started", sortable: true, filterable: true },
+  { key: "mode", label: "Mode", sortable: true, filterable: true },
+  { key: "change", label: "Change", sortable: true, filterable: true },
+  { key: "securable", label: "Securable", sortable: true, filterable: true },
+  { key: "fullName", label: "Full name", sortable: true, filterable: true },
+  { key: "principal", label: "Principal", sortable: true, filterable: true },
+  { key: "privilege", label: "Privilege", sortable: true, filterable: true },
+  { key: "reason", label: "Reason", sortable: true, filterable: true },
+];
+
 /**
  * Paginated sync run history from `data_access_runs_v`, newest first.
  */
 export function RunHistoryTable() {
   const [mode, setMode] = useState<ModeFilter>("all");
   const paging = usePaging();
+  const view = useServerTableView(RUN_COLUMNS, { onChange: () => paging.setPageIndex(0) });
   const query = useDataAccessAnalyticsRuns({
     mode: mode === "all" ? undefined : mode,
     page: paging.page,
     pageSize: paging.pageSize,
+    ...view.query,
   });
   const data = query.data;
   const rows = data?.rows ?? [];
@@ -126,19 +156,7 @@ export function RunHistoryTable() {
       {data && data.available && rows.length > 0 ? (
         <div className={identityStyles.tableWrap}>
           <table className={identityStyles.table} aria-label="Sync run history">
-            <thead>
-              <tr>
-                <th>Started</th>
-                <th>Mode</th>
-                <th>Status</th>
-                <th>Triggered by</th>
-                <th>Duration</th>
-                <th>Grants +/−</th>
-                <th>Members +/−</th>
-                <th>Errors</th>
-                <th>Fingerprint</th>
-              </tr>
-            </thead>
+            <DataTableHead view={view} />
             <tbody>
               {rows.map((row) => {
                 const runId = text(row, "runId");
@@ -196,11 +214,13 @@ export function GrantChangesTable() {
   const [mode, setMode] = useState<ModeFilter>("all");
   const [change, setChange] = useState<ChangeFilter>("all");
   const paging = usePaging();
+  const view = useServerTableView(GRANT_COLUMNS, { onChange: () => paging.setPageIndex(0) });
   const query = useDataAccessAnalyticsGrants({
     mode: mode === "all" ? undefined : mode,
     change: change === "all" ? undefined : change,
     page: paging.page,
     pageSize: paging.pageSize,
+    ...view.query,
   });
   const data = query.data;
   const rows = data?.rows ?? [];
@@ -264,18 +284,7 @@ export function GrantChangesTable() {
       {data && data.available && rows.length > 0 ? (
         <div className={identityStyles.tableWrap}>
           <table className={identityStyles.table} aria-label="Planned grant changes">
-            <thead>
-              <tr>
-                <th>Started</th>
-                <th>Mode</th>
-                <th>Change</th>
-                <th>Securable</th>
-                <th>Full name</th>
-                <th>Principal</th>
-                <th>Privilege</th>
-                <th>Reason</th>
-              </tr>
-            </thead>
+            <DataTableHead view={view} />
             <tbody>
               {rows.map((row, index) => (
                 <tr key={`${text(row, "runId")}-${index}`}>

@@ -379,7 +379,10 @@ export interface AssignAttributeRequest {
 
 /** Optional filters for `GET /identity/assignments`; sent as snake_case query parameters. */
 export interface AssignmentListParams {
+  /** Exact principal name (case-insensitive). */
   principalName?: string;
+  /** Principals whose name contains this text (case-insensitive); used by the search box. */
+  principalSearch?: string;
   principalType?: PrincipalKind;
   attributeKey?: string;
   /** Include revoked and expired assignments (default `false`). */
@@ -775,6 +778,8 @@ export interface SuggestedAttribute {
   reason: string;
   /** Whether a request can be submitted now (e.g. `false` when the dimension has no definition yet). */
   requestable: boolean;
+  /** `true` when the user already holds this value; the UI shows "Already held" instead of a reviewer. */
+  alreadyHeld: boolean;
   /** In-app route that pre-fills the request form, e.g. `/identity?tab=request&key=...&value=...`. */
   requestPath: string | null;
   /** Columns that would be unmasked or unfiltered. */
@@ -865,6 +870,16 @@ export interface DataAccessSettings {
   scheduleMode: "dry_run" | "apply";
   conflictPolicy: DataAccessConflictPolicy;
   dryRun: boolean;
+  /** Cap on in-flight GRANT/REVOKE statements during apply (workers = size × clusters, up to this). */
+  grantConcurrency: number;
+  /** Parallel membership resolve and patch workers during apply. */
+  membershipConcurrency: number;
+  /** Raise the SQL warehouse's max clusters for the grants phase, then return to the baseline. */
+  warehouseAutoscale: boolean;
+  /** Warehouse max clusters during the grants phase. */
+  warehouseMaxClusters: number;
+  /** Warehouse max clusters after the grants phase. */
+  warehouseBaselineClusters: number;
 }
 
 /** Settings plus constants the UI needs (`GET /data-access/settings`). */
@@ -1479,4 +1494,53 @@ export interface PerformanceCapacitySetting {
 /** App, Lakebase, and warehouse sizing (`GET /performance/capacity`). */
 export interface PerformanceCapacity {
   settings: PerformanceCapacitySetting[];
+}
+
+/** One UTC day of app cost in USD, by billing source (list prices). */
+export interface AppCostDay {
+  usageDate: string;
+  /** Always-on Databricks Apps compute for this app. */
+  appUsd: number;
+  /** Dedicated SQL warehouse, all hours of the day. */
+  warehouseUsd: number;
+  /** Data-access sync job compute. */
+  jobUsd: number;
+}
+
+/** App cost report (`GET /performance/app-cost`). Amounts are list prices, not invoice amounts. */
+export interface AppCostReport {
+  available: boolean;
+  detail: string | null;
+  appName: string;
+  dedicatedWarehouseId: string | null;
+  days: number;
+  generatedAt: string;
+  /** App compute so far today (partial day). */
+  todayAppUsd: number;
+  /** App compute over the last seven UTC days, today included. */
+  appUsdLast7Days: number;
+  /** Average app compute per day that has usage; null when there is none. */
+  appUsdPerActiveDay: number | null;
+  /** Finished sync runs (dry-run and apply) in the window. */
+  syncCount: number;
+  /** Warehouse and job cost that falls inside those runs' start and finish times. */
+  syncUsd: number;
+  /** `syncUsd / syncCount`; null with no syncs. */
+  avgUsdPerSync: number | null;
+  /** Usage records with no list price (counted as $0). */
+  unpricedRecords: number;
+  lagNote: string;
+  daily: AppCostDay[];
+}
+
+/**
+ * Server-side sort and column filters for paged tables. Sent as `sort`, `direction`, and
+ * `filters` (JSON object of column key to text). Blank filters are not sent.
+ */
+export interface TableQueryParams {
+  /** Column key from the endpoint's whitelist; omit for the default order. */
+  sort?: string;
+  direction?: "asc" | "desc";
+  /** Case-insensitive "contains" text per column key. */
+  filters?: Record<string, string>;
 }

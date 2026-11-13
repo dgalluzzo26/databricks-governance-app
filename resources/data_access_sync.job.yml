@@ -39,7 +39,7 @@ resources:
               - "--trigger={{job.parameters.trigger}}"
               - "--actor={{job.parameters.actor}}"
               - "--run_id={{job.parameters.run_id}}"
-              - "--warehouse-id=${var.warehouse_id}"
+              - "--warehouse-id=${resources.sql_warehouses.app_warehouse.id}"
               - "--storage-backend=${var.storage_backend}"
               - "--app-catalog=${var.app_catalog}"
               - "--app-schema=${var.app_schema}"

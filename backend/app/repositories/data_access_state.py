@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from datetime import datetime
+from typing import Any
 
 from backend.app.models.data_access_pending import (
     GapItem,
@@ -13,6 +15,7 @@ from backend.app.models.data_access_pending import (
     TagChange,
     TagSnapshotRow,
 )
+from backend.app.services.table_query import TableQuery, sort_and_filter
 
 STRUCTURE_KINDS = (GapKind.GROUP_CREATE, GapKind.GROUP_NEST, GapKind.GRANT_ADD)
 MEMBER_KINDS = (GapKind.MEMBER_ADD, GapKind.MEMBER_REMOVE)
@@ -22,6 +25,34 @@ def _matches_query(item: GapItem, needle: str) -> bool:
     """True when any searchable field of ``item`` contains ``needle`` (lowercase)."""
     fields = (item.group_name, item.principal_name, item.full_name, item.value)
     return any(needle in (f or "").lower() for f in fields)
+
+
+# In-memory sort and filter readers. Keys match the frontend column keys and the SQL maps in
+# ``lakebase.py`` so both backends sort and filter the same text.
+GAP_ITEM_READERS: dict[str, Callable[[GapItem], Any]] = {
+    "kind": lambda item: item.kind.value,
+    "change": lambda item: " ".join(
+        part
+        for part in (
+            item.group_name,
+            item.principal_name,
+            item.full_name,
+            item.privilege,
+            item.securable_type,
+        )
+        if part
+    ),
+    "path": lambda item: item.value,
+    "status": lambda item: item.status.value,
+    "reason": lambda item: " ".join(part for part in (item.reason, item.error) if part),
+}
+TAG_CHANGE_READERS: dict[str, Callable[[TagChange], Any]] = {
+    "table": lambda change: change.full_name,
+    "change": lambda change: change.change.value,
+    "before": lambda change: change.old_value,
+    "after": lambda change: change.new_value,
+    "detected": lambda change: change.detected_at,
+}
 
 
 class DataAccessStateRepository(ABC):
@@ -46,7 +77,14 @@ class DataAccessStateRepository(ABC):
 
     @abstractmethod
     def gap_page(
-        self, *, kind: str | None, status: str | None, query: str | None, limit: int, offset: int
+        self,
+        *,
+        kind: str | None,
+        status: str | None,
+        query: str | None,
+        limit: int,
+        offset: int,
+        table_query: TableQuery | None = None,
     ) -> tuple[list[GapItem], int]:
         """Return one page of outstanding items and the matching total.
 
@@ -56,6 +94,7 @@ class DataAccessStateRepository(ABC):
             query: Optional case-insensitive substring over group, principal, securable, and value.
             limit: Page size.
             offset: Rows to skip.
+            table_query: Optional column sort and filters.
 
         Returns:
             The page rows (ordered by kind then key) and the total.
@@ -91,7 +130,13 @@ class DataAccessStateRepository(ABC):
 
     @abstractmethod
     def tag_changes_page(
-        self, *, change: str | None, run_id: str | None, limit: int, offset: int
+        self,
+        *,
+        change: str | None,
+        run_id: str | None,
+        limit: int,
+        offset: int,
+        table_query: TableQuery | None = None,
     ) -> tuple[list[TagChange], int]:
         """Return one page of tag changes, newest first, and the matching total."""
 
@@ -149,7 +194,14 @@ class InMemoryDataAccessStateRepository(DataAccessStateRepository):
         return counts
 
     def gap_page(
-        self, *, kind: str | None, status: str | None, query: str | None, limit: int, offset: int
+        self,
+        *,
+        kind: str | None,
+        status: str | None,
+        query: str | None,
+        limit: int,
+        offset: int,
+        table_query: TableQuery | None = None,
     ) -> tuple[list[GapItem], int]:
         """Filter, order, and slice the outstanding list."""
         needle = (query or "").strip().lower()
@@ -160,7 +212,12 @@ class InMemoryDataAccessStateRepository(DataAccessStateRepository):
             and (not status or i.status.value == status)
             and (not needle or _matches_query(i, needle))
         ]
-        rows.sort(key=lambda i: (i.kind.value, i.item_key))
+        rows = sort_and_filter(
+            rows,
+            table_query or TableQuery(),
+            GAP_ITEM_READERS,
+            default_key=lambda i: (i.kind.value, i.item_key),
+        )
         return rows[offset : offset + limit], len(rows)
 
     def gap_structure_values(self) -> set[str]:
@@ -199,15 +256,27 @@ class InMemoryDataAccessStateRepository(DataAccessStateRepository):
         self._changes.extend(changes)
 
     def tag_changes_page(
-        self, *, change: str | None, run_id: str | None, limit: int, offset: int
+        self,
+        *,
+        change: str | None,
+        run_id: str | None,
+        limit: int,
+        offset: int,
+        table_query: TableQuery | None = None,
     ) -> tuple[list[TagChange], int]:
-        """Filter, order newest first, and slice."""
+        """Filter, order newest first (unless sorted), and slice."""
         rows = [
             c
             for c in self._changes
             if (not change or c.change.value == change) and (not run_id or c.run_id == run_id)
         ]
-        rows.sort(key=lambda c: (c.detected_at, c.full_name), reverse=True)
+        rows = sort_and_filter(
+            rows,
+            table_query or TableQuery(),
+            TAG_CHANGE_READERS,
+            default_key=lambda c: (c.detected_at, c.full_name),
+            default_descending=True,
+        )
         return rows[offset : offset + limit], len(rows)
 
     def tag_change_counts(self, run_id: str) -> dict[str, int]:

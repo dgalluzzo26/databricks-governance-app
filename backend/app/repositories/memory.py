@@ -152,6 +152,9 @@ class InMemoryIdentityAttributeRepository(IdentityAttributeRepository):
         if criteria.principal_name:
             needle = criteria.principal_name.lower()
             items = [a for a in items if a.principal_name.lower() == needle]
+        if criteria.principal_search:
+            contains = criteria.principal_search.lower()
+            items = [a for a in items if contains in a.principal_name.lower()]
         if criteria.principal_type:
             items = [a for a in items if a.principal_type == criteria.principal_type]
         if criteria.attribute_key:

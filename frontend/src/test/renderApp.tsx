@@ -42,6 +42,7 @@ import type {
   GapItemPage,
   PendingSummary,
   TagChangePage,
+  AppCostReport,
   PerformanceCapacity,
   PerformanceSlowRequestPage,
   PerformanceSummary,
@@ -163,6 +164,11 @@ export const testDataAccessSettings: DataAccessSettingsView = {
     scheduleMode: "dry_run",
     conflictPolicy: "hold",
     dryRun: true,
+    grantConcurrency: 64,
+    membershipConcurrency: 8,
+    warehouseAutoscale: false,
+    warehouseMaxClusters: 8,
+    warehouseBaselineClusters: 4,
   },
   minIntervalMinutes: 5,
   applyAvailable: true,
@@ -523,6 +529,7 @@ export const testTableAccessInsight: TableAccessInsight = {
       attributeValue: "finance.budget.PII.Name",
       reason: "Unmask 1 column(s) that require sensitivity path finance.budget.PII.Name. App admins will review (no category approvers configured).",
       requestable: true,
+      alreadyHeld: false,
       requestPath: "/identity?tab=request&value=finance.budget.PII.Name",
       columnNames: ["s_name"],
       coversPaths: ["finance.budget.PII.Name"],
@@ -537,9 +544,25 @@ export const testTableAccessInsight: TableAccessInsight = {
       attributeValue: "*",
       reason: "Row filter uses state. Request * to see all rows. App admins will review.",
       requestable: true,
+      alreadyHeld: false,
       requestPath: null,
       columnNames: ["s_open"],
       coversPaths: ["*"],
+      isHierarchyParent: false,
+      routedTo: "app_admins",
+      resolvedCategory: null,
+      approvers: [],
+    },
+    {
+      kind: "data_access",
+      attributeKey: "data_access",
+      attributeValue: "finance",
+      reason: "You already hold data_access=finance",
+      requestable: false,
+      alreadyHeld: true,
+      requestPath: null,
+      columnNames: [],
+      coversPaths: [],
       isHierarchyParent: false,
       routedTo: "app_admins",
       resolvedCategory: null,
@@ -551,6 +574,7 @@ export const testTableAccessInsight: TableAccessInsight = {
       attributeValue: "CA",
       reason: "Row filter on column s_open: request state=CA to see matching rows.",
       requestable: true,
+      alreadyHeld: false,
       requestPath: null,
       columnNames: ["s_open"],
       coversPaths: ["CA"],
@@ -858,6 +882,28 @@ export const testPerformanceSlowRequests: PerformanceSlowRequestPage = {
   pageSize: 25,
 };
 
+/** Sample app cost: one day of app compute, one sync whose warehouse and job cost is $5.50. */
+export const testAppCost: AppCostReport = {
+  available: true,
+  detail: null,
+  appName: "data-governance-app",
+  dedicatedWarehouseId: "wh-app",
+  days: 30,
+  generatedAt: "2026-11-13T12:00:00Z",
+  todayAppUsd: 1.5,
+  appUsdLast7Days: 7.5,
+  appUsdPerActiveDay: 2.5,
+  syncCount: 1,
+  syncUsd: 5.5,
+  avgUsdPerSync: 5.5,
+  unpricedRecords: 0,
+  lagNote: "Billing data lags real usage by up to about a day.",
+  daily: [
+    { usageDate: "2026-11-12", appUsd: 1, warehouseUsd: 0, jobUsd: 0 },
+    { usageDate: "2026-11-13", appUsd: 1.5, warehouseUsd: 8, jobUsd: 0.5 },
+  ],
+};
+
 /** Sample sizing: app and warehouse readable, Lakebase unavailable. */
 export const testPerformanceCapacity: PerformanceCapacity = {
   settings: [
@@ -1056,6 +1102,7 @@ export function fakeServices(
     performanceSummary?: PerformanceSummary | Error;
     performanceSlowRequests?: PerformanceSlowRequestPage | Error;
     performanceCapacity?: PerformanceCapacity | Error;
+    performanceAppCost?: AppCostReport | Error;
   } = {},
 ): ApiServices {
   const governedTags = overrides.governedTags ?? testGovernedTags;
@@ -1114,6 +1161,10 @@ export function fakeServices(
       capacity: async () => {
         if (overrides.performanceCapacity instanceof Error) return Promise.reject(overrides.performanceCapacity);
         return overrides.performanceCapacity ?? testPerformanceCapacity;
+      },
+      appCost: async (days: number) => {
+        if (overrides.performanceAppCost instanceof Error) return Promise.reject(overrides.performanceAppCost);
+        return { ...(overrides.performanceAppCost ?? testAppCost), days };
       },
     },
     recovery: {

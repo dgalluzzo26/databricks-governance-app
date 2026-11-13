@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from backend.app.clients.workspace import WorkspaceClientFactory
 from backend.app.core.config import AppConfig
@@ -12,10 +14,12 @@ from backend.app.models.performance import (
     CapacitySetting,
     PerformanceSummary,
     RecommendationTarget,
+    SlowRequest,
     SlowRequestPage,
 )
 from backend.app.repositories.base import StorageProvider
 from backend.app.services.performance_analytics import build_summary, slow_requests
+from backend.app.services.table_query import TableQuery, sort_and_filter
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +27,20 @@ DEFAULT_HOURS = 24
 MAX_HOURS = 24 * 14
 SLOW_PAGE_SIZE_DEFAULT = 25
 SLOW_PAGE_SIZE_MAX = 100
+
+
+# In-memory readers for the slow-request table. Keys match the frontend column keys.
+SLOW_REQUEST_READERS: dict[str, Callable[[SlowRequest], Any]] = {
+    "when": lambda item: item.recorded_at,
+    "activity": lambda item: f"{item.activity} {item.method} {item.route}",
+    "status": lambda item: item.status_code,
+    "total": lambda item: item.duration_ms,
+    "expected": lambda item: item.expected_ms,
+    "warehouse": lambda item: item.warehouse_ms,
+    "lakebase": lambda item: item.lakebase_ms,
+    "app": lambda item: item.app_ms,
+    "user": lambda item: item.user_name,
+}
 
 
 class PerformanceService:
@@ -59,12 +77,27 @@ class PerformanceService:
         return build_summary(metrics, now=now, hours=window)
 
     def slow_requests(
-        self, *, hours: int | None = None, page: int = 1, page_size: int = SLOW_PAGE_SIZE_DEFAULT
+        self,
+        *,
+        hours: int | None = None,
+        page: int = 1,
+        page_size: int = SLOW_PAGE_SIZE_DEFAULT,
+        table_query: TableQuery | None = None,
     ) -> SlowRequestPage:
-        """One page of slow requests, newest first."""
+        """One page of slow requests, newest first unless sorted.
+
+        Args:
+            hours: Window length in hours.
+            page: 1-based page.
+            page_size: Rows per page.
+            table_query: Optional column sort and filters applied before paging.
+
+        Returns:
+            The page and total.
+        """
         window = self.clamp_hours(hours)
         _, metrics = self._window(window)
-        rows = slow_requests(metrics)
+        rows = sort_and_filter(slow_requests(metrics), table_query or TableQuery(), SLOW_REQUEST_READERS)
         size = min(max(1, page_size), SLOW_PAGE_SIZE_MAX)
         start = (max(1, page) - 1) * size
         return SlowRequestPage(

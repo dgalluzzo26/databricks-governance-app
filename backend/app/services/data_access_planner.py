@@ -240,6 +240,12 @@ def plan_data_access(
         group_to_value[name.lower()] = value
 
     existing_lower = {g.lower() for g in existing_groups}
+    # Parent→child links already present as GROUP members (skip re-PATCHing on apply).
+    existing_nests = {
+        (m.group_name.lower(), m.principal_name.lower())
+        for m in (actual_members or [])
+        if (m.principal_type or "").upper() == "GROUP"
+    }
     groups: list[PlannedGroup] = []
     for value in values:
         name = value_to_group.get(value)
@@ -247,12 +253,14 @@ def plan_data_access(
             continue
         parent = parent_value(value, settings.hierarchy_separator, known_values)
         parent_group = value_to_group.get(parent) if parent else None
+        nest_exists = parent_group is not None and (name.lower(), parent_group.lower()) in existing_nests
         groups.append(
             PlannedGroup(
                 name=name,
                 value=value,
                 parent_group=parent_group,
                 exists=name.lower() in existing_lower,
+                nest_exists=nest_exists,
             )
         )
 
@@ -407,9 +415,7 @@ def _membership_changes(
         if group is None:
             continue
         # Only plan membership for groups in this plan (or that would be created).
-        if group.lower() not in managed_groups and group.lower() not in {
-            g.name.lower() for g in groups
-        }:
+        if group.lower() not in managed_groups and group.lower() not in {g.name.lower() for g in groups}:
             # Still allow assignment→group when the value maps to a planned group.
             if value not in value_to_group:
                 continue
@@ -424,12 +430,8 @@ def _membership_changes(
     changes: list[MembershipChange] = []
     for key, row in sorted(desired.items(), key=lambda item: (item[0][0], item[0][1])):
         group_l, principal_l = key
-        group_name_display = managed_groups.get(group_l) or value_to_group.get(
-            row.attribute_value, group_l
-        )
-        present = any(
-            m.principal_name.lower() == principal_l for m in actual_by_group.get(group_l, [])
-        )
+        group_name_display = managed_groups.get(group_l) or value_to_group.get(row.attribute_value, group_l)
+        present = any(m.principal_name.lower() == principal_l for m in actual_by_group.get(group_l, []))
         if not present:
             changes.append(
                 MembershipChange(
@@ -445,10 +447,14 @@ def _membership_changes(
         for member in actual_by_group.get(group.name.lower(), []):
             member_type = (member.principal_type or "UNKNOWN").upper()
             # Never remove nested parent dac_* groups used for inheritance.
-            if member_type == "GROUP" and (
-                group.name.lower(),
-                member.principal_name.lower(),
-            ) in nested_parents:
+            if (
+                member_type == "GROUP"
+                and (
+                    group.name.lower(),
+                    member.principal_name.lower(),
+                )
+                in nested_parents
+            ):
                 continue
             if member_type == "GROUP" and member.principal_name.lower().startswith(managed_prefix):
                 # Other managed-group nesting edges are left alone.
@@ -553,9 +559,7 @@ def _fingerprint(
         key=lambda m: (m.action.value, m.group.lower(), m.principal_name.lower()),
     ):
         if change.action == MembershipAction.ADD:
-            parts.append(
-                f"m:{change.group.lower()}|{change.principal_name.lower()}|{change.principal_type}"
-            )
+            parts.append(f"m:{change.group.lower()}|{change.principal_name.lower()}|{change.principal_type}")
     digest = hashlib.sha256("\n".join(parts).encode()).hexdigest()
     return digest[:16]
 

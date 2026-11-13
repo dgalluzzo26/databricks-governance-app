@@ -6,6 +6,7 @@
  * Lakebase, so the page reflects real traffic in the chosen window.
  */
 import { useMemo, useState } from "react";
+import { useServerTableView } from "@/hooks/useServerTableView";
 import {
   Bar,
   BarChart,
@@ -19,6 +20,7 @@ import {
   YAxis,
 } from "recharts";
 import {
+  usePerformanceAppCost,
   usePerformanceCapacity,
   usePerformanceSlowRequests,
   usePerformanceSummary,
@@ -37,6 +39,8 @@ import type { TablePageSize } from "@/components/ui";
 import type { BadgeTone } from "@/components/ui/Badge";
 import identityStyles from "../identity/IdentityPage.module.css";
 import styles from "./PerformancePage.module.css";
+import { useTableView, type TableColumn } from "@/hooks/useTableView";
+import { DataTableHead } from "@/components/ui/DataTableHead";
 
 const WINDOW_OPTIONS = [
   { hours: 1, label: "Last hour" },
@@ -218,26 +222,31 @@ function LatencyChart({ rows }: { rows: HourRow[] }) {
 
 /** Per-activity latency table, slowest p95 first. */
 function ActivityTable({ rows }: { rows: PerformanceActivity[] }) {
+  const columns: TableColumn<PerformanceActivity>[] = [
+    {
+      key: "activity",
+      label: "Activity",
+      value: (row) => row.activity,
+      filterText: (row) => `${row.activity} ${row.method} ${row.route}`,
+    },
+    { key: "expected", label: "Expected", value: (row) => row.expectedMs },
+    { key: "requests", label: "Requests", value: (row) => row.count },
+    { key: "slow", label: "Slow", value: (row) => row.slowCount },
+    { key: "p50", label: "p50", value: (row) => row.p50Ms },
+    { key: "p95", label: "p95", value: (row) => row.p95Ms },
+    { key: "max", label: "Max", value: (row) => row.maxMs },
+    { key: "avgWarehouse", label: "Avg warehouse", value: (row) => row.avgWarehouseMs },
+    { key: "avgLakebase", label: "Avg Lakebase", value: (row) => row.avgLakebaseMs },
+    { key: "avgApp", label: "Avg app", value: (row) => row.avgAppMs },
+  ];
+  const view = useTableView(rows, columns, { paginate: false });
   if (rows.length === 0) return <p className={identityStyles.muted}>No requests in this window.</p>;
   return (
     <div className={identityStyles.tableWrap}>
       <table className={identityStyles.table} aria-label="Latency by activity">
-        <thead>
-          <tr>
-            <th>Activity</th>
-            <th>Expected</th>
-            <th>Requests</th>
-            <th>Slow</th>
-            <th>p50</th>
-            <th>p95</th>
-            <th>Max</th>
-            <th>Avg warehouse</th>
-            <th>Avg Lakebase</th>
-            <th>Avg app</th>
-          </tr>
-        </thead>
+        <DataTableHead view={view} />
         <tbody>
-          {rows.map((row) => (
+          {view.rows.map((row) => (
             <tr key={`${row.method} ${row.route}`}>
               <td>
                 {row.activity}
@@ -289,11 +298,25 @@ function CapacityList({ settings }: { settings: PerformanceCapacitySetting[] }) 
   );
 }
 
+/** Slow-request columns. Keys match the backend `SLOW_REQUEST_READERS` whitelist. */
+const SLOW_REQUEST_COLUMNS: TableColumn<unknown>[] = [
+  { key: "when", label: "When", sortable: true, filterable: true },
+  { key: "activity", label: "Activity", sortable: true, filterable: true },
+  { key: "status", label: "Status", sortable: true, filterable: true },
+  { key: "total", label: "Total", sortable: true, filterable: true },
+  { key: "expected", label: "Expected", sortable: true, filterable: true },
+  { key: "warehouse", label: "Warehouse", sortable: true, filterable: true },
+  { key: "lakebase", label: "Lakebase", sortable: true, filterable: true },
+  { key: "app", label: "App", sortable: true, filterable: true },
+  { key: "user", label: "User", sortable: true, filterable: true },
+];
+
 /** Paginated slow requests, newest first. */
 function SlowRequestsTable({ hours }: { hours: number }) {
   const [pageIndex, setPageIndex] = useState(0);
   const [pageSize, setPageSize] = useState<TablePageSize>(25);
-  const query = usePerformanceSlowRequests({ hours, page: pageIndex + 1, pageSize });
+  const view = useServerTableView(SLOW_REQUEST_COLUMNS, { onChange: () => setPageIndex(0) });
+  const query = usePerformanceSlowRequests({ hours, page: pageIndex + 1, pageSize, ...view.query });
   const data = query.data;
 
   if (query.isPending && !data) return <Spinner label="Loading slow requests" />;
@@ -304,19 +327,7 @@ function SlowRequestsTable({ hours }: { hours: number }) {
     <div className={styles.tableStack}>
       <div className={identityStyles.tableWrap}>
         <table className={identityStyles.table} aria-label="Slow requests">
-          <thead>
-            <tr>
-              <th>When</th>
-              <th>Activity</th>
-              <th>Status</th>
-              <th>Total</th>
-              <th>Expected</th>
-              <th>Warehouse</th>
-              <th>Lakebase</th>
-              <th>App</th>
-              <th>User</th>
-            </tr>
-          </thead>
+          <DataTableHead view={view} />
           <tbody>
             {data.items.map((item, index) => (
               <tr key={`${item.recordedAt}-${index}`}>
@@ -352,6 +363,122 @@ function SlowRequestsTable({ hours }: { hours: number }) {
     </div>
   );
 }
+
+const USD = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
+/**
+ * Formats a list-price USD amount for display.
+ *
+ * @param value - Amount in USD, or null when it cannot be computed.
+ */
+export function formatUsd(value: number | null | undefined): string {
+  return value == null ? "—" : USD.format(value);
+}
+
+const APP_COST_WINDOWS = [7, 14, 30] as const;
+
+/**
+ * App cost: Databricks Apps compute (today, last 7 days, per active day), average warehouse and
+ * job cost per sync, and a daily chart. Costs are list prices from billing system tables.
+ */
+function AppCostCard() {
+  const [days, setDays] = useState<number>(30);
+  const query = usePerformanceAppCost(days);
+  const report = query.data;
+  const chartRows = useMemo(
+    () =>
+      (report?.daily ?? []).map((day) => ({
+        label: day.usageDate.slice(5),
+        app: day.appUsd,
+        warehouse: day.warehouseUsd,
+        job: day.jobUsd,
+      })),
+    [report],
+  );
+
+  return (
+    <Card title="App cost">
+      <div className={identityStyles.toolbar}>
+        <div className={identityStyles.field}>
+          <label className={identityStyles.label} htmlFor="app-cost-window">
+            Cost period
+          </label>
+          <select
+            id="app-cost-window"
+            className={identityStyles.select}
+            value={days}
+            onChange={(event) => setDays(Number(event.target.value))}
+          >
+            {APP_COST_WINDOWS.map((option) => (
+              <option key={option} value={option}>
+                Last {option} days
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+      {query.isPending ? <Spinner label="Reading billing" /> : null}
+      {query.isError ? <ErrorAlert error={query.error} title="Could not read app cost" /> : null}
+      {report && !report.available ? (
+        <Alert tone="warning" title="App cost unavailable">
+          {report.detail ?? "Billing could not be read."}
+        </Alert>
+      ) : null}
+      {report?.available ? (
+        <>
+          <div className={styles.kpiGrid}>
+            <Kpi label="Today so far" value={formatUsd(report.todayAppUsd)} hint="App compute, partial day" />
+            <Kpi label="Last 7 days" value={formatUsd(report.appUsdLast7Days)} hint="App compute" />
+            <Kpi
+              label="Per active day"
+              value={formatUsd(report.appUsdPerActiveDay)}
+              hint="App compute, average"
+            />
+            <Kpi
+              label="Avg cost per sync"
+              value={formatUsd(report.avgUsdPerSync)}
+              hint={
+                report.syncCount > 0
+                  ? `${report.syncCount} sync${report.syncCount === 1 ? "" : "s"} · ${formatUsd(report.syncUsd)} warehouse and job`
+                  : "No finished syncs in this window"
+              }
+            />
+          </div>
+          <ResponsiveContainer width="100%" height={240}>
+            <BarChart data={chartRows} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
+              <XAxis dataKey="label" stroke="var(--color-text-muted)" />
+              <YAxis stroke="var(--color-text-muted)" width={72} tickFormatter={(value: number) => USD.format(value)} />
+              <Tooltip formatter={(value) => USD.format(Number(value))} />
+              <Legend />
+              <Bar dataKey="app" name="App compute" stackId="cost" fill={COST_COLORS.app} />
+              <Bar dataKey="warehouse" name="SQL warehouse" stackId="cost" fill={COST_COLORS.warehouse} />
+              <Bar dataKey="job" name="Sync job" stackId="cost" fill={COST_COLORS.job} />
+            </BarChart>
+          </ResponsiveContainer>
+          <p className={styles.caption}>{report.lagNote}</p>
+          {report.unpricedRecords > 0 ? (
+            <p className={styles.caption}>
+              {report.unpricedRecords} usage record{report.unpricedRecords === 1 ? "" : "s"} had no list price and
+              count as $0.
+            </p>
+          ) : null}
+        </>
+      ) : null}
+    </Card>
+  );
+}
+
+const COST_COLORS = {
+  app: "#9a3412",
+  warehouse: "#2272b4",
+  job: "#b45309",
+};
 
 /**
  * Health-monitor page for app admins.
@@ -446,6 +573,8 @@ export function PerformancePage() {
           Lakebase compute units.
         </p>
       </Card>
+
+      <AppCostCard />
 
       <Card title="Slow requests">
         <SlowRequestsTable key={hours} hours={hours} />

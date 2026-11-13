@@ -22,7 +22,8 @@ import type {
   TableSearchHit,
 } from "@/api/types";
 import { Alert, Badge, Card, ErrorAlert, PageHeader, Spinner, TablePager } from "@/components/ui";
-import { useClientPagination } from "@/hooks/useClientPagination";
+import { DataTableHead } from "@/components/ui/DataTableHead";
+import { useTableView, type TableColumn } from "@/hooks/useTableView";
 import styles from "../identity/IdentityPage.module.css";
 import { AccessExplorerTree } from "./AccessExplorerTree";
 import layout from "./AccessExplorerPage.module.css";
@@ -226,18 +227,21 @@ function SearchResultsTable({
   resetKey: string;
   onAnalyze: (fullName: string) => void;
 }) {
-  const pager = useClientPagination(tables, { resetKey });
+  const hitColumns: TableColumn<TableSearchHit>[] = [
+    {
+      key: "table",
+      label: "Table",
+      value: (hit) => `${hit.catalogName}.${hit.schemaName}.${hit.tableName}`,
+    },
+    { key: "actions", label: "" },
+  ];
+  const pager = useTableView(tables, hitColumns, { resetKey });
 
   return (
     <div style={{ marginTop: "var(--space-3)" }}>
   <div className={styles.tableWrap}>
     <table className={styles.table} aria-label="Table search results">
-      <thead>
-        <tr>
-          <th>Table</th>
-          <th />
-        </tr>
-      </thead>
+      <DataTableHead view={pager} />
       <tbody>
         {pager.rows.map((hit) => {
           const full = `${hit.catalogName}.${hit.schemaName}.${hit.tableName}`;
@@ -355,22 +359,35 @@ function ColumnAccessTable({
   columns: ColumnAccessInsight[];
   resetKey: string;
 }) {
-  const pager = useClientPagination(columns, { resetKey });
+  const accessColumns: TableColumn<ColumnAccessInsight>[] = [
+    {
+      key: "column",
+      label: "Column",
+      value: (col) => col.columnName,
+      filterText: (col) => `${col.columnName} ${col.dataType ?? ""}`,
+    },
+    { key: "state", label: "State", value: (col) => stateLabel(col.accessState) },
+    { key: "requiredPath", label: "Required path", value: (col) => col.requiredSensitivityPath ?? "" },
+    { key: "maskRule", label: "Mask rule", value: (col) => col.maskRuleKey ?? "" },
+    {
+      key: "handler",
+      label: "Handler",
+      value: (col) => col.maskHandler ?? "",
+      filterText: (col) => `${col.maskHandler ?? ""} ${col.maskKind ?? ""}`,
+    },
+    {
+      key: "notes",
+      label: "Notes",
+      value: (col) => col.notes ?? col.maskDescription ?? "",
+    },
+  ];
+  const pager = useTableView(columns, accessColumns, { resetKey });
 
   return (
     <>
       <div className={styles.tableWrap}>
         <table className={styles.table} aria-label="Column access">
-          <thead>
-            <tr>
-              <th>Column</th>
-              <th>State</th>
-              <th>Required path</th>
-              <th>Mask rule</th>
-              <th>Handler</th>
-              <th>Notes</th>
-            </tr>
-          </thead>
+          <DataTableHead view={pager} />
           <tbody>
             {pager.rows.map((col) => (
               <tr key={col.columnName}>
@@ -434,11 +451,13 @@ function suggestionKey(item: SuggestedAttribute): string {
 }
 
 /**
- * Reviewer label for a suggested attribute: category approver names, app admins, or not requestable.
+ * Reviewer label for a suggested attribute: category approver names, app admins, already held,
+ * or not requestable.
  *
  * @param item - Suggested attribute from the analyze response.
  */
 function routeLabel(item: SuggestedAttribute): string {
+  if (item.alreadyHeld) return "Already held";
   if (!item.requestable) return "Not requestable yet";
   if (item.routedTo === "category_approvers" && item.approvers.length) {
     return item.approvers.map((a) => `${a.principalName} (${a.principalType})`).join(", ");
@@ -787,6 +806,11 @@ function SuggestionsCard({
   );
 }
 
+/** Human label for the kind of suggested attribute (shown under the attribute key). */
+function kindLabelOf(item: SuggestedAttribute): string {
+  return item.kind === "row_filter" ? "row filter" : item.kind === "data_access" ? "data access" : "sensitivity";
+}
+
 /**
  * Checkbox table of suggested attributes with covers paths, related columns, and reviewer routing.
  *
@@ -817,21 +841,34 @@ function SuggestionTable({
   onValueChange?: (item: SuggestedAttribute, value: string) => void;
   allowedByKey?: Map<string, string[]>;
 }) {
+  const suggestionColumns: TableColumn<SuggestedAttribute>[] = [
+    { key: "select", label: "" },
+    {
+      key: "attribute",
+      label: "Attribute",
+      value: (item) => item.attributeKey,
+      filterText: (item) => `${item.attributeKey} ${kindLabelOf(item)}`,
+    },
+    {
+      key: "requestValue",
+      label: "Request value",
+      value: (item) => valueOverrides[suggestionKey(item)] ?? item.attributeValue,
+    },
+    {
+      key: "covers",
+      label: "Covers",
+      value: (item) => (item.coversPaths.length ? item.coversPaths : [item.attributeValue]).join(", "),
+    },
+    { key: "columns", label: "Columns", value: (item) => item.columnNames.join(", ") },
+    { key: "reviewedBy", label: "Reviewed by", value: (item) => routeLabel(item) },
+  ];
+  const view = useTableView(items, suggestionColumns, { paginate: false });
   return (
     <div className={styles.tableWrap}>
       <table className={styles.table} aria-label={label}>
-        <thead>
-          <tr>
-            <th />
-            <th>Attribute</th>
-            <th>Request value</th>
-            <th>Covers</th>
-            <th>Columns</th>
-            <th>Reviewed by</th>
-          </tr>
-        </thead>
+        <DataTableHead view={view} />
         <tbody>
-          {items.map((item) => {
+          {view.rows.map((item) => {
             const key = suggestionKey(item);
             const selectable = item.requestable;
             const editable =
@@ -845,12 +882,7 @@ function SuggestionTable({
                 )
               : [item.attributeValue];
             const requested = valueOverrides[key] ?? item.attributeValue;
-            const kindLabel =
-              item.kind === "row_filter"
-                ? "row filter"
-                : item.kind === "data_access"
-                  ? "data access"
-                  : "sensitivity";
+            const kindLabel = kindLabelOf(item);
             return (
               <tr key={`${key}:${item.isHierarchyParent}`}>
                 <td>

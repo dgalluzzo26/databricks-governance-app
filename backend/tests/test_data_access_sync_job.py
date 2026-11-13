@@ -91,7 +91,11 @@ def test_main_noops_when_schedule_paused(monkeypatch: pytest.MonkeyPatch) -> Non
     assert job.main(["--trigger=schedule"]) == 0
     assert data_access.calls == []
     assert container.started and container.stopped
-    assert container.startup_kwargs == {"migrate_storage": False, "sync_schedule": False}
+    assert container.startup_kwargs == {
+        "migrate_storage": False,
+        "sync_schedule": False,
+        "mirror_uc": False,
+    }
 
 
 def test_main_uses_settings_mode_and_returns_failure_status(monkeypatch: pytest.MonkeyPatch) -> None:

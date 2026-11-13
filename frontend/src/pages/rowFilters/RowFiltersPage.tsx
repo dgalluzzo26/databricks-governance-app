@@ -21,7 +21,8 @@ import {
 } from "@/api/queries";
 import type { RowFilterAttachment, RowFilterDimension } from "@/api/types";
 import { Alert, Badge, Card, ErrorAlert, PageHeader, Spinner, TablePager } from "@/components/ui";
-import { useClientPagination } from "@/hooks/useClientPagination";
+import { DataTableHead } from "@/components/ui/DataTableHead";
+import { useTableView, type TableColumn } from "@/hooks/useTableView";
 import styles from "../identity/IdentityPage.module.css";
 
 /** How a dimension's allowed values are sourced: a typed list or a seed SQL query. */
@@ -223,20 +224,29 @@ function DimensionsTable({
   /** Deletes the dimension. */
   onDelete: (key: string) => void;
 }) {
-  const pager = useClientPagination(dimensions);
+  const columns: TableColumn<(typeof dimensions)[number]>[] = [
+    {
+      key: "dimension",
+      label: "Dimension",
+      value: (dim) => dim.key,
+      filterText: (dim) => `${dim.key} ${dim.description ?? ""}`,
+    },
+    {
+      key: "values",
+      label: "Values",
+      value: (dim) => dim.allowedValueCount,
+      filterText: (dim) => dim.sampleValues.join(" "),
+    },
+    { key: "columns", label: "Columns", value: (dim) => dim.attachmentCount },
+    ...(isAdmin ? [{ key: "actions", label: "" }] : []),
+  ];
+  const pager = useTableView(dimensions, columns);
 
   return (
     <>
       <div className={styles.tableWrap}>
         <table className={styles.table} aria-label="Row filter dimensions">
-          <thead>
-            <tr>
-              <th>Dimension</th>
-              <th>Values</th>
-              <th>Columns</th>
-              {isAdmin && <th />}
-            </tr>
-          </thead>
+          <DataTableHead view={pager} />
           <tbody>
             {pager.rows.map((dim) => (
               <tr key={dim.key}>
@@ -599,20 +609,19 @@ function AttachmentsTable({
   /** Removes the row-filter tag from the given column. */
   onDetach: (attachment: RowFilterAttachment) => void;
 }) {
-  const pager = useClientPagination(attachments);
+  const columns: TableColumn<(typeof attachments)[number]>[] = [
+    { key: "table", label: "Table", value: (item) => item.tableFullName },
+    { key: "column", label: "Column", value: (item) => item.columnName },
+    { key: "dimension", label: "Dimension", value: (item) => item.dimension },
+    ...(isAdmin ? [{ key: "actions", label: "" }] : []),
+  ];
+  const pager = useTableView(attachments, columns);
 
   return (
     <>
       <div className={styles.tableWrap}>
         <table className={styles.table} aria-label="Filtered columns">
-          <thead>
-            <tr>
-              <th>Table</th>
-              <th>Column</th>
-              <th>Dimension</th>
-              {isAdmin && <th />}
-            </tr>
-          </thead>
+          <DataTableHead view={pager} />
           <tbody>
             {pager.rows.map((item) => (
               <tr key={`${item.tableFullName}.${item.columnName}`}>

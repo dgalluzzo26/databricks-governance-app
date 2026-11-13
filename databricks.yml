@@ -13,8 +13,6 @@ variables:
   app_name:
     description: Databricks App name (lowercase, hyphens, <= 26 chars)
     default: data-governance-app
-  warehouse_id:
-    description: SQL warehouse used for Unity Catalog metadata queries and Delta storage
   app_catalog:
     description: Catalog that holds the app's own Delta tables
     default: data_governance_app
@@ -61,8 +59,6 @@ targets:
     workspace:
       host: https://dbc-16303671-e52d.cloud.databricks.com
       profile: dbc-16303671-e52d
-    variables:
-      warehouse_id: dd0a656c3ddc883e
 
   # Same workspace, Delta storage backend. Uses its own names because each bundle target
   # owns the resources it creates.
@@ -71,7 +67,6 @@ targets:
       host: https://dbc-16303671-e52d.cloud.databricks.com
       profile: dbc-16303671-e52d
     variables:
-      warehouse_id: dd0a656c3ddc883e
       app_name: data-governance-app-dlt
       storage_backend: delta
       app_catalog: data_governance_app_delta

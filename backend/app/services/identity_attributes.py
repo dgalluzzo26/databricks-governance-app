@@ -313,7 +313,8 @@ class IdentityAttributeService:
         if not self._storage.identity_attributes.delete_definition(key):
             raise NotFoundError(f"Attribute definition '{key}' was not found")
         if self._uc_sync is not None:
-            self._uc_sync.repo.delete_definition(key)
+            with self._uc_sync.lock:
+                self._uc_sync.repo.delete_definition(key)
         self._audit("identity_attribute_definition.deleted", actor.user_name, {"key": key})
 
     def get_assignment(self, assignment_id: str) -> IdentityAttributeAssignment:
@@ -337,6 +338,7 @@ class IdentityAttributeService:
         self,
         *,
         principal_name: str | None = None,
+        principal_search: str | None = None,
         principal_type: PrincipalKind | None = None,
         attribute_key: str | None = None,
         include_inactive: bool = False,
@@ -344,7 +346,8 @@ class IdentityAttributeService:
         """List assignments matching optional filters.
 
         Args:
-            principal_name: Restrict to one principal.
+            principal_name: Restrict to one principal (exact match).
+            principal_search: Restrict to principals whose name contains this text.
             principal_type: Restrict to USER or GROUP principals.
             attribute_key: Restrict to one attribute.
             include_inactive: Include revoked and expired assignments.
@@ -355,6 +358,7 @@ class IdentityAttributeService:
         items = self._storage.identity_attributes.list_assignments(
             AttributeAssignmentFilter(
                 principal_name=principal_name,
+                principal_search=(principal_search or "").strip() or None,
                 principal_type=principal_type,
                 attribute_key=attribute_key,
                 include_inactive=include_inactive,
@@ -572,7 +576,8 @@ class IdentityAttributeService:
             raise NotFoundError(f"Assignment {assignment_id} was not found")
         if self._uc_sync is not None:
             revoked_at = updated.revoked_at or datetime.now(UTC)
-            self._uc_sync.repo.revoke_assignment(assignment_id, actor.user_name, revoked_at)
+            with self._uc_sync.lock:
+                self._uc_sync.repo.revoke_assignment(assignment_id, actor.user_name, revoked_at)
         self._audit(
             "identity_attribute.revoked",
             actor.user_name,
@@ -606,15 +611,15 @@ class IdentityAttributeService:
         """Upsert the definition into the UC mirror without allowed values, if configured."""
         if self._uc_sync is None:
             return
-        self._uc_sync.repo.upsert_definition(
-            definition.model_copy(update={"allowed_values": []})
-        )
+        with self._uc_sync.lock:
+            self._uc_sync.repo.upsert_definition(definition.model_copy(update={"allowed_values": []}))
 
     def _mirror_assignment(self, assignment: IdentityAttributeAssignment) -> None:
         """Upsert the assignment into the UC mirror, if one is configured."""
         if self._uc_sync is None:
             return
-        self._uc_sync.repo.upsert_assignment(assignment)
+        with self._uc_sync.lock:
+            self._uc_sync.repo.upsert_assignment(assignment)
 
     def _enforce_purpose_uniqueness(
         self,

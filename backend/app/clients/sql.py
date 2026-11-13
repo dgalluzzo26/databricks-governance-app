@@ -91,6 +91,11 @@ class SqlExecutor:
         """Whether a warehouse ID is set."""
         return bool(self._warehouse_id)
 
+    @property
+    def warehouse_id(self) -> str | None:
+        """The warehouse statements run on, or None when unset."""
+        return self._warehouse_id
+
     def query(self, statement: str, parameters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         """Execute a statement and return all result rows.
 
