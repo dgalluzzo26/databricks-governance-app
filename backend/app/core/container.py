@@ -177,6 +177,7 @@ class ServiceContainer:
                 access_requests,
                 data_access,
                 metadata_cache,
+                workspace,
             ),
             attribute_explorer=attribute_explorer,
             policy_exceptions=policy_exceptions,

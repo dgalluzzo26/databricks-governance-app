@@ -13,10 +13,13 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from collections.abc import Callable
-from typing import NamedTuple, TypeVar
+from typing import Any, NamedTuple, TypeVar
+
+from databricks.sdk.errors import NotFound
 
 from backend.app.clients.cache import TtlCache
 from backend.app.clients.sql import SqlExecutor, string_literal
+from backend.app.clients.workspace import WorkspaceClientFactory
 from backend.app.core.concurrency import run_parallel
 from backend.app.core.config import AppConfig
 from backend.app.core.errors import InvalidRequestError, NotFoundError
@@ -55,7 +58,7 @@ T = TypeVar("T")
 
 _GEO_TYPES = frozenset({"geometry", "geography"})
 _TREE_LIMIT = 500
-_TREE_REFRESH_SECONDS = 120
+_METADATA_REFRESH_SECONDS = 120
 _IDENT_MAX = 255
 
 
@@ -131,7 +134,9 @@ class AccessExplorerService:
         access_requests: Optional request service used to preview approver routing; when
             omitted, every suggestion is shown as routed to app admins.
         data_access: Optional data-access settings used for tagged-level grant suggestions.
-        metadata_cache: Optional cache for tree listings (refreshed in the background).
+        metadata_cache: Optional cache for tree listings, search hits, and per-table metadata
+            (refreshed in the background).
+        workspace: Optional client factory; table and table-tag reads use the REST APIs.
     """
 
     def __init__(
@@ -144,10 +149,12 @@ class AccessExplorerService:
         access_requests: AccessRequestService | None = None,
         data_access: DataAccessService | None = None,
         metadata_cache: TtlCache | None = None,
+        workspace: WorkspaceClientFactory | None = None,
     ) -> None:
         self._config = config
         self._sql = sql
         self._metadata_cache = metadata_cache
+        self._workspace = workspace
         self._identity = identity_attributes
         self._mask_rules = mask_rules
         self._row_filters = row_filters
@@ -179,15 +186,18 @@ class AccessExplorerService:
             return TableSearchResult(tables=[], total=0)
         # instr() is a literal substring match, so _ and % in names are not wildcards.
         needle = string_literal(q.lower())
-        rows = self._sql.query(
-            f"""
-            SELECT table_catalog, table_schema, table_name
-            FROM system.information_schema.tables
-            WHERE instr(lower(concat_ws('.', table_catalog, table_schema, table_name)), {needle}) > 0
-              {catalog_filter}
-            ORDER BY table_catalog, table_schema, table_name
-            LIMIT {limit}
-            """
+        rows = self._cached(
+            ("table-search", q.lower(), limit, catalog_filter),
+            lambda: self._sql.query(
+                f"""
+                SELECT table_catalog, table_schema, table_name
+                FROM system.information_schema.tables
+                WHERE instr(lower(concat_ws('.', table_catalog, table_schema, table_name)), {needle}) > 0
+                  {catalog_filter}
+                ORDER BY table_catalog, table_schema, table_name
+                LIMIT {limit}
+                """
+            ),
         )
         tables = [
             TableSearchHit(
@@ -308,33 +318,10 @@ class AccessExplorerService:
         _require_identifier(table, "table")
         self._require_enrolled_catalog(catalog)
         access_key, review_key, review_value = self._access_tag_keys()
-        exists, columns, table_column_tags, object_tags = run_parallel(
-            lambda: self._sql.query(
-                f"""
-                SELECT table_type
-                FROM system.information_schema.tables
-                WHERE table_catalog = {string_literal(catalog)}
-                  AND table_schema = {string_literal(schema)}
-                  AND table_name = {string_literal(table)}
-                LIMIT 1
-                """
-            ),
-            lambda: self._sql.query(
-                f"""
-                SELECT column_name, full_data_type
-                FROM system.information_schema.columns
-                WHERE table_catalog = {string_literal(catalog)}
-                  AND table_schema = {string_literal(schema)}
-                  AND table_name = {string_literal(table)}
-                ORDER BY ordinal_position
-                """
-            ),
-            lambda: self._column_tags_for_table(catalog, schema, table),
-            lambda: self._object_tags("table", f"{catalog}.{schema}.{table}", {access_key, review_key}),
+        table_type, columns, table_column_tags, object_tags = self._cached(
+            ("table-analysis", f"{catalog}.{schema}.{table}".lower(), access_key, review_key),
+            lambda: self._load_table_metadata(catalog, schema, table, {access_key, review_key}),
         )
-        if not exists:
-            raise NotFoundError(f"Table '{catalog}.{schema}.{table}' was not found")
-        table_type = str(exists[0].get("table_type") or "").strip().upper()
         is_view = table_type == "VIEW"
 
         lineage_error: str | None = None
@@ -443,6 +430,77 @@ class AccessExplorerService:
             suggestions=suggestions,
             summary="; ".join(summary_parts),
         )
+
+    def _load_table_metadata(
+        self, catalog: str, schema: str, table: str, tag_keys: set[str]
+    ) -> tuple[str, list[dict[str, Any]], dict[str, dict[str, str]], dict[str, str]]:
+        """Load table type, columns, column tags, and access/review tags for one table.
+
+        Uses the Unity Catalog REST APIs for the table and its own tags (no warehouse time) and
+        one information_schema query for column tags. Falls back to information_schema for
+        everything when no workspace client is configured or the REST reads fail.
+
+        Raises:
+            NotFoundError: If the table does not exist or is not visible.
+        """
+        full_name = f"{catalog}.{schema}.{table}"
+        if self._workspace is not None:
+            try:
+                info, column_tags, object_tags = run_parallel(
+                    lambda: self._workspace.admin().tables.get(full_name),
+                    lambda: self._column_tags_for_table(catalog, schema, table),
+                    lambda: self._rest_table_tags(full_name, tag_keys),
+                )
+            except NotFound as exc:
+                raise NotFoundError(f"Table '{full_name}' was not found") from exc
+            except Exception as exc:  # noqa: BLE001 - fall back to information_schema
+                logger.warning(
+                    "REST table lookup failed for %s; using information_schema: %s", full_name, exc
+                )
+            else:
+                raw_type = getattr(info.table_type, "value", info.table_type)
+                columns = [
+                    {"column_name": c.name, "full_data_type": c.type_text}
+                    for c in sorted(info.columns or [], key=lambda c: c.position or 0)
+                ]
+                return str(raw_type or "").strip().upper(), columns, column_tags, object_tags
+
+        exists, columns, column_tags, object_tags = run_parallel(
+            lambda: self._sql.query(
+                f"""
+                SELECT table_type
+                FROM system.information_schema.tables
+                WHERE table_catalog = {string_literal(catalog)}
+                  AND table_schema = {string_literal(schema)}
+                  AND table_name = {string_literal(table)}
+                LIMIT 1
+                """
+            ),
+            lambda: self._sql.query(
+                f"""
+                SELECT column_name, full_data_type
+                FROM system.information_schema.columns
+                WHERE table_catalog = {string_literal(catalog)}
+                  AND table_schema = {string_literal(schema)}
+                  AND table_name = {string_literal(table)}
+                ORDER BY ordinal_position
+                """
+            ),
+            lambda: self._column_tags_for_table(catalog, schema, table),
+            lambda: self._object_tags("table", full_name, tag_keys),
+        )
+        if not exists:
+            raise NotFoundError(f"Table '{full_name}' was not found")
+        return str(exists[0].get("table_type") or "").strip().upper(), columns, column_tags, object_tags
+
+    def _rest_table_tags(self, full_name: str, keys: set[str]) -> dict[str, str]:
+        """Read the table's own tags for ``keys`` from the entity tag assignments API."""
+        out: dict[str, str] = {}
+        for item in self._workspace.admin().entity_tag_assignments.list("tables", full_name):
+            key = (item.tag_key or "").strip().lower()
+            if key in keys and item.tag_value is not None:
+                out[key] = str(item.tag_value).strip()
+        return out
 
     def _data_access_suggestion(
         self,
@@ -701,7 +759,7 @@ class AccessExplorerService:
         """Load through the metadata cache (background refresh) when one is configured."""
         if self._metadata_cache is None:
             return loader()
-        return self._metadata_cache.get_or_refresh(key, loader, refresh_after=_TREE_REFRESH_SECONDS)
+        return self._metadata_cache.get_or_refresh(key, loader, refresh_after=_METADATA_REFRESH_SECONDS)
 
     def _enrolled_catalogs(self) -> list[str]:
         """Return enrollment-tagged catalogs, or empty when data-access is unavailable."""

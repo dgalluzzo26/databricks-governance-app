@@ -627,3 +627,86 @@ def test_directory_principal_search(client: TestClient) -> None:
         headers=headers_for("analyst@example.com"),
     )
     assert forbidden.status_code == 403
+
+
+class _RestTables:
+    def __init__(self, info: Any) -> None:
+        self.info = info
+
+    def get(self, full_name: str) -> Any:
+        if self.info is None:
+            from databricks.sdk.errors import NotFound
+
+            raise NotFound(f"{full_name} not found")
+        return self.info
+
+
+class _RestTags:
+    def list(self, entity_type: str, entity_name: str) -> list[Any]:
+        assert entity_type == "tables"
+        return [
+            type("T", (), {"tag_key": "data_access_control", "tag_value": "finance"})(),
+            type("T", (), {"tag_key": "clr_review_status", "tag_value": "reviewed"})(),
+            type("T", (), {"tag_key": "unrelated", "tag_value": "x"})(),
+        ]
+
+
+class _RestWorkspace:
+    def __init__(self, info: Any) -> None:
+        self.client = type("C", (), {"tables": _RestTables(info), "entity_tag_assignments": _RestTags()})()
+
+    def admin(self) -> Any:
+        return self.client
+
+
+def _rest_table_info() -> Any:
+    col = lambda name, type_text, pos: type(  # noqa: E731
+        "Col", (), {"name": name, "type_text": type_text, "position": pos}
+    )()
+    return type(
+        "Info",
+        (),
+        {
+            "table_type": "MANAGED",
+            "columns": [col("id", "int", 2), col("s_name", "string", 0), col("s_open", "string", 1)],
+        },
+    )()
+
+
+def test_analyze_table_reads_table_and_table_tags_from_rest(container) -> None:  # noqa: ANN001
+    service, sql = _explorer(container)
+    # information_schema has neither the table nor its columns, so only the REST path can succeed.
+    sql.tables = []
+    sql.columns = []
+    service._workspace = _RestWorkspace(_rest_table_info())  # noqa: SLF001
+    actor = _admin()
+    container.identity_attributes.upsert_definition(
+        UpsertAttributeDefinitionRequest(
+            key="data_access",
+            description="DAC",
+            value_source=ValueSource.FREE_FORM,
+            allowed_values=["finance"],
+        ),
+        actor,  # type: ignore[arg-type]
+    )
+    stored = container.storage.identity_attributes.get_definition("data_access")
+    container.storage.identity_attributes.upsert_definition(
+        stored.model_copy(update={"governed_tag_keys": ["data_access_control"]})
+    )
+
+    insight = service.analyze_table(AnalyzeTableRequest(full_name="demo.default.customers"), _analyst())
+
+    assert insight.table_type == "MANAGED"
+    assert [c.column_name for c in insight.columns] == ["s_name", "s_open", "id"]
+    assert insight.columns[0].access_state.value == "masked"
+    dac = next(s for s in insight.suggestions if s.kind.value == "data_access")
+    assert dac.attribute_value == "finance"
+
+
+def test_analyze_table_rest_not_found_raises(container) -> None:  # noqa: ANN001
+    from backend.app.core.errors import NotFoundError
+
+    service, _ = _explorer(container)
+    service._workspace = _RestWorkspace(None)  # noqa: SLF001
+    with pytest.raises(NotFoundError):
+        service.analyze_table(AnalyzeTableRequest(full_name="demo.default.missing"), _analyst())

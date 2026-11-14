@@ -183,7 +183,9 @@ through `quote_identifier` and literals through `string_literal`; never interpol
 - **Caching.** Caches are per instance. Slow metadata is served stale-while-revalidate
   (`TtlCache.get_or_refresh`): ABAC policy definitions (about 15 s to read; refreshed after 5 minutes
   and preloaded at start-up), policy affected assets (2 minutes), enrolled catalogs and the
-  Attribute Explorer tag inventory (1 minute), and Access Explorer tree listings (2 minutes). Sync
+  Attribute Explorer tag inventory (1 minute), and Access Explorer tree listings, search hits, and
+  per-table analyze metadata (2 minutes). Analyze reads the table, its columns, and its own tags
+  through the Unity Catalog REST APIs, so only the column-tag lookup uses the warehouse. Sync
   runs always read live inventory. After a policy change on one instance, other instances can show
   the old policy list until their next refresh.
 - **Parallel lookups.** `core/concurrency.run_parallel` runs independent warehouse queries for one
