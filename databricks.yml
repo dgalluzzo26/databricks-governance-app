@@ -41,11 +41,13 @@ variables:
     description: App instance size (MEDIUM | LARGE | XLARGE)
     default: MEDIUM
   app_min_instances:
-    description: Minimum app instances (horizontal scaling)
+    description: >
+      Minimum app instances (horizontal scaling). Workspaces without app autoscaling require
+      min and max to be equal (fixed scaling).
     default: 2
   app_max_instances:
-    description: Maximum app instances (horizontal scaling)
-    default: 4
+    description: Maximum app instances (horizontal scaling); equal to the minimum unless autoscaling is enabled
+    default: 2
   warehouse_min_clusters:
     description: SQL warehouse minimum clusters
     default: 1

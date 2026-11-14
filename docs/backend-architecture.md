@@ -176,7 +176,8 @@ through `quote_identifier` and literals through `string_literal`; never interpol
 - **Capacity.** `PerformanceService.capacity()` reads the app's compute size, the Lakebase endpoint,
   and the SQL warehouse size through the Account Admin SP. Each read fails separately.
 - **Scaling.** The bundle runs the app on Medium instances with horizontal scaling
-  (`app_min_instances` 2 to `app_max_instances` 4) and the warehouse at 1 to 4 clusters. Each
+  (`app_min_instances` / `app_max_instances`, fixed at 2; min and max must match unless the
+  workspace has app autoscaling) and the warehouse at 1 to 4 clusters. Each
   instance serves blocking handlers from a `REQUEST_THREADS` pool (default 100, since handlers
   mostly wait on the warehouse) and opens up to `LAKEBASE_POOL_MAX` Lakebase connections (default 20).
 - **Caching.** Caches are per instance. Slow metadata is served stale-while-revalidate
