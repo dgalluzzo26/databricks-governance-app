@@ -710,3 +710,32 @@ def test_analyze_table_rest_not_found_raises(container) -> None:  # noqa: ANN001
     service._workspace = _RestWorkspace(None)  # noqa: SLF001
     with pytest.raises(NotFoundError):
         service.analyze_table(AnalyzeTableRequest(full_name="demo.default.missing"), _analyst())
+
+
+def test_analyze_reads_approver_routing_once_for_many_governed_columns(container) -> None:  # noqa: ANN001
+    service, sql = _explorer(container)
+    sql.columns = [{"column_name": f"c{i}", "full_data_type": "string"} for i in range(12)]
+    sql.tags = [
+        row
+        for i in range(12)
+        for row in (
+            {"column_name": f"c{i}", "tag_name": "sensitivity_category", "tag_value": "finance.budget"},
+            {"column_name": f"c{i}", "tag_name": "sensitivity", "tag_value": f"PII.Field{i}"},
+            {"column_name": f"c{i}", "tag_name": "data_type", "tag_value": "string"},
+        )
+    ]
+    approvers = container.storage.category_approvers
+    original = approvers.list_configured_categories
+    calls = {"n": 0}
+
+    def counting(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        calls["n"] += 1
+        return original(*args, **kwargs)
+
+    approvers.list_configured_categories = counting
+    try:
+        insight = service.analyze_table(AnalyzeTableRequest(full_name="demo.default.customers"), _analyst())
+    finally:
+        approvers.list_configured_categories = original
+    assert len([s for s in insight.suggestions if s.kind.value == "sensitivity"]) == 12
+    assert calls["n"] == 1

@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from collections.abc import Callable
+from contextvars import ContextVar
 from typing import Any, NamedTuple, TypeVar
 
 from databricks.sdk.errors import NotFound
@@ -55,6 +56,9 @@ from backend.app.services.row_filters import RowFilterService
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+
+# Approver-routing memo for the analyze call running in this context (see analyze_table).
+_ROUTING_LOOKUPS: ContextVar[Any] = ContextVar("explorer_routing_lookups", default=None)
 
 _GEO_TYPES = frozenset({"geometry", "geography"})
 _TREE_LIMIT = 500
@@ -309,6 +313,15 @@ class AccessExplorerService:
                 catalog is not enrollment-tagged.
             NotFoundError: If the table does not exist or is not visible.
         """
+        lookups = self._access_requests.routing_lookups() if self._access_requests is not None else None
+        token = _ROUTING_LOOKUPS.set(lookups)
+        try:
+            return self._analyze_table(request, user)
+        finally:
+            _ROUTING_LOOKUPS.reset(token)
+
+    def _analyze_table(self, request: AnalyzeTableRequest, user: CurrentUser) -> TableAccessInsight:
+        """Body of :meth:`analyze_table`; approver routing reads share one memo per call."""
         parts = [p for p in request.resolved_name().split(".") if p]
         if len(parts) != 3:
             raise InvalidRequestError("Analyze a catalog.schema.table (table-level access only)")
@@ -544,7 +557,9 @@ class AccessExplorerService:
         )
         routing = None
         if self._access_requests is not None:
-            routing = self._access_requests.resolve_attribute_routing(attribute_key, access_value)
+            routing = self._access_requests.resolve_attribute_routing(
+                attribute_key, access_value, _ROUTING_LOOKUPS.get()
+            )
         routed_to = RequestRouteKind.APP_ADMINS
         approvers: list[ApproverPreview] = []
         resolved = None
@@ -1140,7 +1155,7 @@ class AccessExplorerService:
         Designated dimension approvers win when configured; otherwise app admins review.
         """
         routing = (
-            self._access_requests.resolve_attribute_routing(dim, value)
+            self._access_requests.resolve_attribute_routing(dim, value, _ROUTING_LOOKUPS.get())
             if self._access_requests is not None
             else {
                 "resolved_category": None,
@@ -1209,7 +1224,7 @@ class AccessExplorerService:
             The suggestion with routing kind, resolved category, and approver preview.
         """
         routing = (
-            self._access_requests.resolve_routing(path)
+            self._access_requests.resolve_routing(path, _ROUTING_LOOKUPS.get())
             if self._access_requests is not None
             else {
                 "resolved_category": None,

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import statistics
 import subprocess
 import threading
@@ -92,13 +93,17 @@ class Session:
         # Access Explorer
         self.call("access explorer: tree catalogs", "GET", "/api/access-explorer/tree/catalogs")
         self.call("access explorer: tree schemas", "GET", f"/api/access-explorer/tree/schemas?catalog={catalog}")
-        self.call(
+        listing = self.call(
             "access explorer: tree tables",
             "GET",
             f"/api/access-explorer/tree/tables?catalog={catalog}&schema={schema}",
-        )
-        self.call("access explorer: search", "GET", "/api/access-explorer/search?q=abac&limit=40")
-        self.call("access explorer: analyze table", "POST", "/api/access-explorer/analyze", {"fullName": self.table})
+        ) or {}
+        # Each simulated user opens a different table so the per-table cache is not always warm.
+        names = [t["tableName"] for t in listing.get("tables") or []]
+        table = f"{catalog}.{schema}.{random.choice(names)}" if names else self.table
+        term = table.rsplit(".", 1)[-1][:4] or "abac"
+        self.call("access explorer: search", "GET", f"/api/access-explorer/search?q={term}&limit=40")
+        self.call("access explorer: analyze table", "POST", "/api/access-explorer/analyze", {"fullName": table})
 
         # Attribute Explorer
         definitions = self.call("attribute explorer: definitions", "GET", "/api/identity/definitions") or {}

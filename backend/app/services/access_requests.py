@@ -378,7 +378,11 @@ class AccessRequestService:
         ]
         return AccessRequestList(requests=items, total=len(items))
 
-    def resolve_routing(self, path: str) -> dict:
+    def routing_lookups(self) -> _RoutingLookups:
+        """Return a memo to share across many ``resolve_*routing`` calls in one request."""
+        return _RoutingLookups(self._storage, self._identity)
+
+    def resolve_routing(self, path: str, lookups: _RoutingLookups | None = None) -> dict:
         """Who reviews a sensitivity request for ``path``.
 
         Most-specific configured category with at least one approver wins. If none is
@@ -386,13 +390,14 @@ class AccessRequestService:
 
         Args:
             path: Sensitivity path being requested.
+            lookups: Shared memo when routing many paths at once; a fresh one otherwise.
 
         Returns:
             A dict with ``resolved_category`` (str or None), ``routed_to``
             (``AccessRequestRouteKind``), and ``approvers`` (list of
             ``AccessRequestApprover``, empty when routed to app admins).
         """
-        return self.resolve_attribute_routing(SENSITIVITY_ATTRIBUTE_KEY, path)
+        return self.resolve_attribute_routing(SENSITIVITY_ATTRIBUTE_KEY, path, lookups)
 
     def resolve_attribute_routing(
         self, attribute_key: str, attribute_value: str, lookups: _RoutingLookups | None = None
