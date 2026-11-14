@@ -12,7 +12,9 @@ records an audit event.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from backend.app.core.errors import ForbiddenError, InvalidRequestError, NotFoundError
 from backend.app.models.access_request import (
@@ -78,6 +80,51 @@ def resolve_category(path: str, configured_categories: list[str]) -> str | None:
         if hit is not None:
             return hit
     return None
+
+
+
+class _RoutingLookups:
+    """Memoizes approver-routing storage reads while routing many requests in one listing.
+
+    Args:
+        storage: Storage provider holding category approvers.
+        identity: Identity attribute service (data-access definition lookup).
+    """
+
+    def __init__(self, storage: StorageProvider, identity: IdentityAttributeService) -> None:
+        self._storage = storage
+        self._identity = identity
+        self._memo: dict[tuple, Any] = {}
+
+    def _get(self, key: tuple, load: Callable[[], Any]) -> Any:
+        if key not in self._memo:
+            self._memo[key] = load()
+        return self._memo[key]
+
+    def data_access_definition(self) -> Any:
+        """Return the data-access attribute definition, or None."""
+        return self._get(("data-access-definition",), self._identity.find_data_access_definition)
+
+    def configured_categories(self, attribute_key: str) -> Any:
+        """Return configured approver categories for ``attribute_key``."""
+        return self._get(
+            ("configured", attribute_key),
+            lambda: self._storage.category_approvers.list_configured_categories(attribute_key=attribute_key),
+        )
+
+    def approvers(self, category: str | None, attribute_key: str) -> Any:
+        """Return approvers for ``category`` (or every category when None) under ``attribute_key``."""
+        if category is None:
+            return self._get(
+                ("approvers", None, attribute_key),
+                lambda: list(self._storage.category_approvers.list_approvers(attribute_key=attribute_key)),
+            )
+        return self._get(
+            ("approvers", category, attribute_key),
+            lambda: list(
+                self._storage.category_approvers.list_approvers(category, attribute_key=attribute_key)
+            ),
+        )
 
 
 class AccessRequestService:
@@ -324,8 +371,9 @@ class AccessRequestService:
         Returns:
             The actor's requests in every status.
         """
+        lookups = _RoutingLookups(self._storage, self._identity)
         items = [
-            self._with_routing(item)
+            self._with_routing(item, lookups)
             for item in self._storage.access_requests.list_for_requester(actor.user_name)
         ]
         return AccessRequestList(requests=items, total=len(items))
@@ -346,7 +394,9 @@ class AccessRequestService:
         """
         return self.resolve_attribute_routing(SENSITIVITY_ATTRIBUTE_KEY, path)
 
-    def resolve_attribute_routing(self, attribute_key: str, attribute_value: str) -> dict:
+    def resolve_attribute_routing(
+        self, attribute_key: str, attribute_value: str, lookups: _RoutingLookups | None = None
+    ) -> dict:
         """Who reviews a request for ``attribute_key`` / ``attribute_value``.
 
         Sensitivity and data-access use most-specific path routing. Row-filter dimensions use
@@ -356,22 +406,22 @@ class AccessRequestService:
         Args:
             attribute_key: ``sensitivity``, the data-access key, or a row-filter dimension key.
             attribute_value: Requested value (path or dimension value).
+            lookups: Shared memo when routing many requests at once; a fresh one otherwise.
 
         Returns:
             A dict with ``resolved_category`` (str or None), ``routed_to``
             (``AccessRequestRouteKind``), and ``approvers`` (list of
             ``AccessRequestApprover``, empty when routed to app admins).
         """
+        lookups = lookups or _RoutingLookups(self._storage, self._identity)
         key = (attribute_key or SENSITIVITY_ATTRIBUTE_KEY).strip().lower()
-        data_access = self._identity.find_data_access_definition()
+        data_access = lookups.data_access_definition()
         data_access_key = data_access.key.lower() if data_access is not None else None
         if key == SENSITIVITY_ATTRIBUTE_KEY or (
             data_access_key is not None and key == data_access_key
         ):
             route_key = SENSITIVITY_ATTRIBUTE_KEY if key == SENSITIVITY_ATTRIBUTE_KEY else data_access.key
-            configured = self._storage.category_approvers.list_configured_categories(
-                attribute_key=route_key
-            )
+            configured = lookups.configured_categories(route_key)
             category = resolve_category(attribute_value, configured)
             approvers: list[AccessRequestApprover] = []
             if category is not None:
@@ -380,9 +430,7 @@ class AccessRequestService:
                         principal_name=item.principal_name,
                         principal_type=item.principal_type,
                     )
-                    for item in self._storage.category_approvers.list_approvers(
-                        category, attribute_key=route_key
-                    )
+                    for item in lookups.approvers(category, route_key)
                 ]
             if not approvers:
                 return {
@@ -397,15 +445,10 @@ class AccessRequestService:
             }
 
         # Row-filter (or other) dimension: designated approvers for this attribute key.
-        dimension_approvers = self._storage.category_approvers.list_approvers(
-            key, attribute_key=key
-        )
+        dimension_approvers = lookups.approvers(key, key)
         if not dimension_approvers:
             # Also accept rows stored with attribute_key only (path may match key casing).
-            dimension_approvers = [
-                item
-                for item in self._storage.category_approvers.list_approvers(attribute_key=key)
-            ]
+            dimension_approvers = lookups.approvers(None, key)
         if not dimension_approvers:
             return {
                 "resolved_category": None,
@@ -424,9 +467,9 @@ class AccessRequestService:
             ],
         }
 
-    def _with_routing(self, request: AccessRequest) -> AccessRequest:
+    def _with_routing(self, request: AccessRequest, lookups: _RoutingLookups | None = None) -> AccessRequest:
         """Return a copy of ``request`` with live routing fields."""
-        routing = self.resolve_attribute_routing(request.attribute_key, request.attribute_value)
+        routing = self.resolve_attribute_routing(request.attribute_key, request.attribute_value, lookups)
         return request.model_copy(
             update={
                 "resolved_category": routing["resolved_category"],
@@ -669,6 +712,7 @@ class AccessRequestService:
         )
         pending = self._storage.access_requests.list_by_status(AccessRequestStatus.PENDING)
         items: list[ApprovalInboxItem] = []
+        lookups = _RoutingLookups(self._storage, self._identity)
 
         for request in pending:
             if not self._can_decide_for(
@@ -679,13 +723,13 @@ class AccessRequestService:
                 category = resolve_category(request.attribute_value, configured)
             else:
                 routing = self.resolve_attribute_routing(
-                    request.attribute_key, request.attribute_value
+                    request.attribute_key, request.attribute_value, lookups
                 )
                 category = routing["resolved_category"]
             items.append(
                 ApprovalInboxItem(
                     kind=ApprovalItemKind.REQUEST,
-                    request=self._with_routing(request),
+                    request=self._with_routing(request, lookups),
                     resolved_category=category,
                     attribute_value=request.attribute_value,
                     principal_name=request.requester_name,

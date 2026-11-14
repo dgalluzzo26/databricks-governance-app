@@ -148,6 +148,7 @@ class ServiceContainer:
             workspace,
             identity_attributes,
             sync_job_id=config.data_access_sync_job_id,
+            metadata_cache=metadata_cache,
         )
         app_cost = AppCostService(sql, workspace, config, data_access)
         attribute_explorer = AttributeExplorerService(
@@ -175,6 +176,7 @@ class ServiceContainer:
                 row_filters,
                 access_requests,
                 data_access,
+                metadata_cache,
             ),
             attribute_explorer=attribute_explorer,
             policy_exceptions=policy_exceptions,
@@ -208,7 +210,8 @@ class ServiceContainer:
             sync_schedule: When False, skip pushing settings to the Job schedule (Job path).
             mirror_uc: When False, skip the UC mirror resync (the grants sync Job never reads it).
             mirror_in_background: Resync the UC mirror on a daemon thread so the app can serve
-                requests meanwhile; incremental writes keep it current afterwards.
+                requests meanwhile; incremental writes keep it current afterwards. Also
+                preloads slow metadata caches on another daemon thread.
         """
         self._ensure_admin_credentials()
         try:
@@ -225,6 +228,15 @@ class ServiceContainer:
         if migrate_storage:
             # Serving path only; the sync Job does not handle requests, so it records nothing.
             self.metrics.start()
+        if mirror_in_background:
+            threading.Thread(target=self._warm_caches, name="cache-warm", daemon=True).start()
+
+    def _warm_caches(self) -> None:
+        """Preload slow metadata (ABAC policies, enrolled catalogs) so first viewers do not wait."""
+        started = time.perf_counter()
+        self.policies.warm()
+        self.data_access.list_enrolled_catalogs()
+        logger.info("Metadata cache warm-up finished in %.1fs", time.perf_counter() - started)
 
     def _mirror_to_uc(self) -> None:
         """Resync identity attributes and mask rules into their UC mirrors (logs failures)."""

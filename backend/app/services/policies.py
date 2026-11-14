@@ -70,6 +70,9 @@ ORDER BY
 """
 
 _ASSET_LIMIT = 2000
+# The definitions view takes ~15s, so viewers get the cached list while it reloads behind them.
+_POLICY_REFRESH_SECONDS = 300
+_ASSET_REFRESH_SECONDS = 120
 
 
 def _parse_json_list(raw: Any) -> list[Any]:
@@ -332,7 +335,18 @@ class PolicyService:
                 detail.deny = GrantDenyInfo(privileges=[str(p) for p in deny.privileges])
                 detail.privileges = detail.deny.privileges
 
-        assets, truncated, note = self._affected_assets(detail)
+        assets, truncated, note = self._cache.get_or_refresh(
+            (
+                "policy-affected-assets",
+                detail.id,
+                detail.on_securable_type,
+                detail.on_securable_fullname,
+                detail.when_condition,
+                tuple((m.alias, m.condition) for m in detail.match_columns),
+            ),
+            lambda: self._affected_assets(detail),
+            refresh_after=_ASSET_REFRESH_SECONDS,
+        )
         detail.affected_assets = assets
         detail.affected_assets_truncated = truncated
         detail.affected_assets_note = note
@@ -340,7 +354,16 @@ class PolicyService:
 
     def _cached_rows(self) -> list[dict[str, Any]]:
         """Return policy definition rows from the cache, loading them on a miss."""
-        return self._cache.get_or_load(("abac-policy-definitions",), self._load_rows)
+        return self._cache.get_or_refresh(
+            ("abac-policy-definitions",), self._load_rows, refresh_after=_POLICY_REFRESH_SECONDS
+        )
+
+    def warm(self) -> None:
+        """Load policy definitions into the cache so the first viewer does not wait on them."""
+        try:
+            self._cached_rows()
+        except Exception as exc:  # noqa: BLE001 - best effort at startup
+            logger.warning("Could not preload ABAC policies: %s", exc)
 
     def _load_rows(self) -> list[dict[str, Any]]:
         """Query all ABAC policy definitions.

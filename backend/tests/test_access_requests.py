@@ -543,3 +543,45 @@ def test_is_category_approver_for_user_and_group(container) -> None:  # noqa: AN
     )
     assert access.is_category_approver(member) is True
     assert access.is_category_approver(outsider) is False
+
+
+def test_list_mine_reads_routing_lookups_once_for_many_requests(container) -> None:  # noqa: ANN001
+    identity = _service(container)
+    access = AccessRequestService(container.storage, identity)
+    _seed_sensitivity(identity, _admin())
+    requester = type(
+        "U",
+        (),
+        {
+            "user_name": "analyst@example.com",
+            "is_admin": False,
+            "groups": [],
+            "email": "analyst@example.com",
+            "display_name": "Analyst",
+        },
+    )()
+    for path in ("finance", "finance.budget", "finance.budget.PII.Name"):
+        access.create_request(
+            CreateAccessRequestBody(
+                attribute_value=path,
+                requested_expires_at=datetime.now(UTC) + timedelta(days=30),
+                justification="need it",
+            ),
+            requester,  # type: ignore[arg-type]
+        )
+
+    approvers = container.storage.category_approvers
+    original = approvers.list_configured_categories
+    calls = {"n": 0}
+
+    def counting(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        calls["n"] += 1
+        return original(*args, **kwargs)
+
+    approvers.list_configured_categories = counting
+    try:
+        result = access.list_mine(requester)  # type: ignore[arg-type]
+    finally:
+        approvers.list_configured_categories = original
+    assert result.total == 3
+    assert calls["n"] == 1

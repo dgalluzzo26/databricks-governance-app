@@ -12,9 +12,12 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from typing import NamedTuple
+from collections.abc import Callable
+from typing import NamedTuple, TypeVar
 
+from backend.app.clients.cache import TtlCache
 from backend.app.clients.sql import SqlExecutor, string_literal
+from backend.app.core.concurrency import run_parallel
 from backend.app.core.config import AppConfig
 from backend.app.core.errors import InvalidRequestError, NotFoundError
 from backend.app.models.access_explorer import (
@@ -48,8 +51,11 @@ from backend.app.services.row_filters import RowFilterService
 
 logger = logging.getLogger(__name__)
 
+T = TypeVar("T")
+
 _GEO_TYPES = frozenset({"geometry", "geography"})
 _TREE_LIMIT = 500
+_TREE_REFRESH_SECONDS = 120
 _IDENT_MAX = 255
 
 
@@ -125,6 +131,7 @@ class AccessExplorerService:
         access_requests: Optional request service used to preview approver routing; when
             omitted, every suggestion is shown as routed to app admins.
         data_access: Optional data-access settings used for tagged-level grant suggestions.
+        metadata_cache: Optional cache for tree listings (refreshed in the background).
     """
 
     def __init__(
@@ -136,9 +143,11 @@ class AccessExplorerService:
         row_filters: RowFilterService,
         access_requests: AccessRequestService | None = None,
         data_access: DataAccessService | None = None,
+        metadata_cache: TtlCache | None = None,
     ) -> None:
         self._config = config
         self._sql = sql
+        self._metadata_cache = metadata_cache
         self._identity = identity_attributes
         self._mask_rules = mask_rules
         self._row_filters = row_filters
@@ -217,15 +226,18 @@ class AccessExplorerService:
         """
         name = _require_identifier(catalog, "catalog")
         self._require_enrolled_catalog(name)
-        rows = self._sql.query(
-            f"""
-            SELECT schema_name
-            FROM system.information_schema.schemata
-            WHERE catalog_name = {string_literal(name)}
-              AND schema_name <> 'information_schema'
-            ORDER BY schema_name
-            LIMIT {_TREE_LIMIT + 1}
-            """
+        rows = self._cached(
+            ("tree-schemas", name.lower()),
+            lambda: self._sql.query(
+                f"""
+                SELECT schema_name
+                FROM system.information_schema.schemata
+                WHERE catalog_name = {string_literal(name)}
+                  AND schema_name <> 'information_schema'
+                ORDER BY schema_name
+                LIMIT {_TREE_LIMIT + 1}
+                """
+            ),
         )
         truncated = len(rows) > _TREE_LIMIT
         items = [TreeSchema(catalog_name=name, schema_name=str(r["schema_name"])) for r in rows[:_TREE_LIMIT]]
@@ -247,15 +259,18 @@ class AccessExplorerService:
         cat = _require_identifier(catalog, "catalog")
         sch = _require_identifier(schema, "schema")
         self._require_enrolled_catalog(cat)
-        rows = self._sql.query(
-            f"""
-            SELECT table_name, table_type
-            FROM system.information_schema.tables
-            WHERE table_catalog = {string_literal(cat)}
-              AND table_schema = {string_literal(sch)}
-            ORDER BY table_name
-            LIMIT {_TREE_LIMIT + 1}
-            """
+        rows = self._cached(
+            ("tree-tables", cat.lower(), sch.lower()),
+            lambda: self._sql.query(
+                f"""
+                SELECT table_name, table_type
+                FROM system.information_schema.tables
+                WHERE table_catalog = {string_literal(cat)}
+                  AND table_schema = {string_literal(sch)}
+                ORDER BY table_name
+                LIMIT {_TREE_LIMIT + 1}
+                """
+            ),
         )
         truncated = len(rows) > _TREE_LIMIT
         items = [
@@ -292,31 +307,36 @@ class AccessExplorerService:
         _require_identifier(schema, "schema")
         _require_identifier(table, "table")
         self._require_enrolled_catalog(catalog)
-        exists = self._sql.query(
-            f"""
-            SELECT table_type
-            FROM system.information_schema.tables
-            WHERE table_catalog = {string_literal(catalog)}
-              AND table_schema = {string_literal(schema)}
-              AND table_name = {string_literal(table)}
-            LIMIT 1
-            """
+        access_key, review_key, review_value = self._access_tag_keys()
+        exists, columns, table_column_tags, object_tags = run_parallel(
+            lambda: self._sql.query(
+                f"""
+                SELECT table_type
+                FROM system.information_schema.tables
+                WHERE table_catalog = {string_literal(catalog)}
+                  AND table_schema = {string_literal(schema)}
+                  AND table_name = {string_literal(table)}
+                LIMIT 1
+                """
+            ),
+            lambda: self._sql.query(
+                f"""
+                SELECT column_name, full_data_type
+                FROM system.information_schema.columns
+                WHERE table_catalog = {string_literal(catalog)}
+                  AND table_schema = {string_literal(schema)}
+                  AND table_name = {string_literal(table)}
+                ORDER BY ordinal_position
+                """
+            ),
+            lambda: self._column_tags_for_table(catalog, schema, table),
+            lambda: self._object_tags("table", f"{catalog}.{schema}.{table}", {access_key, review_key}),
         )
         if not exists:
             raise NotFoundError(f"Table '{catalog}.{schema}.{table}' was not found")
         table_type = str(exists[0].get("table_type") or "").strip().upper()
         is_view = table_type == "VIEW"
 
-        columns = self._sql.query(
-            f"""
-            SELECT column_name, full_data_type
-            FROM system.information_schema.columns
-            WHERE table_catalog = {string_literal(catalog)}
-              AND table_schema = {string_literal(schema)}
-              AND table_name = {string_literal(table)}
-            ORDER BY ordinal_position
-            """
-        )
         lineage_error: str | None = None
         view_sources: dict[str, list[_ColumnSource]] = {}
         source_tags: dict[str, dict[str, dict[str, str]]] = {}
@@ -328,7 +348,7 @@ class AccessExplorerService:
                 src_catalog, src_schema, src_table = source_table.split(".")
                 source_tags[source_table] = self._column_tags_for_table(src_catalog, src_schema, src_table)
         else:
-            tags_by_col = self._column_tags_for_table(catalog, schema, table)
+            tags_by_col = table_column_tags
 
         held = self._held_attribute_values(user)
         sensitivity_held = held.get("sensitivity", set())
@@ -379,7 +399,13 @@ class AccessExplorerService:
             else RowFilterInsight(attached=False, notes="No row_filter inherited from source tables.")
         )
         suggestions = self._suggestions(insights, row_filters, held)
-        dac = self._data_access_suggestion("table", f"{catalog}.{schema}.{table}", held)
+        dac = self._data_access_suggestion(
+            "table",
+            f"{catalog}.{schema}.{table}",
+            held,
+            tags=object_tags,
+            keys=(access_key, review_key, review_value),
+        )
         if dac is not None:
             suggestions = [dac, *suggestions]
         masked = sum(
@@ -419,7 +445,13 @@ class AccessExplorerService:
         )
 
     def _data_access_suggestion(
-        self, level: str, full_name: str, held: dict[str, set[str]]
+        self,
+        level: str,
+        full_name: str,
+        held: dict[str, set[str]],
+        *,
+        tags: dict[str, str] | None = None,
+        keys: tuple[str, str, str] | None = None,
     ) -> SuggestedAttribute | None:
         """Build a data-access suggestion when the object has both required tags.
 
@@ -427,15 +459,15 @@ class AccessExplorerService:
             level: ``catalog``, ``schema``, or ``table``.
             full_name: Object full name.
             held: Attribute values the user already holds, keyed by attribute.
+            tags: Object tags already loaded for the access/review keys; read when omitted.
+            keys: ``(access_key, review_key, review_value)`` already resolved; read when omitted.
 
         Returns:
             A suggestion when the object is eligible; None otherwise.
         """
-        settings = self._data_access.get_settings().settings if self._data_access is not None else None
-        access_key = (settings.access_tag_key if settings else "data_access_control").lower()
-        review_key = (settings.review_tag_key if settings else "clr_review_status").lower()
-        review_value = (settings.review_tag_value if settings else "reviewed").strip().lower()
-        tags = self._object_tags(level, full_name, {access_key, review_key})
+        access_key, review_key, review_value = keys or self._access_tag_keys()
+        if tags is None:
+            tags = self._object_tags(level, full_name, {access_key, review_key})
         access_value = tags.get(access_key)
         if not access_value:
             return None
@@ -655,6 +687,21 @@ class AccessExplorerService:
             self._row_filter_insight(catalog, schema, view, held, {column: {"row_filter": dim}})
             for dim, column in first_column.values()
         ]
+
+    def _access_tag_keys(self) -> tuple[str, str, str]:
+        """Return the lower-cased data-access tag key, review tag key, and review value."""
+        settings = self._data_access.get_settings().settings if self._data_access is not None else None
+        return (
+            (settings.access_tag_key if settings else "data_access_control").lower(),
+            (settings.review_tag_key if settings else "clr_review_status").lower(),
+            (settings.review_tag_value if settings else "reviewed").strip().lower(),
+        )
+
+    def _cached(self, key: tuple, loader: Callable[[], T]) -> T:
+        """Load through the metadata cache (background refresh) when one is configured."""
+        if self._metadata_cache is None:
+            return loader()
+        return self._metadata_cache.get_or_refresh(key, loader, refresh_after=_TREE_REFRESH_SECONDS)
 
     def _enrolled_catalogs(self) -> list[str]:
         """Return enrollment-tagged catalogs, or empty when data-access is unavailable."""

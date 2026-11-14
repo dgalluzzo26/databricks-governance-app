@@ -43,6 +43,9 @@ class FakeCache:
     def get_or_load(self, key, loader):  # noqa: ANN001
         return loader()
 
+    def get_or_refresh(self, key, loader, *, refresh_after):  # noqa: ANN001
+        return loader()
+
 
 class FakeMetastores:
     def current(self):

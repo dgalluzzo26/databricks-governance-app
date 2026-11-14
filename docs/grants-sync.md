@@ -323,7 +323,7 @@ Scaling is best-effort. If the warehouse cannot be read or edited, the notice is
 run profile and grants run with baseline concurrency. Cluster size stays Small; horizontal scaling
 fits many small statements better than a larger cluster.
 
-Scaling applies to apply runs only (dry runs issue no grant statements). A deploy resets the cluster range to the bundle's values (1 to 1); the next apply run raises it again when `warehouse_autoscale` is on.
+Scaling applies to apply runs only (dry runs issue no grant statements). A deploy resets the cluster range to the bundle's values (`warehouse_min_clusters` to `warehouse_max_clusters`, default 1 to 4); the next apply run raises it again when `warehouse_autoscale` is on.
 
 
 

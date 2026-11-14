@@ -12,6 +12,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import anyio.to_thread
 import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
@@ -69,6 +70,15 @@ def _mount_frontend(app: FastAPI, dist: Path) -> None:
 
 def _route_template(app: FastAPI, scope: Scope) -> str | None:
     """Return the template of the first route that fully matches ``scope`` (e.g. ``/api/x/{id}``)."""
+    matched = scope.get("route")
+    template = getattr(matched, "path_format", None) or getattr(matched, "path", None)
+    if template and ":path}" not in template:
+        # Nested routers store the route's path relative to their prefix; keep the request
+        # path's leading segments as the prefix and append the route's own pattern.
+        suffix = [part for part in template.split("/") if part]
+        segments = [part for part in str(scope.get("path", "")).split("/") if part]
+        if suffix and len(segments) >= len(suffix):
+            return "/" + "/".join(segments[: len(segments) - len(suffix)] + suffix)
     for route in app.routes:
         match, _ = route.matches(scope)
         if match == Match.FULL:
@@ -109,6 +119,9 @@ def create_app(config: AppConfig | None = None, container: ServiceContainer | No
         Yields:
             Control to the running application between startup and shutdown.
         """
+        # Sync handlers run on AnyIO's thread pool (default 40); most of their time is spent
+        # waiting on the SQL warehouse, so a larger pool keeps fast pages from queuing.
+        anyio.to_thread.current_default_thread_limiter().total_tokens = config.request_threads
         await run_in_threadpool(container.startup, mirror_in_background=True)
         logger.info(
             "%s %s started (storage=%s, auth=%s, admin_sp=%s)",

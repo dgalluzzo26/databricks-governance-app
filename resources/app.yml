@@ -4,6 +4,10 @@ resources:
       name: ${var.app_name}
       description: Federated data access governance for Unity Catalog
       source_code_path: ..
+      # Requests are spread across instances; each holds its own in-process caches.
+      compute_size: ${var.app_compute_size}
+      compute_min_instances: ${var.app_min_instances}
+      compute_max_instances: ${var.app_max_instances}
       config:
         command:
           - python

@@ -24,8 +24,10 @@ from databricks.sdk.service.jobs import CronSchedule, JobSettings, PauseStatus
 from pydantic import ValidationError
 from pydantic.alias_generators import to_camel
 
+from backend.app.clients.cache import TtlCache
 from backend.app.clients.sql import SqlExecutor, quote_identifier, string_literal
 from backend.app.clients.workspace import WorkspaceClientFactory
+from backend.app.core.concurrency import run_parallel
 from backend.app.core.errors import InvalidRequestError, NotConfiguredError, NotFoundError, UpstreamError
 from backend.app.models.data_access import (
     RUN_HISTORY_LIMIT,
@@ -150,6 +152,9 @@ _LOCK_STALE = timedelta(minutes=30)
 # Orphan RUNNING rows (Job cancelled mid-flight) can be closed once the lock is gone.
 _ORPHAN_RUNNING = timedelta(minutes=2)
 _EXCLUDED_CATALOGS = ("system", "samples", "__databricks_internal")
+# Background refresh ages for read paths; the sync Job always reads live inventory.
+_ENROLLED_REFRESH_SECONDS = 60
+_TAGS_REFRESH_SECONDS = 60
 
 
 def _run_elapsed_seconds(run: DataAccessRun) -> float | None:
@@ -197,9 +202,11 @@ class DataAccessService:
         identity_attributes: IdentityAttributeService | None = None,
         *,
         sync_job_id: str | None = None,
+        metadata_cache: TtlCache | None = None,
     ) -> None:
         self._storage = storage
         self._sql = sql
+        self._metadata_cache = metadata_cache
         self._factory = factory
         self._warehouse = WarehouseScaler(factory.admin, getattr(sql, "warehouse_id", None))
         self._identity = identity_attributes
@@ -257,7 +264,9 @@ class DataAccessService:
             enrolled_catalogs=self.list_enrolled_catalogs(body),
         )
 
-    def list_enrolled_catalogs(self, settings: DataAccessSettings | None = None) -> list[str]:
+    def list_enrolled_catalogs(
+        self, settings: DataAccessSettings | None = None, *, fresh: bool = False
+    ) -> list[str]:
         """Return catalogs tagged with the configured enrollment tag.
 
         On first sight of each catalog in this process, also grants the Account Admin SP
@@ -266,6 +275,7 @@ class DataAccessService:
 
         Args:
             settings: Settings to use; defaults to stored settings.
+            fresh: Skip the cache (sync inventory reads must see newly tagged catalogs).
 
         Returns:
             Sorted catalog names. Empty when the warehouse is unavailable or none are tagged.
@@ -273,13 +283,24 @@ class DataAccessService:
         cfg = settings or self._settings()
         if not self._sql.configured:
             return []
-        try:
+
+        def load() -> list[dict[str, Any]]:
             with timed_call("sql.enrolled_catalogs"):
-                rows = self._sql.query(
+                return self._sql.query(
                     enrolled_catalogs_sql(
                         cfg.enrollment_catalog_tag_key,
                         cfg.enrollment_catalog_tag_value,
                     )
+                )
+
+        try:
+            if self._metadata_cache is None or fresh:
+                rows = load()
+            else:
+                rows = self._metadata_cache.get_or_refresh(
+                    ("enrolled-catalogs", cfg.enrollment_catalog_tag_key, cfg.enrollment_catalog_tag_value),
+                    load,
+                    refresh_after=_ENROLLED_REFRESH_SECONDS,
                 )
         except (NotConfiguredError, DatabricksError) as exc:
             logger.warning("Could not list enrolled catalogs: %s", exc)
@@ -1442,18 +1463,42 @@ class DataAccessService:
         keys = ", ".join(
             string_literal(k.lower()) for k in (settings.access_tag_key, settings.review_tag_key)
         )
-        enrolled = self.list_enrolled_catalogs(settings)
+        enrolled = self.list_enrolled_catalogs(settings, fresh=True)
         catalog_filter = self._catalog_sql(settings, "catalog_name", enrolled)
-        rows: list[TagRow] = []
-        with timed_call("sql.read_catalog_tags"):
-            catalog_rows = self._sql.query(
+        def query(label: str, sql: str) -> list[dict[str, Any]]:
+            with timed_call(label):
+                return self._sql.query(sql)
+
+        catalog_rows, schema_rows, table_rows = run_parallel(
+            lambda: query(
+                "sql.read_catalog_tags",
                 f"""
                 SELECT catalog_name, tag_name, tag_value
                 FROM system.information_schema.catalog_tags
                 WHERE lower(tag_name) IN ({keys})
                   {catalog_filter}
-                """
-            )
+                """,
+            ),
+            lambda: query(
+                "sql.read_schema_tags",
+                f"""
+                SELECT catalog_name, schema_name, tag_name, tag_value
+                FROM system.information_schema.schema_tags
+                WHERE lower(tag_name) IN ({keys})
+                  {catalog_filter}
+                """,
+            ),
+            lambda: query(
+                "sql.read_table_tags",
+                f"""
+                SELECT catalog_name, schema_name, table_name, tag_name, tag_value
+                FROM system.information_schema.table_tags
+                WHERE lower(tag_name) IN ({keys})
+                  {catalog_filter}
+                """,
+            ),
+        )
+        rows: list[TagRow] = []
         for row in catalog_rows:
             rows.append(
                 TagRow(
@@ -1465,15 +1510,6 @@ class DataAccessService:
                     tag_value="" if row.get("tag_value") is None else str(row["tag_value"]),
                 )
             )
-        with timed_call("sql.read_schema_tags"):
-            schema_rows = self._sql.query(
-                f"""
-                SELECT catalog_name, schema_name, tag_name, tag_value
-                FROM system.information_schema.schema_tags
-                WHERE lower(tag_name) IN ({keys})
-                  {catalog_filter}
-                """
-            )
         for row in schema_rows:
             rows.append(
                 TagRow(
@@ -1484,15 +1520,6 @@ class DataAccessService:
                     tag_name=str(row["tag_name"]),
                     tag_value="" if row.get("tag_value") is None else str(row["tag_value"]),
                 )
-            )
-        with timed_call("sql.read_table_tags"):
-            table_rows = self._sql.query(
-                f"""
-                SELECT catalog_name, schema_name, table_name, tag_name, tag_value
-                FROM system.information_schema.table_tags
-                WHERE lower(tag_name) IN ({keys})
-                  {catalog_filter}
-                """
             )
         for row in table_rows:
             rows.append(
@@ -1515,7 +1542,7 @@ class DataAccessService:
         like = prefix.replace("_", r"\_") + "%"
         like_sql = string_literal(like)
         grants: list[ActualGrant] = []
-        enrolled = self.list_enrolled_catalogs(settings)
+        enrolled = self.list_enrolled_catalogs(settings, fresh=True)
         catalog_filter = self._catalog_sql(settings, "catalog_name", enrolled)
         table_catalog_filter = self._catalog_sql(settings, "table_catalog", enrolled)
         with timed_call("sql.read_catalog_privileges"):
@@ -2153,8 +2180,18 @@ class DataAccessService:
         return f"REVOKE {grant.privilege} ON {securable} {quoted_name} FROM {principal}"
 
     def load_tags_public(self, settings: DataAccessSettings | None = None) -> list[TagRow]:
-        """Expose tag inventory for Attribute Explorer (same loader as sync)."""
-        return self._tag_loader(settings or self._settings())
+        """Expose tag inventory for Attribute Explorer (same loader as sync).
+
+        Cached briefly and refreshed in the background; the sync itself always reads live tags.
+        """
+        cfg = settings or self._settings()
+        if self._metadata_cache is None:
+            return self._tag_loader(cfg)
+        return self._metadata_cache.get_or_refresh(
+            ("data-access-tags", cfg.access_tag_key.lower(), cfg.review_tag_key.lower()),
+            lambda: self._tag_loader(cfg),
+            refresh_after=_TAGS_REFRESH_SECONDS,
+        )
 
     def _catalog_sql(
         self,

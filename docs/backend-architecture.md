@@ -175,6 +175,19 @@ through `quote_identifier` and literals through `string_literal`; never interpol
   request slower than its expected time is flagged for review; it is not an error.
 - **Capacity.** `PerformanceService.capacity()` reads the app's compute size, the Lakebase endpoint,
   and the SQL warehouse size through the Account Admin SP. Each read fails separately.
+- **Scaling.** The bundle runs the app on Medium instances with horizontal scaling
+  (`app_min_instances` 2 to `app_max_instances` 4) and the warehouse at 1 to 4 clusters. Each
+  instance serves blocking handlers from a `REQUEST_THREADS` pool (default 100, since handlers
+  mostly wait on the warehouse) and opens up to `LAKEBASE_POOL_MAX` Lakebase connections (default 20).
+- **Caching.** Caches are per instance. Slow metadata is served stale-while-revalidate
+  (`TtlCache.get_or_refresh`): ABAC policy definitions (about 15 s to read; refreshed after 5 minutes
+  and preloaded at start-up), policy affected assets (2 minutes), enrolled catalogs and the
+  Attribute Explorer tag inventory (1 minute), and Access Explorer tree listings (2 minutes). Sync
+  runs always read live inventory. After a policy change on one instance, other instances can show
+  the old policy list until their next refresh.
+- **Parallel lookups.** `core/concurrency.run_parallel` runs independent warehouse queries for one
+  request at once (Access Explorer analyze, the catalog/schema/table tag reads) while keeping
+  their time attributed to that request.
 - **App cost.** `AppCostService` (`services/app_cost.py`) reports app compute per UTC day, and the
   warehouse and job cost of each sync. App compute is matched by `usage_metadata.app_id`, warehouse
   cost by the dedicated warehouse, and job cost by the sync job. Warehouse and job cost count toward

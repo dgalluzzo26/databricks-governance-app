@@ -95,6 +95,10 @@ class AppConfig(BaseSettings):
             (``METADATA_CACHE_TTL_SECONDS``).
         identity_cache_ttl_seconds: TTL in seconds for cached user / group lookups
             (``IDENTITY_CACHE_TTL_SECONDS``).
+        request_threads: Worker threads for blocking request handlers per instance
+            (``REQUEST_THREADS``). Handlers mostly wait on the warehouse, so this is well above
+            the CPU count.
+        lakebase_pool_max: Maximum Lakebase connections per instance (``LAKEBASE_POOL_MAX``).
         log_level: Root log level (``LOG_LEVEL``).
         allow_local_identity: Accept requests without Apps proxy headers as a local identity
             (``ALLOW_LOCAL_IDENTITY``); off by default so a deployed app fails closed.
@@ -153,6 +157,8 @@ class AppConfig(BaseSettings):
     admin_client_secret: str | None = Field(None, alias="ADMIN_CLIENT_SECRET")
     metadata_cache_ttl_seconds: int = Field(120, alias="METADATA_CACHE_TTL_SECONDS")
     identity_cache_ttl_seconds: int = Field(300, alias="IDENTITY_CACHE_TTL_SECONDS")
+    request_threads: int = Field(100, ge=1, le=1000, alias="REQUEST_THREADS")
+    lakebase_pool_max: int = Field(20, ge=1, le=200, alias="LAKEBASE_POOL_MAX")
     log_level: str = Field("INFO", alias="LOG_LEVEL")
 
     allow_local_identity: bool = Field(False, alias="ALLOW_LOCAL_IDENTITY")

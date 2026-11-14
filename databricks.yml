@@ -37,6 +37,21 @@ variables:
   admin_secret_scope:
     description: Secret scope holding Account Admin SP client_id / client_secret (metastore ABAC)
     default: databricks-governance-app
+  app_compute_size:
+    description: App instance size (MEDIUM | LARGE | XLARGE)
+    default: MEDIUM
+  app_min_instances:
+    description: Minimum app instances (horizontal scaling)
+    default: 2
+  app_max_instances:
+    description: Maximum app instances (horizontal scaling)
+    default: 4
+  warehouse_min_clusters:
+    description: SQL warehouse minimum clusters
+    default: 1
+  warehouse_max_clusters:
+    description: SQL warehouse maximum clusters (concurrent users queue above this)
+    default: 4
   sync_job_run_as_sp:
     description: >
       Application ID of the Account Admin SP that runs the data-access sync Job. Must match

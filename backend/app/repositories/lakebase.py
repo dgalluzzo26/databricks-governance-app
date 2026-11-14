@@ -1945,7 +1945,7 @@ class LakebaseStorageProvider(StorageProvider):
             connection_class=_connection_class(tokens),
             kwargs={"autocommit": True},
             min_size=1,
-            max_size=8,
+            max_size=config.lakebase_pool_max,
             max_lifetime=_TOKEN_REFRESH_SECONDS,
             check=ConnectionPool.check_connection,
             open=False,
