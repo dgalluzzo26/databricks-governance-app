@@ -8,6 +8,13 @@ resources:
       compute_size: ${var.app_compute_size}
       compute_min_instances: ${var.app_min_instances}
       compute_max_instances: ${var.app_max_instances}
+      # System logs and usage events land in the app catalog; spans/metrics need custom OTEL.
+      # Tables are created on first deploy if missing (app SP already has USE/SELECT/MODIFY on app).
+      telemetry_export_destinations:
+        - unity_catalog:
+            logs_table: ${var.app_catalog}.${var.app_schema}.otel_logs
+            metrics_table: ${var.app_catalog}.${var.app_schema}.otel_metrics
+            traces_table: ${var.app_catalog}.${var.app_schema}.otel_spans
       config:
         command:
           - python
