@@ -7,6 +7,7 @@ import pytest
 from databricks.sdk.errors import NotFound
 
 from backend.app.core.errors import NotFoundError, UpstreamError
+from backend.app.models.policy import PolicyDetail
 from backend.app.services import policies as policies_module
 from backend.app.services.policies import (
     PolicyService,
@@ -617,24 +618,28 @@ def test_tag_condition_parser_and_match_column_helpers() -> None:
 
 
 def test_scope_filter_sql_restricts_to_the_policy_securable() -> None:
+    # Guard: the SQL builder reads this attribute off PolicyDetail, so it must exist there.
+    assert "on_securable_fullname" in PolicyDetail.model_fields
     def scope(**fields: Any) -> str:
         return PolicyService._scope_filter_sql(SimpleNamespace(**fields))  # noqa: SLF001
 
-    assert scope(on_securable_type="METASTORE", catalog_name=None, on_securable_name="m") == ""
+    assert scope(on_securable_type="METASTORE", catalog_name=None, on_securable_fullname="m") == ""
     assert "catalog_name = 'finance'" in scope(
-        on_securable_type="CATALOG", catalog_name="finance", on_securable_name="finance"
+        on_securable_type="CATALOG", catalog_name="finance", on_securable_fullname="finance"
     )
-    schema_sql = scope(on_securable_type="SCHEMA", catalog_name=None, on_securable_name="finance.sales")
+    schema_sql = scope(on_securable_type="SCHEMA", catalog_name=None, on_securable_fullname="finance.sales")
     assert "catalog_name = 'finance'" in schema_sql
     assert "schema_name = 'sales'" in schema_sql
-    table_sql = scope(on_securable_type="TABLE", catalog_name=None, on_securable_name="finance.sales.orders")
+    table_sql = scope(
+        on_securable_type="TABLE", catalog_name=None, on_securable_fullname="finance.sales.orders"
+    )
     assert "table_name = 'orders'" in table_sql
-    assert scope(on_securable_type="SCHEMA", catalog_name="finance", on_securable_name="bad") == (
+    assert scope(on_securable_type="SCHEMA", catalog_name="finance", on_securable_fullname="bad") == (
         " AND catalog_name = 'finance'"
     )
-    assert scope(on_securable_type="VIEW", catalog_name=None, on_securable_name="x") == ""
+    assert scope(on_securable_type="VIEW", catalog_name=None, on_securable_fullname="x") == ""
     assert "table_catalog = 'finance'" in PolicyService._scope_filter_sql(  # noqa: SLF001
-        SimpleNamespace(on_securable_type="CATALOG", catalog_name="finance", on_securable_name="finance"),
+        SimpleNamespace(on_securable_type="CATALOG", catalog_name="finance", on_securable_fullname="finance"),
         catalog_col="table_catalog",
         schema_col="table_schema",
         table_col="table_name",

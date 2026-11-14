@@ -759,14 +759,14 @@ class PolicyService:
         if policy.on_securable_type == "CATALOG" and policy.catalog_name:
             return f" AND {catalog_col} = {string_literal(policy.catalog_name)}"
         if policy.on_securable_type == "SCHEMA":
-            parts = policy.on_securable_name.split(".", 1)
+            parts = policy.on_securable_fullname.split(".", 1)
             if len(parts) == 2:
                 return (
                     f" AND {catalog_col} = {string_literal(parts[0])}"
                     f" AND {schema_col} = {string_literal(parts[1])}"
                 )
         if policy.on_securable_type == "TABLE":
-            parts = policy.on_securable_name.split(".", 2)
+            parts = policy.on_securable_fullname.split(".", 2)
             if len(parts) == 3:
                 return (
                     f" AND {catalog_col} = {string_literal(parts[0])}"
