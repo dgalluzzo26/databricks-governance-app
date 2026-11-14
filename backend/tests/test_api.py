@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from backend.app.core.container import ServiceContainer
 from backend.tests.conftest import HOST, headers_for
 
 
@@ -42,7 +43,15 @@ def test_me_unknown_user_falls_back_to_header_identity(client: TestClient) -> No
     assert body["groups"] == []
 
 
-def test_me_without_headers_uses_local_identity(client: TestClient) -> None:
+def test_me_without_headers_is_rejected_by_default(client: TestClient) -> None:
+    assert client.get("/api/me").status_code == 401
+
+
+def test_me_without_headers_uses_local_identity_when_allowed(
+    client: TestClient, container: ServiceContainer
+) -> None:
+    resolver = container.request_context
+    resolver._config = resolver._config.model_copy(update={"allow_local_identity": True})  # noqa: SLF001
     body = client.get("/api/me").json()
     assert body["userName"] == "local@example.com"
 

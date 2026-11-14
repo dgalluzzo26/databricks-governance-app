@@ -20,11 +20,12 @@ class RequestContextResolver:
     """Builds the caller identity from Databricks Apps proxy headers.
 
     The forwarded email is the workspace userName; the preferred-username header carries the
-    display name. Outside Databricks Apps (local development) there are no proxy headers, so the
-    caller is DEV_USER_EMAIL, or else the identity of the local CLI profile.
+    display name. Outside Databricks Apps (local development) there are no proxy headers; with
+    ``ALLOW_LOCAL_IDENTITY`` set, the caller is DEV_USER_EMAIL, or else the identity of the
+    local CLI profile. Without it, header-less requests are rejected.
 
     Args:
-        config: App configuration (``dev_user_email``).
+        config: App configuration (``allow_local_identity``, ``dev_user_email``).
         factory: Workspace client factory used to resolve the local CLI identity.
         cache: TTL cache for the local CLI identity.
 
@@ -53,7 +54,8 @@ class RequestContextResolver:
             The caller's identity; the access token is set only when forwarded by the proxy.
 
         Raises:
-            UnauthorizedError: If there is no forwarded email and no local identity.
+            UnauthorizedError: If there is no forwarded email and local identity is disabled
+                or unavailable.
         """
         email = headers.get(self.EMAIL_HEADER)
         if email:
@@ -63,6 +65,8 @@ class RequestContextResolver:
                 display_name=headers.get(self.DISPLAY_NAME_HEADER),
                 access_token=headers.get(self.TOKEN_HEADER),
             )
+        if not self._config.allow_local_identity:
+            raise UnauthorizedError("No user identity on the request")
         local_user = self._local_user()
         if not local_user:
             raise UnauthorizedError("No user identity on the request")

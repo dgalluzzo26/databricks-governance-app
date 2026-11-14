@@ -121,7 +121,15 @@ def create_app(config: AppConfig | None = None, container: ServiceContainer | No
         yield
         await run_in_threadpool(container.shutdown)
 
-    app = FastAPI(title="Data Governance App", version=__version__, lifespan=lifespan)
+    # No built-in Swagger / OpenAPI pages: Help's admin-only API reference documents the routes.
+    app = FastAPI(
+        title="Data Governance App",
+        version=__version__,
+        lifespan=lifespan,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
     app.state.container = container
     register_exception_handlers(app)
     app.include_router(api_router)

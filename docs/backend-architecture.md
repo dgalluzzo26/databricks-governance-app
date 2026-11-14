@@ -59,7 +59,7 @@ Errors raise `AppError` subclasses (`backend/app/core/errors.py`) and render as
 | Error | HTTP | Typical cause |
 | --- | --- | --- |
 | `InvalidRequestError` | 422 | Bad value, wrong state, lock held, apply not ready |
-| `UnauthorizedError` | 401 | No forwarded identity |
+| `UnauthorizedError` | 401 | No forwarded identity (local CLI identity only with `ALLOW_LOCAL_IDENTITY`) |
 | `ForbiddenError` | 403 | Non-admin on admin route, not an approver |
 | `NotFoundError` | 404 | Unknown id / slug |
 | `UpstreamError` | 502 | Databricks API or SQL failed or timed out |
@@ -162,7 +162,7 @@ through `quote_identifier` and literals through `string_literal`; never interpol
 | Identity access status | `/api/data-access/access-status*` | `DataAccessService`, `data_access_status` | Grants sync |
 | Performance | `/api/performance` | `PerformanceService`, `performance_analytics`, `AppCostService` | Performance and app cost (below) |
 | App status | `/api/app-info`, `/api/health` | `AppInfoService` | |
-| Help | `/api/help` | Route only (guides tagged `user` / `approver` / `admin`; UI filters by effective role) | This page |
+| Help | `/api/help` | Route only (guides tagged `user` / `approver` / `admin`; the API returns only guides the caller's role may read, admins get all for View as; API reference is admin-only; FastAPI `/docs` and `/openapi.json` are off) | This page |
 
 ---
 

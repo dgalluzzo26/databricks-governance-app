@@ -11,6 +11,7 @@ cd "$(dirname "$0")/.."
 
 export STORAGE_BACKEND="${STORAGE_BACKEND:-memory}"
 export DATABRICKS_APP_PORT=8000
+export ALLOW_LOCAL_IDENTITY="${ALLOW_LOCAL_IDENTITY:-true}"
 
 [[ -d .venv ]] || { python3 -m venv .venv && .venv/bin/pip install -q -r requirements-dev.txt; }
 [[ -d frontend/node_modules ]] || (cd frontend && npm ci --no-audit --no-fund)

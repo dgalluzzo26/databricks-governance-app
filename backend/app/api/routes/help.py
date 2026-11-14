@@ -19,7 +19,13 @@ from fastapi.dependencies.models import Dependant
 from fastapi.responses import PlainTextResponse
 from fastapi.routing import APIRoute
 
-from backend.app.api.deps import User, get_current_user, get_request_context, require_admin
+from backend.app.api.deps import (
+    Admin,
+    User,
+    get_current_user,
+    get_request_context,
+    require_admin,
+)
 from backend.app.core.errors import NotFoundError
 from backend.app.models.help import (
     ApiEndpoint,
@@ -30,6 +36,7 @@ from backend.app.models.help import (
     HelpDoc,
     HelpDocList,
 )
+from backend.app.models.user import CurrentUser
 
 router = APIRouter(tags=["help"])
 
@@ -95,40 +102,56 @@ def _read_doc(doc: HelpDoc) -> str:
     return path.read_text(encoding="utf-8")
 
 
-@router.get("/help/docs", response_model=HelpDocList)
-def list_docs() -> HelpDocList:
-    """List every help guide (user, approver, and admin).
+def _can_read(doc: HelpDoc, user: CurrentUser) -> bool:
+    """Whether ``user`` may read ``doc``.
 
-    The Help UI filters by the caller's effective role. Returns the full catalog so
-    View as can switch audiences without refetching.
+    Admins read every guide (View as previews the user and approver guides); approvers read
+    user and approver guides; everyone else reads user guides only.
+    """
+    if user.is_admin:
+        return True
+    allowed = {HelpAudience.USER}
+    if user.is_approver:
+        allowed.add(HelpAudience.APPROVER)
+    return bool(allowed.intersection(doc.audiences))
+
+
+@router.get("/help/docs", response_model=HelpDocList)
+def list_docs(user: User) -> HelpDocList:
+    """List the help guides the caller may read.
+
+    Admins get the full catalog so View as can switch audiences without refetching; the Help
+    UI then filters by the effective role.
 
     Returns:
-        Guides in display order.
+        Readable guides in display order.
     """
-    return HelpDocList(docs=list(_DOCS))
+    return HelpDocList(docs=[doc for doc in _DOCS if _can_read(doc, user)])
 
 
 @router.get("/help/docs/{slug}", response_class=PlainTextResponse)
-def get_doc(slug: str) -> str:
-    """Return one developer guide as Markdown.
+def get_doc(slug: str, user: User) -> str:
+    """Return one help guide as Markdown.
 
     Args:
         slug: Guide key from ``/help/docs``.
+        user: Signed-in user whose role decides which guides are readable.
 
     Returns:
         Full Markdown contents of the guide.
 
     Raises:
-        NotFoundError: If the slug is unknown or the file is missing (HTTP 404).
+        NotFoundError: If the slug is unknown, not readable by the caller, or the file is
+            missing (HTTP 404).
     """
     doc = _DOCS_BY_SLUG.get(slug)
-    if doc is None:
+    if doc is None or not _can_read(doc, user):
         raise NotFoundError(f"Unknown help document: {slug}")
     return _read_doc(doc)
 
 
 @router.get("/help/flows", response_class=PlainTextResponse)
-def mask_and_row_filter_flows() -> str:
+def mask_and_row_filter_flows(_: Admin) -> str:
     """Return the mask / row-filter developer guide as Markdown.
 
     Kept for older clients; equivalent to ``/help/docs/masking-row-filters``.
@@ -143,7 +166,7 @@ def mask_and_row_filter_flows() -> str:
 
 
 @router.get("/help/api-reference", response_model=ApiReference)
-def api_reference(_: User) -> ApiReference:
+def api_reference(_: Admin) -> ApiReference:
     """Describe every ``/api`` endpoint from the mounted feature routers.
 
     Access level comes from the route's auth dependencies; summary and description come

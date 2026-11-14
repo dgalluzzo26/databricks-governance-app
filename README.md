@@ -116,7 +116,8 @@ DATABRICKS_CONFIG_PROFILE=dbc-16303671-e52d ./scripts/dev.sh   # API :8000, UI :
 ```
 
 Locally the caller is the CLI profile's user (or `DEV_USER_EMAIL`) and storage defaults to
-in-memory.
+in-memory. `dev.sh` sets `ALLOW_LOCAL_IDENTITY=true` for this; without it (as in the deployed
+app) a request with no Apps proxy identity headers is rejected with 401.
 
 ```bash
 .venv/bin/pytest && .venv/bin/ruff check backend provisioning   # backend

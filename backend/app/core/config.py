@@ -96,6 +96,8 @@ class AppConfig(BaseSettings):
         identity_cache_ttl_seconds: TTL in seconds for cached user / group lookups
             (``IDENTITY_CACHE_TTL_SECONDS``).
         log_level: Root log level (``LOG_LEVEL``).
+        allow_local_identity: Accept requests without Apps proxy headers as a local identity
+            (``ALLOW_LOCAL_IDENTITY``); off by default so a deployed app fails closed.
         dev_user_email: Identity to assume locally when no Apps proxy headers are present
             (``DEV_USER_EMAIL``); None falls back to the CLI profile's user.
         frontend_dist: Directory of the built frontend served as static files
@@ -153,6 +155,7 @@ class AppConfig(BaseSettings):
     identity_cache_ttl_seconds: int = Field(300, alias="IDENTITY_CACHE_TTL_SECONDS")
     log_level: str = Field("INFO", alias="LOG_LEVEL")
 
+    allow_local_identity: bool = Field(False, alias="ALLOW_LOCAL_IDENTITY")
     dev_user_email: str | None = Field(None, alias="DEV_USER_EMAIL")
     frontend_dist: Path = Field(REPO_ROOT / "frontend" / "dist", alias="FRONTEND_DIST")
     data_access_sync_job_id: str | None = Field(None, alias="DATA_ACCESS_SYNC_JOB_ID")
