@@ -50,9 +50,7 @@ def token_for(profile: str) -> str:
 
 class Session:
     def __init__(self, base: str, token: str, results: Results, table: str) -> None:
-        self.client = httpx.Client(
-            base_url=base, headers={"Authorization": f"Bearer {token}"}, timeout=180.0
-        )
+        self.client = httpx.Client(base_url=base, headers={"Authorization": f"Bearer {token}"}, timeout=180.0)
         self.results = results
         self.table = table
 
@@ -92,25 +90,35 @@ class Session:
 
         # Access Explorer
         self.call("access explorer: tree catalogs", "GET", "/api/access-explorer/tree/catalogs")
-        self.call("access explorer: tree schemas", "GET", f"/api/access-explorer/tree/schemas?catalog={catalog}")
-        listing = self.call(
-            "access explorer: tree tables",
-            "GET",
-            f"/api/access-explorer/tree/tables?catalog={catalog}&schema={schema}",
-        ) or {}
+        self.call(
+            "access explorer: tree schemas", "GET", f"/api/access-explorer/tree/schemas?catalog={catalog}"
+        )
+        listing = (
+            self.call(
+                "access explorer: tree tables",
+                "GET",
+                f"/api/access-explorer/tree/tables?catalog={catalog}&schema={schema}",
+            )
+            or {}
+        )
         # Each simulated user opens a different table so the per-table cache is not always warm.
         names = [t["tableName"] for t in listing.get("tables") or []]
         table = f"{catalog}.{schema}.{random.choice(names)}" if names else self.table
         term = table.rsplit(".", 1)[-1][:4] or "abac"
         self.call("access explorer: search", "GET", f"/api/access-explorer/search?q={term}&limit=40")
-        self.call("access explorer: analyze table", "POST", "/api/access-explorer/analyze", {"fullName": table})
+        self.call(
+            "access explorer: analyze table", "POST", "/api/access-explorer/analyze", {"fullName": table}
+        )
 
         # Attribute Explorer
         definitions = self.call("attribute explorer: definitions", "GET", "/api/identity/definitions") or {}
         self.call("attribute explorer: governed tags", "GET", "/api/identity/governed-tags")
         key = next(
-            (d.get("key") for d in (definitions.get("definitions") or definitions.get("items") or [])
-             if d.get("key") == "data_access"),
+            (
+                d.get("key")
+                for d in (definitions.get("definitions") or definitions.get("items") or [])
+                if d.get("key") == "data_access"
+            ),
             "data_access",
         )
         self.call(
@@ -144,7 +152,9 @@ def report(title: str, results: Results, wall_s: float) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("--profile", required=True)
     parser.add_argument("--url", default=DEFAULT_URL)
     parser.add_argument("--table", default=DEFAULT_TABLE)
@@ -158,7 +168,7 @@ def main() -> None:
         started = time.perf_counter()
         with ThreadPoolExecutor(max_workers=args.users) as pool:
             for _ in range(args.users):
-                pool.submit(lambda: Session(args.url, token, results, args.table).run())
+                pool.submit(Session(args.url, token, results, args.table).run)
         report(f"round {round_no}, {args.users} user(s)", results, time.perf_counter() - started)
 
 

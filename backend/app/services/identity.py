@@ -92,21 +92,28 @@ class IdentityService:
             raise InvalidRequestError("Service principal search is not supported")
         cap = max(1, min(limit, _SEARCH_LIMIT_MAX))
         escaped = needle.replace("\\", "\\\\").replace('"', '\\"')
-        results: list[DirectoryPrincipal] = []
-        truncated = False
-        try:
-            client = self._factory.admin()
-            if kind in (None, PrincipalKind.USER):
-                users, user_trunc = self._search_users(client, escaped, cap)
-                results.extend(users)
-                truncated = truncated or user_trunc
-            if kind in (None, PrincipalKind.GROUP) and len(results) < cap:
-                groups, group_trunc = self._search_groups(client, escaped, cap - len(results))
-                results.extend(groups)
-                truncated = truncated or group_trunc
-        except DatabricksError as exc:
-            raise UpstreamError(f"Directory search failed: {exc}") from exc
-        return DirectoryPrincipalList(principals=results[:cap], total=len(results[:cap]), truncated=truncated)
+
+        def load() -> DirectoryPrincipalList:
+            results: list[DirectoryPrincipal] = []
+            truncated = False
+            try:
+                client = self._factory.admin()
+                if kind in (None, PrincipalKind.USER):
+                    users, user_trunc = self._search_users(client, escaped, cap)
+                    results.extend(users)
+                    truncated = truncated or user_trunc
+                if kind in (None, PrincipalKind.GROUP) and len(results) < cap:
+                    groups, group_trunc = self._search_groups(client, escaped, cap - len(results))
+                    results.extend(groups)
+                    truncated = truncated or group_trunc
+            except DatabricksError as exc:
+                raise UpstreamError(f"Directory search failed: {exc}") from exc
+            return DirectoryPrincipalList(
+                principals=results[:cap], total=len(results[:cap]), truncated=truncated
+            )
+
+        # SCIM is rate limited; identical searches share one call for the identity cache TTL.
+        return self._cache.get_or_load(("principal-search", needle.lower(), kind, cap), load)
 
     def _search_users(
         self, client: object, escaped: str, limit: int
