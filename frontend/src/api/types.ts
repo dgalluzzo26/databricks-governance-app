@@ -93,7 +93,7 @@ export interface GrantDenyInfo {
   privileges: string[];
 }
 
-/** A securable (table or column) that a policy currently matches via its governed tags. */
+/** A securable (table or column) that satisfies a policy WHEN / MATCH COLUMNS condition. */
 export interface AffectedAsset {
   /** Kind of securable, e.g. `TABLE` or `COLUMN`. */
   assetType: string;
@@ -155,7 +155,7 @@ export interface PolicyDetail extends PolicySummary {
   affectedAssets: AffectedAsset[];
   /** `true` when `affectedAssets` was capped by the backend's asset limit. */
   affectedAssetsTruncated: boolean;
-  /** Explanation when the asset list is truncated or discovery is unsupported for this policy. */
+  /** Explanation when the asset list is truncated, skipped, or discovery could not run. */
   affectedAssetsNote: string | null;
 }
 

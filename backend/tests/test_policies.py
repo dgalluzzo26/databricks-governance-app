@@ -13,9 +13,16 @@ from backend.app.services.policies import (
     _normalize_policy_type,
     _normalize_securable_type,
     _parse_json_list,
+    _parse_match_columns,
     _parse_string_list,
     _parse_tags,
     _scope_kind,
+)
+from backend.app.services.tag_conditions import (
+    having_sql,
+    parse_tag_condition,
+    referenced_tag_keys,
+    strip_match_alias,
 )
 
 
@@ -203,7 +210,7 @@ def test_get_policy_detail() -> None:
 
 
 class RoutedSql:
-    """SQL stand-in returning rows (or raising) for the first route whose key appears in the SQL."""
+    """SQL stand-in returning rows (or raising) for the best-matching route key in the SQL."""
 
     def __init__(self, routes: dict[str, Any]) -> None:
         self.routes = routes
@@ -212,12 +219,14 @@ class RoutedSql:
     def query(self, statement: str, parameters=None):  # noqa: ANN001, ANN201
         del parameters
         self.queries.append(statement)
-        for needle, value in self.routes.items():
-            if needle in statement:
-                if isinstance(value, Exception):
-                    raise value
-                return list(value)
-        return []
+        # Prefer the longest matching needle so CTE names win over short table names.
+        matches = [(needle, value) for needle, value in self.routes.items() if needle in statement]
+        if not matches:
+            return []
+        needle, value = max(matches, key=lambda item: len(item[0]))
+        if isinstance(value, Exception):
+            raise value
+        return list(value)
 
 
 class _PoliciesApi:
@@ -391,7 +400,7 @@ def test_get_policy_falls_back_to_information_schema_when_api_fails() -> None:
     assert detail.affected_assets == []
 
 
-def test_get_policy_overlays_api_details_and_finds_tagged_assets() -> None:
+def test_get_policy_overlays_api_details_and_finds_matching_columns() -> None:
     info = SimpleNamespace(
         comment="PII mask",
         created_at=10,
@@ -399,13 +408,19 @@ def test_get_policy_overlays_api_details_and_finds_tagged_assets() -> None:
         updated_by="owner@example.com",
         to_principals=["analysts"],
         except_principals=["admins"],
-        when_condition="has_tag('sensitivity')",
+        when_condition="has_tag_value('data_access_controlled', 'true')",
         governed_tags=[
             SimpleNamespace(tag_key="sensitivity", tag_value="PII"),
             SimpleNamespace(tag_key="region", tag_value=None),
             SimpleNamespace(tag_key=None, tag_value=None),
         ],
-        match_columns=[SimpleNamespace(alias="c", condition="c.x > 1"), SimpleNamespace(alias=None)],
+        match_columns=[
+            SimpleNamespace(
+                alias="c",
+                condition="has_tag('sensitivity') AND has_tag_value('sensitivity', 'PII')",
+            ),
+            SimpleNamespace(alias=None),
+        ],
         column_mask=SimpleNamespace(function_name="mask_fn", on_column="email"),
         row_filter=SimpleNamespace(
             function_name="rf_fn",
@@ -415,7 +430,6 @@ def test_get_policy_overlays_api_details_and_finds_tagged_assets() -> None:
         deny=SimpleNamespace(privileges=["SELECT"]),
     )
     column_hit = {
-        "asset_type": "COLUMN",
         "catalog_name": "finance",
         "schema_name": "sales",
         "table_name": "orders",
@@ -423,20 +437,16 @@ def test_get_policy_overlays_api_details_and_finds_tagged_assets() -> None:
         "tag_name": "sensitivity",
         "tag_value": "PII",
     }
-    table_hit = {
-        "asset_type": "TABLE",
-        "catalog_name": "finance",
-        "schema_name": "sales",
-        "table_name": "orders",
-        "column_name": None,
-        "tag_name": "region",
-        "tag_value": None,
-    }
     api = _PoliciesApi(info=info)
     sql_routes = {
-        "abac_policy_definitions": [_row()],
-        "column_tags": [column_hit, column_hit],  # duplicate is de-duplicated
-        "table_tags": [table_hit],
+        "abac_policy_definitions": [
+            _row(
+                match_columns=(
+                    '["(has_tag(\'sensitivity\') AND has_tag_value(\'sensitivity\', \'PII\')) AS c"]'
+                )
+            )
+        ],
+        "scoped_column_tags": [column_hit, column_hit],  # duplicate is de-duplicated
     }
     service = _service_for(routes=sql_routes, api=api)
     detail = service.get_policy("p1")
@@ -447,6 +457,9 @@ def test_get_policy_overlays_api_details_and_finds_tagged_assets() -> None:
     assert detail.except_principals == ["admins"]
     assert [(t.key, t.value) for t in detail.governed_tags] == [("sensitivity", "PII"), ("region", None)]
     assert [m.alias for m in detail.match_columns] == ["c"]
+    assert detail.match_columns[0].condition == (
+        "has_tag('sensitivity') AND has_tag_value('sensitivity', 'PII')"
+    )
     assert detail.column_mask is not None
     assert (detail.column_mask.function_name, detail.column_mask.on_column) == ("mask_fn", "email")
     assert detail.row_filter is not None
@@ -457,20 +470,35 @@ def test_get_policy_overlays_api_details_and_finds_tagged_assets() -> None:
 
     assert [(a.full_name, a.asset_type) for a in detail.affected_assets] == [
         ("finance.sales.orders.email", "COLUMN"),
-        ("finance.sales.orders", "TABLE"),
     ]
     assert detail.affected_assets_truncated is False
-    assert "approximate" in (detail.affected_assets_note or "")
-    column_query = next(q for q in service._sql.queries if "column_tags" in q)  # noqa: SLF001
-    assert "(tag_name = 'sensitivity' AND tag_value = 'PII')" in column_query
-    assert "tag_name = 'region'" in column_query
+    assert "MATCH COLUMNS" in (detail.affected_assets_note or "")
+    assert "approximate" not in (detail.affected_assets_note or "")
+    column_query = next(q for q in service._sql.queries if "scoped_column_tags" in q)  # noqa: SLF001
+    assert "bool_or(tag_name = 'sensitivity')" in column_query
+    assert "when_tables" in column_query
+    assert "catalog_tags" in column_query
 
 
 def test_get_policy_with_sparse_api_payload_keeps_information_schema_values() -> None:
-    service = _service_for([_row()], api=_PoliciesApi(info=SimpleNamespace()))
+    service = _service_for(
+        [
+            _row(
+                match_columns='["(has_tag(\'sensitivity\')) AS c"]',
+            )
+        ],
+        api=_PoliciesApi(info=SimpleNamespace()),
+        routes={
+            "abac_policy_definitions": [
+                _row(match_columns='["(has_tag(\'sensitivity\')) AS c"]')
+            ],
+            "scoped_column_tags": [],
+        },
+    )
     detail = service.get_policy("p1")
     assert detail.to_principals == ["analysts"]
     assert detail.when_condition == "has_tag('sensitivity')"
+    assert [m.condition for m in detail.match_columns] == ["(has_tag('sensitivity'))"]
     assert detail.column_mask is None
     assert detail.row_filter is None
 
@@ -483,21 +511,28 @@ def test_get_policy_grant_privileges_are_recorded() -> None:
     assert detail.privileges == ["EXECUTE"]
 
 
-def test_affected_assets_explain_unsupported_and_untagged_policies() -> None:
+def test_affected_assets_explain_unsupported_and_conditionless_policies() -> None:
     rows = [
         _row(for_securable_type="MODEL", governed_tags='[{"tag_key":"x","tag_value":null}]'),
-        _row(policy_id="p2", governed_tags="[]"),
+        _row(policy_id="p2", when_condition=None, match_columns="[]", governed_tags="[]"),
     ]
     service = _service_for(rows)
     model_detail = service.get_policy("p1")
     assert model_detail.affected_assets == []
     assert "not available yet" in (model_detail.affected_assets_note or "")
-    untagged_detail = service.get_policy("p2")
-    assert "does not reference governed tags" in (untagged_detail.affected_assets_note or "")
+    empty_detail = service.get_policy("p2")
+    assert "no WHEN or MATCH COLUMNS" in (empty_detail.affected_assets_note or "")
 
 
 def test_affected_assets_report_lookup_failures() -> None:
-    service = _service_for(routes={"abac_policy_definitions": [_row()], "column_tags": RuntimeError("no access")})
+    service = _service_for(
+        routes={
+            "abac_policy_definitions": [
+                _row(match_columns='["(has_tag(\'sensitivity\')) AS c"]')
+            ],
+            "scoped_column_tags": RuntimeError("no access"),
+        }
+    )
     detail = service.get_policy("p1")
     assert detail.affected_assets == []
     assert detail.affected_assets_note == "Could not resolve tagged assets: no access"
@@ -507,7 +542,6 @@ def test_affected_assets_truncate_at_the_limit(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(policies_module, "_ASSET_LIMIT", 2)
     columns = [
         {
-            "asset_type": "COLUMN",
             "catalog_name": "finance",
             "schema_name": "sales",
             "table_name": f"t{i}",
@@ -517,27 +551,91 @@ def test_affected_assets_truncate_at_the_limit(monkeypatch: pytest.MonkeyPatch) 
         }
         for i in range(3)
     ]
-    service = _service_for(routes={"abac_policy_definitions": [_row()], "column_tags": columns})
+    service = _service_for(
+        routes={
+            "abac_policy_definitions": [
+                _row(match_columns='["(has_tag(\'sensitivity\')) AS c"]')
+            ],
+            "scoped_column_tags": columns,
+        }
+    )
     detail = service.get_policy("p1")
     assert len(detail.affected_assets) == 2
     assert detail.affected_assets_truncated is True
     assert "Showing the first 2 matches" in (detail.affected_assets_note or "")
 
 
+def test_when_only_policies_return_matching_tables() -> None:
+    tables = [
+        {
+            "catalog_name": "finance",
+            "schema_name": "sales",
+            "table_name": "orders",
+            "column_name": None,
+            "tag_name": "data_access_controlled",
+            "tag_value": "true",
+        }
+    ]
+    service = _service_for(
+        routes={
+            "abac_policy_definitions": [
+                _row(
+                    policy_type="POLICY_TYPE_GRANT",
+                    when_condition="has_tag_value('data_access_controlled', 'true')",
+                    match_columns="[]",
+                    governed_tags='[{"tag_key":"data_access_controlled","tag_value":"true"}]',
+                )
+            ],
+            "effective_tags": tables,
+        }
+    )
+    detail = service.get_policy("p1")
+    assert [(a.full_name, a.asset_type) for a in detail.affected_assets] == [
+        ("finance.sales.orders", "TABLE")
+    ]
+    assert "WHEN condition" in (detail.affected_assets_note or "")
+
+
+def test_tag_condition_parser_and_match_column_helpers() -> None:
+    assert strip_match_alias("(has_tag('x')) AS c") == ("(has_tag('x'))", "c")
+    node = parse_tag_condition(
+        "has_tag('sensitivity') AND NOT has_tag_value('data_type', 'geometry')"
+    )
+    sql = having_sql(node)
+    assert "bool_or(tag_name = 'sensitivity')" in sql
+    assert "NOT (bool_or(tag_name = 'data_type' AND tag_value = 'geometry'))" in sql
+    assert referenced_tag_keys(node) == ["data_type", "sensitivity"]
+    ignored = parse_tag_condition(
+        "has_tag('x') AND has_identity_attribute_value('role', 'admin')"
+    )
+    assert "TRUE" in having_sql(ignored)
+    matches = _parse_match_columns(
+        '["(\\n  has_tag_value(\'row_filter\', \'state\')\\n) AS c"]'
+    )
+    assert matches[0].alias == "c"
+    assert "has_tag_value('row_filter', 'state')" in (matches[0].condition or "")
+
+
 def test_scope_filter_sql_restricts_to_the_policy_securable() -> None:
     def scope(**fields: Any) -> str:
         return PolicyService._scope_filter_sql(SimpleNamespace(**fields))  # noqa: SLF001
 
-    assert scope(on_securable_type="METASTORE", catalog_name=None, on_securable_fullname="m") == ""
+    assert scope(on_securable_type="METASTORE", catalog_name=None, on_securable_name="m") == ""
     assert "catalog_name = 'finance'" in scope(
-        on_securable_type="CATALOG", catalog_name="finance", on_securable_fullname="finance"
+        on_securable_type="CATALOG", catalog_name="finance", on_securable_name="finance"
     )
-    schema_sql = scope(on_securable_type="SCHEMA", catalog_name=None, on_securable_fullname="finance.sales")
+    schema_sql = scope(on_securable_type="SCHEMA", catalog_name=None, on_securable_name="finance.sales")
     assert "catalog_name = 'finance'" in schema_sql
     assert "schema_name = 'sales'" in schema_sql
-    table_sql = scope(on_securable_type="TABLE", catalog_name=None, on_securable_fullname="finance.sales.orders")
+    table_sql = scope(on_securable_type="TABLE", catalog_name=None, on_securable_name="finance.sales.orders")
     assert "table_name = 'orders'" in table_sql
-    assert scope(on_securable_type="SCHEMA", catalog_name="finance", on_securable_fullname="bad") == (
+    assert scope(on_securable_type="SCHEMA", catalog_name="finance", on_securable_name="bad") == (
         " AND catalog_name = 'finance'"
     )
-    assert scope(on_securable_type="VIEW", catalog_name=None, on_securable_fullname="x") == ""
+    assert scope(on_securable_type="VIEW", catalog_name=None, on_securable_name="x") == ""
+    assert "table_catalog = 'finance'" in PolicyService._scope_filter_sql(  # noqa: SLF001
+        SimpleNamespace(on_securable_type="CATALOG", catalog_name="finance", on_securable_name="finance"),
+        catalog_col="table_catalog",
+        schema_col="table_schema",
+        table_col="table_name",
+    )

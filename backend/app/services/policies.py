@@ -2,8 +2,9 @@
 
 Lists metastore- and catalog-scoped ABAC policies from
 ``system.information_schema.abac_policy_definitions`` (cached), enriches a single policy with
-details from the Policies API, and approximates which tables and columns it affects by
-matching the governed tags the policy references against information_schema tag tables.
+details from the Policies API, and finds tables and columns the policy actually targets by
+evaluating its ``WHEN`` and ``MATCH COLUMNS`` tag conditions against information_schema tags
+(including catalog/schema tag inheritance for ``WHEN``).
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from databricks.sdk.errors import NotFound
 from backend.app.clients.cache import TtlCache
 from backend.app.clients.sql import SqlExecutor, string_literal
 from backend.app.clients.workspace import WorkspaceClientFactory
-from backend.app.core.errors import NotFoundError, UpstreamError
+from backend.app.core.errors import InvalidRequestError, NotFoundError, UpstreamError
 from backend.app.models.policy import (
     AffectedAsset,
     ColumnMaskInfo,
@@ -28,6 +29,12 @@ from backend.app.models.policy import (
     PolicySummary,
     RowFilterInfo,
     TagRef,
+)
+from backend.app.services.tag_conditions import (
+    having_sql,
+    parse_tag_condition,
+    referenced_tag_keys,
+    strip_match_alias,
 )
 
 logger = logging.getLogger(__name__)
@@ -98,6 +105,32 @@ def _parse_tags(raw: Any) -> list[TagRef]:
         elif isinstance(item, str) and item.strip():
             tags.append(TagRef(key=item.strip()))
     return tags
+
+
+def _parse_match_columns(raw: Any) -> list[MatchColumnInfo]:
+    """Parse ``MATCH COLUMNS`` from information_schema (JSON array of ``expr AS alias`` strings)."""
+    items = _parse_json_list(raw)
+    if not items and isinstance(raw, str) and raw.strip() and not raw.strip().startswith("["):
+        items = [raw]
+    matches: list[MatchColumnInfo] = []
+    for item in items:
+        if isinstance(item, dict):
+            alias = item.get("alias")
+            condition = item.get("condition")
+            if condition:
+                matches.append(
+                    MatchColumnInfo(
+                        alias=str(alias or "c"),
+                        condition=str(condition).strip() or None,
+                    )
+                )
+            continue
+        if not isinstance(item, str) or not item.strip():
+            continue
+        condition, alias = strip_match_alias(item)
+        if condition:
+            matches.append(MatchColumnInfo(alias=alias or "c", condition=condition))
+    return matches
 
 
 def _normalize_policy_type(raw: str | None) -> str:
@@ -206,7 +239,7 @@ class PolicyService:
         )
 
     def get_policy(self, policy_id: str) -> PolicyDetail:
-        """Return one policy with API details and approximate affected assets.
+        """Return one policy with API details and affected assets from WHEN/MATCH evaluation.
 
         Starts from the cached information_schema row and overlays comment, timestamps,
         principals, match columns, mask/row-filter functions, and grant/deny privileges from
@@ -217,7 +250,8 @@ class PolicyService:
             policy_id: Policy identifier from the list view.
 
         Returns:
-            The policy detail including tagged assets in scope (capped and approximate).
+            The policy detail including tables/columns that satisfy its WHEN and MATCH
+            COLUMNS tag conditions (capped).
 
         Raises:
             NotFoundError: If the policy is not in information_schema or the Policies API
@@ -230,7 +264,10 @@ class PolicyService:
 
         metastore_name = self._metastore_name()
         summary = self._to_summary(row, metastore_name)
-        detail = PolicyDetail(**summary.model_dump())
+        detail = PolicyDetail(
+            **summary.model_dump(),
+            match_columns=_parse_match_columns(row.get("match_columns")),
+        )
 
         try:
             info = self._factory.admin().policies.get_policy(
@@ -264,11 +301,14 @@ class PolicyService:
                     for t in info.governed_tags
                     if getattr(t, "tag_key", None)
                 ]
-            detail.match_columns = [
+            api_matches = [
                 MatchColumnInfo(alias=m.alias, condition=getattr(m, "condition", None))
                 for m in (getattr(info, "match_columns", None) or [])
                 if getattr(m, "alias", None)
             ]
+            # Keep information_schema MATCH COLUMNS when the API omits them.
+            if api_matches:
+                detail.match_columns = api_matches
             mask = getattr(info, "column_mask", None)
             if mask and getattr(mask, "function_name", None):
                 detail.column_mask = ColumnMaskInfo(
@@ -372,13 +412,15 @@ class PolicyService:
         return ".".join(str(p) for p in parts)
 
     def _affected_assets(self, policy: PolicyDetail) -> tuple[list[AffectedAsset], bool, str | None]:
-        """Find tagged columns and tables in the policy's scope that carry its governed tags.
+        """Find tables/columns in scope that satisfy the policy's WHEN and MATCH COLUMNS.
 
-        This is an approximation: WHEN and MATCH conditions are not evaluated. Lookup
-        failures are logged and reported in the note rather than raised.
+        ``WHEN`` is evaluated against table tags plus inherited catalog/schema tags.
+        ``MATCH COLUMNS`` is evaluated against direct column tags only. Identity/context
+        attribute functions in conditions are treated as true for discovery. Lookup and
+        parse failures are logged and reported in the note rather than raised.
 
         Args:
-            policy: Policy detail with scope and governed tags.
+            policy: Policy detail with scope, WHEN, and MATCH COLUMNS.
 
         Returns:
             De-duplicated assets (capped at the asset limit), a truncated flag, and an
@@ -391,109 +433,346 @@ class PolicyService:
                 f"Affected-asset discovery for {policy.for_securable_type} is not available yet; "
                 "showing principals, tags, and conditions only.",
             )
-        if not policy.governed_tags:
+
+        when_text = (policy.when_condition or "").strip() or None
+        match_texts = [
+            condition
+            for item in policy.match_columns
+            if (condition := (item.condition or "").strip())
+        ]
+        if not when_text and not match_texts and not policy.governed_tags:
             return (
                 [],
                 False,
-                "This policy does not reference governed tags, so tagged-asset discovery was skipped.",
+                "This policy has no WHEN or MATCH COLUMNS tag condition, so affected-asset "
+                "discovery was skipped.",
             )
 
-        predicates: list[str] = []
-        for tag in policy.governed_tags:
-            key = string_literal(tag.key)
-            if tag.value is None:
-                predicates.append(f"tag_name = {key}")
-            else:
-                predicates.append(f"(tag_name = {key} AND tag_value = {string_literal(tag.value)})")
-        tag_sql = " OR ".join(predicates)
-        scope_sql = self._scope_filter_sql(policy)
+        try:
+            when_node = parse_tag_condition(when_text) if when_text else None
+            match_nodes = [parse_tag_condition(text) for text in match_texts]
+        except InvalidRequestError as exc:
+            return [], False, f"Could not evaluate WHEN/MATCH condition: {exc}"
 
         limit = _ASSET_LIMIT + 1
-        column_sql = f"""
-            SELECT
-              'COLUMN' AS asset_type,
-              catalog_name, schema_name, table_name, column_name, tag_name, tag_value
-            FROM system.information_schema.column_tags
-            WHERE ({tag_sql}) {scope_sql}
-            LIMIT {limit}
-        """
-        table_sql = f"""
-            SELECT
-              'TABLE' AS asset_type,
-              catalog_name, schema_name, table_name,
-              CAST(NULL AS STRING) AS column_name,
-              tag_name, tag_value
-            FROM system.information_schema.table_tags
-            WHERE ({tag_sql}) {scope_sql}
-            LIMIT {limit}
-        """
-
-        assets: list[AffectedAsset] = []
         try:
-            for row in self._sql.query(column_sql) + self._sql.query(table_sql):
-                catalog = row.get("catalog_name")
-                schema = row.get("schema_name")
-                table = row.get("table_name")
-                column = row.get("column_name")
-                parts = [p for p in (catalog, schema, table, column) if p]
-                assets.append(
-                    AffectedAsset(
-                        asset_type=str(row.get("asset_type") or "UNKNOWN"),
-                        full_name=".".join(str(p) for p in parts),
-                        catalog_name=None if catalog is None else str(catalog),
-                        schema_name=None if schema is None else str(schema),
-                        table_name=None if table is None else str(table),
-                        column_name=None if column is None else str(column),
-                        matched_tag_key=None if row.get("tag_name") is None else str(row.get("tag_name")),
-                        matched_tag_value=None if row.get("tag_value") is None else str(row.get("tag_value")),
-                    )
-                )
+            if match_nodes:
+                rows = self._matching_columns(policy, when_node, match_nodes, limit)
+                asset_type = "COLUMN"
+            else:
+                rows = self._matching_tables(policy, when_node, limit)
+                asset_type = "TABLE"
         except Exception as exc:  # noqa: BLE001
             logger.warning("Affected asset lookup failed for %s: %s", policy.id, exc)
             return [], False, f"Could not resolve tagged assets: {exc}"
 
-        # De-dupe while preserving order.
+        assets: list[AffectedAsset] = []
         seen: set[str] = set()
-        unique: list[AffectedAsset] = []
-        for asset in assets:
-            key = f"{asset.asset_type}:{asset.full_name}:{asset.matched_tag_key}:{asset.matched_tag_value}"
+        for row in rows:
+            catalog = row.get("catalog_name")
+            schema = row.get("schema_name")
+            table = row.get("table_name")
+            column = row.get("column_name")
+            parts = [p for p in (catalog, schema, table, column) if p]
+            asset = AffectedAsset(
+                asset_type=asset_type,
+                full_name=".".join(str(p) for p in parts),
+                catalog_name=None if catalog is None else str(catalog),
+                schema_name=None if schema is None else str(schema),
+                table_name=None if table is None else str(table),
+                column_name=None if column is None else str(column),
+                matched_tag_key=None if row.get("tag_name") is None else str(row.get("tag_name")),
+                matched_tag_value=None if row.get("tag_value") is None else str(row.get("tag_value")),
+            )
+            key = (
+                f"{asset.asset_type}:{asset.full_name}:"
+                f"{asset.matched_tag_key}:{asset.matched_tag_value}"
+            )
             if key in seen:
                 continue
             seen.add(key)
-            unique.append(asset)
+            assets.append(asset)
 
-        truncated = len(unique) > _ASSET_LIMIT
-        unique = unique[:_ASSET_LIMIT]
-        note = (
-            "Tagged assets in scope that match any governed tag referenced by the policy "
-            "(approximate; full WHEN/MATCH condition evaluation is not applied)."
-        )
+        truncated = len(assets) > _ASSET_LIMIT
+        assets = assets[:_ASSET_LIMIT]
+        if match_nodes:
+            note = (
+                "Columns in scope whose tags satisfy the policy MATCH COLUMNS condition"
+                + (" on tables that also satisfy WHEN." if when_node is not None else ".")
+            )
+        elif when_node is not None:
+            note = (
+                "Tables in scope whose tags (including inherited catalog/schema tags) "
+                "satisfy the policy WHEN condition."
+            )
+        else:
+            note = "Assets in the policy scope."
         if truncated:
-            note += f" Showing the first {_ASSET_LIMIT} matches; refine tags or scope to see the rest."
-        return unique, truncated, note
+            note += (
+                f" Showing the first {_ASSET_LIMIT} matches; refine the policy condition "
+                "or scope to see the rest."
+            )
+        return assets, truncated, note
+
+    def _matching_tables(
+        self,
+        policy: PolicyDetail,
+        when_node: object | None,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        """Return tables in scope that satisfy ``when_node`` (all scoped tables when None)."""
+        scope_sql = self._scope_filter_sql(
+            policy,
+            catalog_col="table_catalog",
+            schema_col="table_schema",
+            table_col="table_name",
+        )
+        if when_node is None:
+            return self._sql.query(
+                f"""
+                SELECT
+                  table_catalog AS catalog_name,
+                  table_schema AS schema_name,
+                  table_name,
+                  CAST(NULL AS STRING) AS column_name,
+                  CAST(NULL AS STRING) AS tag_name,
+                  CAST(NULL AS STRING) AS tag_value
+                FROM system.information_schema.tables
+                WHERE table_schema <> 'information_schema'
+                  {scope_sql}
+                ORDER BY table_catalog, table_schema, table_name
+                LIMIT {limit}
+                """
+            )
+
+        when_having = having_sql(when_node)  # type: ignore[arg-type]
+        keys = referenced_tag_keys(when_node)  # type: ignore[arg-type]
+        tag_pick = self._tag_pick_sql(keys)
+        return self._sql.query(
+            f"""
+            WITH scoped_tables AS (
+              SELECT table_catalog AS catalog_name, table_schema AS schema_name, table_name
+              FROM system.information_schema.tables
+              WHERE table_schema <> 'information_schema'
+                {scope_sql}
+            ),
+            effective_tags AS (
+              SELECT t.catalog_name, t.schema_name, t.table_name, tg.tag_name, tg.tag_value
+              FROM scoped_tables t
+              JOIN system.information_schema.table_tags tg
+                ON tg.catalog_name = t.catalog_name
+               AND tg.schema_name = t.schema_name
+               AND tg.table_name = t.table_name
+              UNION ALL
+              SELECT t.catalog_name, t.schema_name, t.table_name, sg.tag_name, sg.tag_value
+              FROM scoped_tables t
+              JOIN system.information_schema.schema_tags sg
+                ON sg.catalog_name = t.catalog_name
+               AND sg.schema_name = t.schema_name
+              UNION ALL
+              SELECT t.catalog_name, t.schema_name, t.table_name, cg.tag_name, cg.tag_value
+              FROM scoped_tables t
+              JOIN system.information_schema.catalog_tags cg
+                ON cg.catalog_name = t.catalog_name
+            )
+            SELECT
+              catalog_name,
+              schema_name,
+              table_name,
+              CAST(NULL AS STRING) AS column_name,
+              {tag_pick}
+            FROM effective_tags
+            GROUP BY catalog_name, schema_name, table_name
+            HAVING {when_having}
+            ORDER BY catalog_name, schema_name, table_name
+            LIMIT {limit}
+            """
+        )
+
+    def _matching_columns(
+        self,
+        policy: PolicyDetail,
+        when_node: object | None,
+        match_nodes: list[object],
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        """Return columns matching every MATCH COLUMNS expression on WHEN-matching tables.
+
+        A table is kept only when each MATCH expression finds at least one column. Returned
+        rows are the union of those matching columns.
+        """
+        per_expr = [self._columns_for_match(policy, when_node, node, limit) for node in match_nodes]
+        if not per_expr:
+            return []
+        if len(per_expr) == 1:
+            return per_expr[0]
+
+        def table_key(row: dict[str, Any]) -> tuple[str, str, str]:
+            return (
+                str(row.get("catalog_name") or ""),
+                str(row.get("schema_name") or ""),
+                str(row.get("table_name") or ""),
+            )
+
+        eligible = {table_key(row) for row in per_expr[0]}
+        for rows in per_expr[1:]:
+            eligible &= {table_key(row) for row in rows}
+        combined: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, str, str]] = set()
+        for rows in per_expr:
+            for row in rows:
+                if table_key(row) not in eligible:
+                    continue
+                key = (*table_key(row), str(row.get("column_name") or ""))
+                if key in seen:
+                    continue
+                seen.add(key)
+                combined.append(row)
+                if len(combined) >= limit:
+                    return combined
+        return combined
+
+    def _columns_for_match(
+        self,
+        policy: PolicyDetail,
+        when_node: object | None,
+        match_node: object,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        """Return columns matching one MATCH COLUMNS expression on WHEN-matching tables."""
+        scope_sql = self._scope_filter_sql(policy)
+        match_having = having_sql(match_node)  # type: ignore[arg-type]
+        keys = referenced_tag_keys(match_node)  # type: ignore[arg-type]
+        tag_pick = self._tag_pick_sql(keys)
+
+        if when_node is None:
+            return self._sql.query(
+                f"""
+                SELECT
+                  catalog_name,
+                  schema_name,
+                  table_name,
+                  column_name,
+                  {tag_pick}
+                FROM system.information_schema.column_tags
+                WHERE TRUE
+                  {scope_sql}
+                GROUP BY catalog_name, schema_name, table_name, column_name
+                HAVING {match_having}
+                ORDER BY catalog_name, schema_name, table_name, column_name
+                LIMIT {limit}
+                """
+            )
+
+        when_having = having_sql(when_node)  # type: ignore[arg-type]
+        tables_scope = self._scope_filter_sql(
+            policy,
+            catalog_col="table_catalog",
+            schema_col="table_schema",
+            table_col="table_name",
+        )
+        return self._sql.query(
+            f"""
+            WITH scoped_tables AS (
+              SELECT table_catalog AS catalog_name, table_schema AS schema_name, table_name
+              FROM system.information_schema.tables
+              WHERE table_schema <> 'information_schema'
+                {tables_scope}
+            ),
+            effective_tags AS (
+              SELECT t.catalog_name, t.schema_name, t.table_name, tg.tag_name, tg.tag_value
+              FROM scoped_tables t
+              JOIN system.information_schema.table_tags tg
+                ON tg.catalog_name = t.catalog_name
+               AND tg.schema_name = t.schema_name
+               AND tg.table_name = t.table_name
+              UNION ALL
+              SELECT t.catalog_name, t.schema_name, t.table_name, sg.tag_name, sg.tag_value
+              FROM scoped_tables t
+              JOIN system.information_schema.schema_tags sg
+                ON sg.catalog_name = t.catalog_name
+               AND sg.schema_name = t.schema_name
+              UNION ALL
+              SELECT t.catalog_name, t.schema_name, t.table_name, cg.tag_name, cg.tag_value
+              FROM scoped_tables t
+              JOIN system.information_schema.catalog_tags cg
+                ON cg.catalog_name = t.catalog_name
+            ),
+            when_tables AS (
+              SELECT catalog_name, schema_name, table_name
+              FROM effective_tags
+              GROUP BY catalog_name, schema_name, table_name
+              HAVING {when_having}
+            ),
+            scoped_column_tags AS (
+              SELECT
+                ct.catalog_name,
+                ct.schema_name,
+                ct.table_name,
+                ct.column_name,
+                ct.tag_name,
+                ct.tag_value
+              FROM system.information_schema.column_tags ct
+              JOIN when_tables wt
+                ON wt.catalog_name = ct.catalog_name
+               AND wt.schema_name = ct.schema_name
+               AND wt.table_name = ct.table_name
+              WHERE TRUE
+                {scope_sql}
+            )
+            SELECT
+              catalog_name,
+              schema_name,
+              table_name,
+              column_name,
+              {tag_pick}
+            FROM scoped_column_tags
+            GROUP BY catalog_name, schema_name, table_name, column_name
+            HAVING {match_having}
+            ORDER BY catalog_name, schema_name, table_name, column_name
+            LIMIT {limit}
+            """
+        )
 
     @staticmethod
-    def _scope_filter_sql(policy: PolicyDetail) -> str:
-        """Return an ``AND ...`` SQL fragment restricting tag lookups to the policy's scope."""
+    def _tag_pick_sql(keys: list[str]) -> str:
+        """SQL selecting a display tag_name/tag_value from keys referenced by the condition."""
+        if not keys:
+            return "CAST(NULL AS STRING) AS tag_name, CAST(NULL AS STRING) AS tag_value"
+        in_list = ", ".join(string_literal(key) for key in keys)
+        return (
+            f"any_value(tag_name) FILTER (WHERE tag_name IN ({in_list})) AS tag_name, "
+            f"any_value(tag_value) FILTER (WHERE tag_name IN ({in_list})) AS tag_value"
+        )
+
+    @staticmethod
+    def _scope_filter_sql(
+        policy: PolicyDetail,
+        *,
+        catalog_col: str = "catalog_name",
+        schema_col: str = "schema_name",
+        table_col: str = "table_name",
+    ) -> str:
+        """Return an ``AND ...`` SQL fragment restricting lookups to the policy's scope."""
         if policy.on_securable_type == "METASTORE":
             return ""
         if policy.on_securable_type == "CATALOG" and policy.catalog_name:
-            return f" AND catalog_name = {string_literal(policy.catalog_name)}"
+            return f" AND {catalog_col} = {string_literal(policy.catalog_name)}"
         if policy.on_securable_type == "SCHEMA":
-            parts = policy.on_securable_fullname.split(".", 1)
+            parts = policy.on_securable_name.split(".", 1)
             if len(parts) == 2:
                 return (
-                    f" AND catalog_name = {string_literal(parts[0])}"
-                    f" AND schema_name = {string_literal(parts[1])}"
+                    f" AND {catalog_col} = {string_literal(parts[0])}"
+                    f" AND {schema_col} = {string_literal(parts[1])}"
                 )
         if policy.on_securable_type == "TABLE":
-            parts = policy.on_securable_fullname.split(".", 2)
+            parts = policy.on_securable_name.split(".", 2)
             if len(parts) == 3:
                 return (
-                    f" AND catalog_name = {string_literal(parts[0])}"
-                    f" AND schema_name = {string_literal(parts[1])}"
-                    f" AND table_name = {string_literal(parts[2])}"
+                    f" AND {catalog_col} = {string_literal(parts[0])}"
+                    f" AND {schema_col} = {string_literal(parts[1])}"
+                    f" AND {table_col} = {string_literal(parts[2])}"
                 )
         if policy.catalog_name:
-            return f" AND catalog_name = {string_literal(policy.catalog_name)}"
+            return f" AND {catalog_col} = {string_literal(policy.catalog_name)}"
         return ""

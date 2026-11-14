@@ -64,7 +64,7 @@ class GrantDenyInfo(ApiModel):
 
 
 class AffectedAsset(ApiModel):
-    """Table or column whose governed tags match a policy.
+    """Table or column that satisfies a policy WHEN / MATCH COLUMNS condition.
 
     Attributes:
         asset_type: ``TABLE`` or ``COLUMN`` (``UNKNOWN`` if the source row lacked a type).
@@ -141,7 +141,8 @@ class PolicyDetail(PolicySummary):
         created_at: Creation time as an epoch timestamp from the policies API.
         updated_at: Last update time as an epoch timestamp from the policies API.
         updated_by: Principal that last updated the policy.
-        affected_assets: Tagged tables / columns that match the policy's governed tags.
+        affected_assets: Tables / columns that satisfy the policy WHEN and MATCH COLUMNS
+            tag conditions.
         affected_assets_truncated: True when more assets matched than were returned.
         affected_assets_note: Explanation when asset discovery was skipped or limited.
     """

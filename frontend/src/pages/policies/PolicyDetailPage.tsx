@@ -1,6 +1,7 @@
 /**
  * @file Read-only detail view for a single Unity Catalog ABAC policy.
- * Shows scope, principals, WHEN condition, governed tags, mask/filter actions, and tagged assets.
+ * Shows scope, principals, WHEN condition, governed tags, mask/filter actions, and assets that
+ * satisfy the policy WHEN / MATCH COLUMNS conditions.
  * The route is wrapped in `RequireAdmin`.
  */
 import { Link, useParams } from "react-router-dom";
@@ -201,7 +202,7 @@ function cell(value: string | null | undefined): string {
 }
 
 /**
- * Paginated table of assets that match the policy's governed tags.
+ * Paginated table of assets that satisfy the policy WHEN / MATCH COLUMNS conditions.
  *
  * Warns when the server truncated the list.
  */
@@ -235,7 +236,7 @@ function AffectedAssetsCard({
         <Alert tone="warning">Results are capped by the server. Narrow the policy tags to see the rest.</Alert>
       )}
       {assets.length === 0 ? (
-        <div className={styles.muted}>No tagged assets resolved for this policy.</div>
+        <div className={styles.muted}>No tables or columns currently match this policy's WHEN / MATCH conditions.</div>
       ) : (
         <>
           <div className={styles.tableWrap}>
