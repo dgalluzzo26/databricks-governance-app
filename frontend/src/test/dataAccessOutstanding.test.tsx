@@ -111,6 +111,7 @@ describe("Identity data-access status", () => {
     expect(label({ membership: "member", structure: "ready" })).toBe("Has access");
     expect(label({ membership: "pending_sync" })).toBe("Waiting on sync");
     expect(label({ membership: "failed" })).toBe("Failed · sync retries");
+    expect(label({ membership: "orphaned" })).toBe("Principal gone");
     expect(label({ membership: "removal_pending" })).toBe("Removal at next sync");
     expect(label({ membership: "removed" })).toBe("Removed");
     expect(label({ membership: "not_applicable" })).toBe("No group");

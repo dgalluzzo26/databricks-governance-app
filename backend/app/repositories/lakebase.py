@@ -11,7 +11,7 @@ import logging
 import threading
 import time
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import psycopg
@@ -30,6 +30,7 @@ from backend.app.models.data_access_pending import (
     GapItem,
     GapMeta,
     MembershipEvent,
+    OrphanedPrincipal,
     TagChange,
     TagSnapshotRow,
 )
@@ -347,6 +348,16 @@ CREATE INDEX IF NOT EXISTS data_access_membership_events_assignment_idx
   ON {schema}.data_access_membership_events (assignment_id, recorded_at DESC);
 CREATE INDEX IF NOT EXISTS data_access_membership_events_recorded_idx
   ON {schema}.data_access_membership_events (recorded_at);
+
+CREATE TABLE IF NOT EXISTS {schema}.data_access_orphaned_principals (
+  principal_type  TEXT NOT NULL,
+  principal_key   TEXT NOT NULL,
+  principal_name  TEXT NOT NULL,
+  reason          TEXT NOT NULL DEFAULT '',
+  first_seen_at   TIMESTAMPTZ NOT NULL,
+  last_seen_at    TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (principal_type, principal_key)
+);
 """
 
 
@@ -867,6 +878,80 @@ class LakebaseDataAccessStateRepository(DataAccessStateRepository):
             {"before": before},
         )
         return int(rows[0]["n"]) if rows else 0
+
+    @staticmethod
+    def _orphan_key(principal_name: str, principal_type: str) -> tuple[str, str]:
+        return ((principal_type or "USER").strip().upper(), principal_name.strip().lower())
+
+    def upsert_orphan(
+        self,
+        principal_name: str,
+        principal_type: str,
+        reason: str,
+        *,
+        now: datetime | None = None,
+    ) -> OrphanedPrincipal:
+        """Insert or refresh an orphaned principal."""
+        stamp = now or datetime.now(UTC)
+        kind, key = self._orphan_key(principal_name, principal_type)
+        name = principal_name.strip()
+        self._pg.run(
+            """
+            INSERT INTO {schema}.data_access_orphaned_principals
+              (principal_type, principal_key, principal_name, reason, first_seen_at, last_seen_at)
+            VALUES (%(principal_type)s, %(principal_key)s, %(principal_name)s, %(reason)s,
+                    %(stamp)s, %(stamp)s)
+            ON CONFLICT (principal_type, principal_key) DO UPDATE SET
+              principal_name = EXCLUDED.principal_name,
+              reason = EXCLUDED.reason,
+              last_seen_at = EXCLUDED.last_seen_at
+            """,
+            {
+                "principal_type": kind,
+                "principal_key": key,
+                "principal_name": name,
+                "reason": reason,
+                "stamp": stamp,
+            },
+        )
+        rows = self._pg.fetch(
+            "SELECT principal_name, principal_type, reason, first_seen_at, last_seen_at "
+            "FROM {schema}.data_access_orphaned_principals "
+            "WHERE principal_type = %(principal_type)s AND principal_key = %(principal_key)s",
+            {"principal_type": kind, "principal_key": key},
+        )
+        return OrphanedPrincipal(**rows[0])
+
+    def clear_orphan(self, principal_name: str, principal_type: str) -> bool:
+        """Remove an orphan entry."""
+        kind, key = self._orphan_key(principal_name, principal_type)
+        rows = self._pg.fetch(
+            "WITH gone AS ("
+            "DELETE FROM {schema}.data_access_orphaned_principals "
+            "WHERE principal_type = %(principal_type)s AND principal_key = %(principal_key)s "
+            "RETURNING 1) SELECT count(*) AS n FROM gone",
+            {"principal_type": kind, "principal_key": key},
+        )
+        return bool(rows and int(rows[0]["n"]))
+
+    def is_orphaned(self, principal_name: str, principal_type: str) -> bool:
+        """True when the principal is orphaned."""
+        kind, key = self._orphan_key(principal_name, principal_type)
+        rows = self._pg.fetch(
+            "SELECT 1 AS n FROM {schema}.data_access_orphaned_principals "
+            "WHERE principal_type = %(principal_type)s AND principal_key = %(principal_key)s",
+            {"principal_type": kind, "principal_key": key},
+        )
+        return bool(rows)
+
+    def list_orphans(self) -> list[OrphanedPrincipal]:
+        """Every orphan, sorted by type then name."""
+        rows = self._pg.fetch(
+            "SELECT principal_name, principal_type, reason, first_seen_at, last_seen_at "
+            "FROM {schema}.data_access_orphaned_principals "
+            "ORDER BY principal_type, lower(principal_name)"
+        )
+        return [OrphanedPrincipal(**row) for row in rows]
 
 
 class LakebaseSettingsRepository(SettingsRepository):

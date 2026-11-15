@@ -231,8 +231,11 @@ data-access attribute:
 | Renewal (expiry change) | Nothing (membership is unchanged) | Nothing |
 
 Every attempt is recorded in `data_access_membership_events`. Failures never fail the
-approval: the item is listed as failed outstanding work and the next apply retries it. Without
-an Account Admin SP the event is recorded as skipped and left for the sync.
+approval: the item is listed as failed outstanding work and the next apply retries it. When
+Account SCIM cannot find the assignee (deleted or renamed USER/GROUP/SP), the principal is
+**orphaned**: membership is not retried until that principal reappears; the Identity assignment
+stays active so an admin can revoke it. Without an Account Admin SP the event is recorded as
+skipped and left for the sync.
 
 Access needs both halves: membership in the path's group and the path's structure (the group,
 its parent nesting, and the table grants). A user added to a group that the approval just
@@ -457,6 +460,7 @@ Per data-access assignment, two states:
 | `member` | In the path's group (applied at approval or by a sync) |
 | `pending_sync` | Not added yet; the next apply adds it |
 | `failed` | Immediate add or remove failed; the next apply retries |
+| `orphaned` | Principal missing from Account SCIM; sync does not retry until it returns (badge: Principal gone). Revoke the assignment or restore the group/user |
 | `removal_pending` | Revoked or expired; removed at the next apply |
 | `removed` | Removed at revoke |
 
@@ -480,6 +484,7 @@ Per data-access assignment, two states:
 | `PRINCIPAL_DOES_NOT_EXIST` on GRANT | Group is workspace-local | Delete it; apply recreates it as an account group |
 | Old group keeps SELECT after retag | Grant was not direct or prefix differs | Check `inherited_from` and `group_prefix`; dry-run shows it under revoke |
 | User not in group | No active data-access assignment, or value is `*` | Assign a concrete value in Identity |
+| **Principal gone** on Assignments | Assigned USER/GROUP/SP no longer exists in Account SCIM (groups come and go) | Revoke the zombie assignment, or recreate the group/user under the same name so the next sync heals the orphan and adds membership |
 | Scheduled apply never runs | `schedule_enabled` false, `schedule_mode` dry_run, or readiness failing | Fix settings or readiness; skipped ticks are logged |
 | `resolve principal <group>: not found` on a membership removal | Member was typed as a user. Account SCIM member entries carry `$ref` (`Groups/{id}`), not `type`; older builds guessed from the display name | Fixed by reading `$ref` first; the next apply retries anything still failing |
 | Apply slow in `apply.nest` with the same nests every run | Nest PATCHes are issued for every planned parent→child link, including links that already exist (Account SCIM ignores the duplicate) | Known cost (about 3 s per link); skipping links that the child already contains is a planned follow-up |

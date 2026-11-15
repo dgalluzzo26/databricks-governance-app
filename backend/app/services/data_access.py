@@ -103,7 +103,7 @@ from backend.app.services.data_access_profile import (
     timed_call,
 )
 from backend.app.services.data_access_schedule import quartz_cron_for_interval_minutes, snap_interval_minutes
-from backend.app.services.data_access_status import compute_access_status
+from backend.app.services.data_access_status import compute_access_status, is_principal_missing_error
 from backend.app.services.identity_attributes import ASSIGNMENT_ASSIGNED, IdentityAttributeService
 from backend.app.services.table_query import TableQuery, sort_and_filter
 from backend.app.services.warehouse_scaling import WarehouseScaler
@@ -768,14 +768,18 @@ class DataAccessService:
             assignments = self._assignment_loader(settings)
         with phase("load.members"):
             members = self._member_loader(settings, groups)
+        with phase("heal.orphans"):
+            orphaned = self._heal_orphaned_principals()
         record_size("tag_rows", len(tags))
         record_size("table_tag_rows", sum(1 for t in tags if t.level == "table"))
         record_size("grants_read", len(grants))
         record_size("groups_read", len(groups))
         record_size("assignments_read", len(assignments))
         record_size("members_read", len(members))
+        record_size("orphaned_principals", len(orphaned))
         logger.info(
-            "inventory: table_tags=%d grants=%d groups=%d assignments=%d (users=%d groups=%d) members=%d",
+            "inventory: table_tags=%d grants=%d groups=%d assignments=%d "
+            "(users=%d groups=%d) members=%d orphans=%d",
             sum(1 for t in tags if t.level == "table"),
             len(grants),
             len(groups),
@@ -783,6 +787,7 @@ class DataAccessService:
             sum(1 for a in assignments if a.principal_type == "USER"),
             sum(1 for a in assignments if a.principal_type == "GROUP"),
             len(members),
+            len(orphaned),
         )
         with phase("plan"):
             previous = next(
@@ -798,6 +803,7 @@ class DataAccessService:
                 previous.summary if previous else None,
                 assignments=assignments,
                 actual_members=members,
+                orphaned_principals=orphaned,
             )
         record_size("plan_groups", len(plan.groups))
         record_size("plan_grants_to_add", len(plan.grants_to_add))
@@ -889,8 +895,31 @@ class DataAccessService:
                     key = member_key(event.action, event.group_name, event.principal_name)
                     if event.status == MembershipEventStatus.APPLIED:
                         by_key.pop(key, None)
+                    elif event.status == MembershipEventStatus.ORPHANED:
+                        by_key.pop(key, None)
+                        if event.error:
+                            state.upsert_orphan(event.principal_name, event.principal_type, event.error)
+                    elif event.status == MembershipEventStatus.FAILED and is_principal_missing_error(
+                        event.error
+                    ):
+                        by_key.pop(key, None)
+                        state.upsert_orphan(
+                            event.principal_name, event.principal_type, event.error or "principal not found"
+                        )
                     elif event.status == MembershipEventStatus.FAILED and key not in by_key:
                         by_key[key] = self._event_gap_item(event)
+                # Promote stuck principal-missing failures from prior runs into orphans.
+                for item in list(by_key.values()):
+                    if item.kind != GapKind.MEMBER_ADD:
+                        continue
+                    if item.status == GapStatus.FAILED and is_principal_missing_error(item.error):
+                        by_key.pop(item.item_key, None)
+                        if item.principal_name:
+                            state.upsert_orphan(
+                                item.principal_name,
+                                item.principal_type or "USER",
+                                item.error or "principal not found",
+                            )
             record_size("gap_items", len(by_key))
             with phase("state.gap_write"):
                 state.replace_gap(
@@ -933,6 +962,28 @@ class DataAccessService:
             return None
         definition = self._identity.find_data_access_definition(settings.access_tag_key)
         return definition.key if definition is not None else None
+
+    def _heal_orphaned_principals(self) -> set[tuple[str, str]]:
+        """Re-check orphaned principals in Account SCIM; clear any that have returned.
+
+        Returns:
+            Remaining orphan keys as ``(principal_type_upper, principal_name_lower)``.
+        """
+        state = self._storage.data_access_state
+        remaining: set[tuple[str, str]] = set()
+        for orphan in state.list_orphans():
+            errors: list[str] = []
+            found = self._lookup_principal_id(orphan.principal_name, orphan.principal_type, errors)
+            if found:
+                state.clear_orphan(orphan.principal_name, orphan.principal_type)
+                logger.info(
+                    "Orphaned principal %s (%s) is back in Account SCIM; clearing orphan",
+                    orphan.principal_name,
+                    orphan.principal_type,
+                )
+                continue
+            remaining.add((orphan.principal_type.upper(), orphan.principal_name.lower()))
+        return remaining
 
     def on_assignment_event(
         self, event: str, assignment: IdentityAttributeAssignment, actor: CurrentUser
@@ -1016,9 +1067,18 @@ class DataAccessService:
             errors: list[str] = []
             member_id = self._resolve_principal_id(assignment.principal_name, principal_type, errors)
             if member_id is None:
-                missing = f"principal {assignment.principal_name} not found"
-                raise RuntimeError(errors[-1] if errors else missing)
+                missing = errors[-1] if errors else f"principal {assignment.principal_name} not found"
+                if action == "remove":
+                    # Nothing to remove from the dac_* group when the principal is already gone.
+                    record(MembershipEventStatus.APPLIED, error=missing, outstanding=False)
+                    return
+                if is_principal_missing_error(missing):
+                    state.upsert_orphan(assignment.principal_name, principal_type, missing)
+                    record(MembershipEventStatus.ORPHANED, error=missing, outstanding=False)
+                    return
+                raise RuntimeError(missing)
             if action == "add":
+                state.clear_orphan(assignment.principal_name, principal_type)
                 self._patch_member_add(group_id, member_id)
             else:
                 self._patch_member_remove(group_id, member_id)
@@ -1299,6 +1359,31 @@ class DataAccessService:
         for item in state.member_gap_items(sorted({a.principal_name for a in relevant})):
             by_principal.setdefault((item.principal_name or "").lower(), []).append(item)
         now = datetime.now(UTC)
+        # Promote stuck "not found" failures into the orphan registry so the badge clears.
+        for assignment in relevant:
+            event = events.get(assignment.assignment_id)
+            items = by_principal.get(assignment.principal_name.lower(), [])
+            missing_error: str | None = None
+            if (
+                event is not None
+                and event.action == "add"
+                and event.status == MembershipEventStatus.FAILED
+                and is_principal_missing_error(event.error)
+            ):
+                missing_error = event.error
+            for item in items:
+                if (
+                    item.kind == GapKind.MEMBER_ADD
+                    and item.status == GapStatus.FAILED
+                    and is_principal_missing_error(item.error)
+                ):
+                    missing_error = item.error or missing_error
+            if missing_error and not state.is_orphaned(
+                assignment.principal_name, assignment.principal_type.value
+            ):
+                state.upsert_orphan(
+                    assignment.principal_name, assignment.principal_type.value, missing_error
+                )
         return [
             compute_access_status(
                 a,
@@ -1310,6 +1395,7 @@ class DataAccessService:
                 event=events.get(a.assignment_id),
                 member_items=by_principal.get(a.principal_name.lower(), []),
                 now=now,
+                orphaned=state.is_orphaned(a.principal_name, a.principal_type.value),
             )
             for a in relevant
         ]
@@ -2020,10 +2106,25 @@ class DataAccessService:
                     errors.append(f"membership {change.action.value} {change.principal_name}: missing group")
                     sink[key] = "missing group"
                 elif resolve_error is not None:
-                    errors.append(str(resolve_error))
-                    sink[key] = str(resolve_error)
+                    message = str(resolve_error)
+                    if change.action == MembershipAction.ADD and is_principal_missing_error(message):
+                        self._storage.data_access_state.upsert_orphan(
+                            change.principal_name,
+                            change.principal_type or "USER",
+                            message,
+                        )
+                        # Orphaned: do not retry via FAILED gap / apply_failures.
+                    elif change.action == MembershipAction.REMOVE and is_principal_missing_error(message):
+                        # Principal already gone — treat remove as done.
+                        pass
+                    else:
+                        errors.append(message)
+                        sink[key] = message
                 else:
                     assert group_id is not None and member_id is not None
+                    self._storage.data_access_state.clear_orphan(
+                        change.principal_name, change.principal_type or "USER"
+                    )
                     resolved.append((group_id, member_id, change))
                 resolve_progress.tick()
 

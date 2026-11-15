@@ -588,7 +588,8 @@ def test_apply_helpers_record_failure_keys() -> None:
     ]
     svc._apply_membership(changes, {"dac_x": "gx"}, errors, failures)  # noqa: SLF001
     assert failures[member_key("add", "dac_none", "ana@example.com")] == "missing group"
-    assert "not found" in failures[member_key("add", "dac_x", "ghost@example.com")]
+    assert member_key("add", "dac_x", "ghost@example.com") not in failures
+    assert svc._storage.data_access_state.is_orphaned("ghost@example.com", "USER")  # noqa: SLF001
     assert failures[member_key("remove", "dac_x", "bob@example.com")] == "denied"
 
     def _fail(_sql: str) -> None:
@@ -665,13 +666,68 @@ def test_assign_failure_is_recorded_and_listed_for_sync() -> None:
     assert item.status == GapStatus.FAILED and item.principal_name == "ana@example.com"
 
 
-def test_assign_unknown_principal_fails_without_patching() -> None:
+def test_assign_unknown_principal_is_orphaned_without_patching() -> None:
     scim = _Scim({"dac_finance_budget": "g1"})
     svc = _service(scim)
+    state = svc._storage.data_access_state  # noqa: SLF001
     svc.on_assignment_event(ASSIGNMENT_ASSIGNED, _assignment(principal="ghost@example.com"), _actor())
     [event] = _events(svc)
-    assert event.status == MembershipEventStatus.FAILED and "not found" in (event.error or "")
+    assert event.status == MembershipEventStatus.ORPHANED and "not found" in (event.error or "")
     assert not any(c[0] == "PATCH" for c in scim.calls)
+    assert state.is_orphaned("ghost@example.com", "USER")
+    assert svc.pending_items(kind="member_add").total == 0
+    statuses = svc.access_status([_assignment(principal="ghost@example.com")])
+    assert statuses[0].membership == MembershipState.ORPHANED
+    assert "Principal not found" in statuses[0].detail
+
+
+def test_assign_unknown_group_is_orphaned() -> None:
+    scim = _Scim({"dac_finance_budget": "g1"})
+    svc = _service(scim)
+    state = svc._storage.data_access_state  # noqa: SLF001
+    assignment = _assignment(principal="mi_analyst", principal_type=PrincipalKind.GROUP)
+    svc.on_assignment_event(ASSIGNMENT_ASSIGNED, assignment, _actor())
+    [event] = _events(svc)
+    assert event.status == MembershipEventStatus.ORPHANED
+    assert "account group not found" in (event.error or "")
+    assert state.is_orphaned("mi_analyst", "GROUP")
+
+
+def test_heal_orphaned_principals_clears_when_group_returns() -> None:
+    scim = _Scim({"dac_finance_budget": "g1"})
+    svc = _service(scim)
+    state = svc._storage.data_access_state  # noqa: SLF001
+    state.upsert_orphan("mi_analyst", "GROUP", "account group not found")
+    state.upsert_orphan("still_gone", "GROUP", "account group not found")
+    # Group reappears in Account SCIM.
+    scim.groups["mi_analyst"] = "g-mi"
+    remaining = svc._heal_orphaned_principals()  # noqa: SLF001
+    assert remaining == {("GROUP", "still_gone")}
+    assert not state.is_orphaned("mi_analyst", "GROUP")
+    assert state.is_orphaned("still_gone", "GROUP")
+
+
+def test_access_status_promotes_stuck_not_found_failure_to_orphan() -> None:
+    scim = _Scim({"dac_finance_budget": "g1"})
+    svc = _service(scim)
+    state = svc._storage.data_access_state  # noqa: SLF001
+    assignment = _assignment(principal="mf_direction", principal_type=PrincipalKind.GROUP)
+    state.record_membership_event(
+        MembershipEvent(
+            recorded_at=NOW,
+            assignment_id=assignment.assignment_id,
+            principal_name="mf_direction",
+            principal_type="GROUP",
+            group_name="dac_finance_budget",
+            value="finance.budget",
+            action="add",
+            status=MembershipEventStatus.FAILED,
+            error="resolve principal mf_direction: account group not found",
+        )
+    )
+    statuses = svc.access_status([assignment])
+    assert statuses[0].membership == MembershipState.ORPHANED
+    assert state.is_orphaned("mf_direction", "GROUP")
 
 
 def test_assign_without_admin_sp_is_left_for_sync() -> None:
@@ -807,6 +863,15 @@ def test_status_membership_variants() -> None:
     assert _status(_assignment(), member_items=[failed_item]).membership == MembershipState.FAILED
     other_group = pending.model_copy(update={"group_name": "dac_hr"})
     assert _status(_assignment(), member_items=[other_group]).membership == MembershipState.MEMBER
+    orphaned = _status(_assignment(), orphaned=True)
+    assert orphaned.membership == MembershipState.ORPHANED
+    missing_event = _status(
+        _assignment(),
+        event=_event("add", MembershipEventStatus.FAILED, error="resolve principal x: not found"),
+    )
+    assert missing_event.membership == MembershipState.ORPHANED
+    orphan_event = _status(_assignment(), event=_event("add", MembershipEventStatus.ORPHANED, error="gone"))
+    assert orphan_event.membership == MembershipState.ORPHANED
 
 
 def test_status_for_revoked_expired_and_wildcard() -> None:

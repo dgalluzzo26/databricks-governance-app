@@ -285,6 +285,26 @@ def test_plan_membership_add_and_remove() -> None:
     assert plan.summary.members_to_remove == 1
 
 
+def test_plan_skips_orphaned_principals_for_member_add() -> None:
+    tags = [*_reviewed("table", "sandbox", "finance", "budget", "finance.budget")]
+    assignments = [
+        AssignmentRow("ana@example.com", "USER", "finance.budget"),
+        AssignmentRow("mi_analyst", "GROUP", "finance.budget"),
+    ]
+    plan = plan_data_access(
+        DataAccessSettings(),
+        tags,
+        [],
+        {"dac_finance_budget"},
+        assignments=assignments,
+        actual_members=[],
+        orphaned_principals={("GROUP", "mi_analyst")},
+    )
+    principals = {m.principal_name for m in plan.membership_changes if m.action.value == "add"}
+    assert principals == {"ana@example.com"}
+    assert plan.summary.members_to_add == 1
+
+
 def test_settings_round_trip_allows_dry_run_flag(client: TestClient) -> None:
     admin = headers_for("admin@example.com")
     body = client.get("/api/data-access/settings", headers=admin).json()
@@ -1490,9 +1510,10 @@ def test_apply_membership_handles_duplicates_removals_and_resolution_failures() 
         {"dac_x": "g-x"},
         errors,
     )
-    assert len(errors) == 2
+    assert len(errors) == 1
     assert any("remove cy@example.com on dac_x" in e for e in errors)
-    assert any("resolve principal nobody@example.com: not found" in e for e in errors)
+    assert svc._storage.data_access_state.is_orphaned("nobody@example.com", "USER")  # noqa: SLF001
+    assert not any("nobody@example.com" in e for e in errors)
 
 
 def test_resolve_principal_covers_each_principal_type() -> None:
@@ -1616,9 +1637,9 @@ def test_apply_plan_creates_nests_members_and_grants() -> None:
         [{"op": "add", "path": "members", "value": [{"value": "u-ana"}]}],
     ) in patches
     assert "GRANT SELECT ON TABLE `sandbox`.`finance`.`budget` TO `dac_finance_budget`" in sql.executed
+    # stale@example.com REMOVE with principal-not-found is treated as done (already gone).
     assert set(result.apply_errors) == {
         "nest dac_missing → dac_orphan: missing group id",
-        "resolve principal stale@example.com: not found",
         "membership add ana@example.com: missing group",
         "REVOKE SELECT on sandbox.finance.old: boom",
     }

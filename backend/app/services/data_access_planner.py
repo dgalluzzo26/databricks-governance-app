@@ -171,6 +171,7 @@ def plan_data_access(
     *,
     assignments: list[AssignmentRow] | None = None,
     actual_members: list[ActualMember] | None = None,
+    orphaned_principals: set[tuple[str, str]] | None = None,
 ) -> DataAccessPlan:
     """Compute the dry-run / apply plan from inventory snapshots.
 
@@ -183,6 +184,8 @@ def plan_data_access(
         previous_summary: Summary from the last successful run, if any.
         assignments: Active Identity data-access assignments (membership desired state).
         actual_members: Current members of managed groups (for membership diffs).
+        orphaned_principals: ``(principal_type_upper, principal_name_lower)`` pairs to skip
+            for MEMBER_ADD (missing from Account SCIM).
 
     Returns:
         Truncated plan with full summary counts and drift notes.
@@ -325,6 +328,7 @@ def plan_data_access(
         value_to_group=value_to_group,
         assignments=assignments or [],
         actual_members=actual_members or [],
+        orphaned_principals=orphaned_principals or set(),
     )
     members_to_add = sum(1 for m in membership_changes if m.action == MembershipAction.ADD)
     members_to_remove = sum(1 for m in membership_changes if m.action == MembershipAction.REMOVE)
@@ -392,12 +396,15 @@ def _membership_changes(
     value_to_group: dict[str, str],
     assignments: list[AssignmentRow],
     actual_members: list[ActualMember],
+    orphaned_principals: set[tuple[str, str]] | None = None,
 ) -> list[MembershipChange]:
     """Diff Identity assignments against current group members.
 
     Nested parent ``dac_*`` groups are never removed from children. Wildcard ``*``
-    assignments are ignored (no single target group).
+    assignments are ignored (no single target group). Orphaned principals (missing from
+    Account SCIM) are skipped for MEMBER_ADD so sync does not retry forever.
     """
+    orphans = orphaned_principals or set()
     managed_groups = {g.name.lower(): g.name for g in groups}
     prefix = settings.group_prefix if settings.group_prefix.endswith("_") else f"{settings.group_prefix}_"
     managed_prefix = prefix.lower()
@@ -432,7 +439,8 @@ def _membership_changes(
         group_l, principal_l = key
         group_name_display = managed_groups.get(group_l) or value_to_group.get(row.attribute_value, group_l)
         present = any(m.principal_name.lower() == principal_l for m in actual_by_group.get(group_l, []))
-        if not present:
+        orphan_key = ((row.principal_type or "USER").upper(), row.principal_name.lower())
+        if not present and orphan_key not in orphans:
             changes.append(
                 MembershipChange(
                     group=group_name_display,

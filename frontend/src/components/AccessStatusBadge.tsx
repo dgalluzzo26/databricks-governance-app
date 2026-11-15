@@ -14,6 +14,8 @@ export function accessStatusLabel(status: AccessStatus): { label: string; tone: 
   switch (status.membership) {
     case "failed":
       return { label: "Failed · sync retries", tone: "danger" };
+    case "orphaned":
+      return { label: "Principal gone", tone: "warning" };
     case "removal_pending":
       return { label: "Removal at next sync", tone: "warning" };
     case "removed":

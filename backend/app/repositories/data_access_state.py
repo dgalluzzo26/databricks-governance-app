@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from backend.app.models.data_access_pending import (
@@ -12,6 +12,7 @@ from backend.app.models.data_access_pending import (
     GapKind,
     GapMeta,
     MembershipEvent,
+    OrphanedPrincipal,
     TagChange,
     TagSnapshotRow,
 )
@@ -164,6 +165,29 @@ class DataAccessStateRepository(ABC):
     def prune_membership_events(self, before: datetime) -> int:
         """Delete events recorded before ``before``; return rows removed."""
 
+    @abstractmethod
+    def upsert_orphan(
+        self,
+        principal_name: str,
+        principal_type: str,
+        reason: str,
+        *,
+        now: datetime | None = None,
+    ) -> OrphanedPrincipal:
+        """Insert or refresh an orphaned principal (missing from Account SCIM)."""
+
+    @abstractmethod
+    def clear_orphan(self, principal_name: str, principal_type: str) -> bool:
+        """Remove an orphan entry; return True when one was deleted."""
+
+    @abstractmethod
+    def is_orphaned(self, principal_name: str, principal_type: str) -> bool:
+        """True when ``(principal_type, principal_name)`` is in the orphan registry."""
+
+    @abstractmethod
+    def list_orphans(self) -> list[OrphanedPrincipal]:
+        """Return every orphaned principal, sorted by name."""
+
 
 class InMemoryDataAccessStateRepository(DataAccessStateRepository):
     """Process-local state for the memory and Delta backends and for tests."""
@@ -174,6 +198,7 @@ class InMemoryDataAccessStateRepository(DataAccessStateRepository):
         self._snapshot: dict[str, TagSnapshotRow] = {}
         self._changes: list[TagChange] = []
         self._events: list[MembershipEvent] = []
+        self._orphans: dict[tuple[str, str], OrphanedPrincipal] = {}
 
     def replace_gap(self, items: list[GapItem], meta: GapMeta) -> None:
         """Swap the outstanding list and metadata."""
@@ -320,3 +345,46 @@ class InMemoryDataAccessStateRepository(DataAccessStateRepository):
         removed = len(self._events) - len(kept)
         self._events = kept
         return removed
+
+    @staticmethod
+    def _orphan_key(principal_name: str, principal_type: str) -> tuple[str, str]:
+        return ((principal_type or "USER").strip().upper(), principal_name.strip().lower())
+
+    def upsert_orphan(
+        self,
+        principal_name: str,
+        principal_type: str,
+        reason: str,
+        *,
+        now: datetime | None = None,
+    ) -> OrphanedPrincipal:
+        """Insert or refresh an orphaned principal."""
+        key = self._orphan_key(principal_name, principal_type)
+        stamp = now or datetime.now(UTC)
+        current = self._orphans.get(key)
+        if current is None:
+            entry = OrphanedPrincipal(
+                principal_name=principal_name.strip(),
+                principal_type=key[0],
+                reason=reason,
+                first_seen_at=stamp,
+                last_seen_at=stamp,
+            )
+        else:
+            entry = current.model_copy(
+                update={"reason": reason, "last_seen_at": stamp, "principal_name": principal_name.strip()}
+            )
+        self._orphans[key] = entry
+        return entry
+
+    def clear_orphan(self, principal_name: str, principal_type: str) -> bool:
+        """Remove an orphan entry."""
+        return self._orphans.pop(self._orphan_key(principal_name, principal_type), None) is not None
+
+    def is_orphaned(self, principal_name: str, principal_type: str) -> bool:
+        """True when the principal is orphaned."""
+        return self._orphan_key(principal_name, principal_type) in self._orphans
+
+    def list_orphans(self) -> list[OrphanedPrincipal]:
+        """Every orphan, sorted by type then name."""
+        return sorted(self._orphans.values(), key=lambda o: (o.principal_type, o.principal_name.lower()))

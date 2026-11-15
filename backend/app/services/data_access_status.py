@@ -16,6 +16,7 @@ from backend.app.models.data_access_pending import (
     GapItem,
     GapKind,
     GapMeta,
+    GapStatus,
     MembershipEvent,
     MembershipEventStatus,
     MembershipState,
@@ -23,6 +24,22 @@ from backend.app.models.data_access_pending import (
 )
 from backend.app.models.identity_attribute import ALL_VALUES, IdentityAttributeAssignment
 from backend.app.services.data_access_planner import group_name
+
+
+def is_principal_missing_error(message: str | None) -> bool:
+    """True when a SCIM resolve error means the principal does not exist (not a transient fault).
+
+    Matches Account SCIM "not found" outcomes from ``_lookup_principal_id``. Network, auth, and
+    other exceptions must not orphan — those stay FAILED and keep retrying.
+    """
+    if not message:
+        return False
+    text = message.lower()
+    if "account group not found" in text:
+        return True
+    if "principal " in text and " not found" in text:
+        return True
+    return text.rstrip(".").endswith("not found")
 
 
 def _path_pending(value: str, separator: str, structure_values: set[str]) -> int:
@@ -43,6 +60,7 @@ def compute_access_status(
     event: MembershipEvent | None,
     member_items: list[GapItem],
     now: datetime,
+    orphaned: bool = False,
 ) -> AccessStatus:
     """Combine membership and structure state for one data-access assignment.
 
@@ -56,6 +74,7 @@ def compute_access_status(
         event: Newest immediate membership event for this assignment, if any.
         member_items: Outstanding membership items for this assignee.
         now: Current time (expiry check).
+        orphaned: True when the principal is in the orphan registry (missing from Account SCIM).
 
     Returns:
         The assignment's access status.
@@ -119,6 +138,51 @@ def compute_access_status(
             membership=membership,
             structure=StructureState.NOT_APPLICABLE,
             detail=detail,
+        )
+
+    orphan_detail = (
+        "Principal not found in Account SCIM; revoke the assignment or restore the group/user"
+    )
+    if orphaned or (
+        event is not None
+        and event.action == "add"
+        and event.status == MembershipEventStatus.ORPHANED
+    ):
+        return AccessStatus(
+            **base,
+            group_name=group,
+            membership=MembershipState.ORPHANED,
+            structure=StructureState.NOT_APPLICABLE,
+            detail=orphan_detail,
+        )
+    if GapKind.MEMBER_ADD in pending_kinds and mine[GapKind.MEMBER_ADD].status == GapStatus.ORPHANED:
+        return AccessStatus(
+            **base,
+            group_name=group,
+            membership=MembershipState.ORPHANED,
+            structure=StructureState.NOT_APPLICABLE,
+            detail=orphan_detail,
+        )
+    if (
+        event is not None
+        and event.action == "add"
+        and event.status == MembershipEventStatus.FAILED
+        and is_principal_missing_error(event.error)
+    ):
+        return AccessStatus(
+            **base,
+            group_name=group,
+            membership=MembershipState.ORPHANED,
+            structure=StructureState.NOT_APPLICABLE,
+            detail=orphan_detail,
+        )
+    if GapKind.MEMBER_ADD in pending_kinds and is_principal_missing_error(mine[GapKind.MEMBER_ADD].error):
+        return AccessStatus(
+            **base,
+            group_name=group,
+            membership=MembershipState.ORPHANED,
+            structure=StructureState.NOT_APPLICABLE,
+            detail=orphan_detail,
         )
 
     notes: list[str] = []

@@ -1419,6 +1419,7 @@ export type MembershipState =
   | "member"
   | "pending_sync"
   | "failed"
+  | "orphaned"
   | "removal_pending"
   | "removed"
   | "not_applicable"

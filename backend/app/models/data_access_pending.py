@@ -22,10 +22,15 @@ class GapKind(StrEnum):
 
 
 class GapStatus(StrEnum):
-    """Pending until the next apply; failed when the last apply tried and errored."""
+    """Pending until the next apply; failed when the last apply tried and errored.
+
+    ``orphaned`` is for membership adds whose principal is missing from Account SCIM;
+    those are not retried until the principal reappears.
+    """
 
     PENDING = "pending"
     FAILED = "failed"
+    ORPHANED = "orphaned"
 
 
 class GapItem(ApiModel):
@@ -132,6 +137,7 @@ class MembershipEventStatus(StrEnum):
     APPLIED = "applied"
     FAILED = "failed"
     SKIPPED = "skipped"
+    ORPHANED = "orphaned"
 
 
 class MembershipEvent(ApiModel):
@@ -145,7 +151,8 @@ class MembershipEvent(ApiModel):
         group_name: Managed group.
         value: Data-access path of the assignment.
         action: ``add`` or ``remove``.
-        status: Applied, failed (sync retries it), or skipped (sync handles it).
+        status: Applied, failed (sync retries it), skipped (sync handles it), or orphaned
+            (principal missing from Account SCIM; not retried until it returns).
         group_created: True when the group did not exist and was created for this change.
         error: Failure or skip reason.
         actor: User who approved, assigned, or revoked.
@@ -256,10 +263,29 @@ class MembershipState(StrEnum):
     MEMBER = "member"
     PENDING_SYNC = "pending_sync"
     FAILED = "failed"
+    ORPHANED = "orphaned"
     REMOVAL_PENDING = "removal_pending"
     REMOVED = "removed"
     NOT_APPLICABLE = "not_applicable"
     UNKNOWN = "unknown"
+
+
+class OrphanedPrincipal(ApiModel):
+    """A USER/GROUP/SP that Account SCIM cannot resolve for data-access membership.
+
+    Attributes:
+        principal_name: Display name or email stored on the Identity assignment.
+        principal_type: ``USER``, ``GROUP``, or ``SERVICE_PRINCIPAL``.
+        reason: Last resolve error (e.g. account group not found).
+        first_seen_at: When the principal was first marked missing.
+        last_seen_at: When the missing status was last confirmed.
+    """
+
+    principal_name: str
+    principal_type: str
+    reason: str
+    first_seen_at: datetime
+    last_seen_at: datetime
 
 
 class StructureState(StrEnum):
