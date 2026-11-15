@@ -366,7 +366,7 @@ export interface AttributeAssignmentList {
   total: number;
 }
 
-/** Body for `POST /identity/assignments` (admin grants an attribute value to a principal). */
+/** Body for `POST /identity/assignments` (admin or path approver grants one value to one principal). */
 export interface AssignAttributeRequest {
   principalName: string;
   principalType: PrincipalKind;
@@ -375,6 +375,57 @@ export interface AssignAttributeRequest {
   justification?: string | null;
   /** ISO-8601 expiry; omit or `null` for no expiry. */
   expiresAt?: string | null;
+}
+
+/** One principal in `POST /identity/assignments/bulk`. */
+export interface BulkPrincipal {
+  principalName: string;
+  principalType: PrincipalKind;
+}
+
+/** One attribute key/value in `POST /identity/assignments/bulk`. */
+export interface BulkAttribute {
+  attributeKey: string;
+  attributeValue: string;
+}
+
+/** Body for `POST /identity/assignments/bulk` (shared justification and expiry). */
+export interface BulkAssignRequest {
+  principals: BulkPrincipal[];
+  attributes: BulkAttribute[];
+  justification?: string | null;
+  /** ISO-8601 expiry; omit or `null` for no expiry. */
+  expiresAt?: string | null;
+}
+
+/** One skipped or failed grant from a bulk assign. */
+export interface BulkAssignItemResult {
+  principalName: string;
+  principalType: PrincipalKind;
+  attributeKey: string;
+  attributeValue: string;
+  reason: string;
+}
+
+/** Outcome of `POST /identity/assignments/bulk`. */
+export interface BulkAssignResult {
+  succeeded: IdentityAttributeAssignment[];
+  skipped: BulkAssignItemResult[];
+  failed: BulkAssignItemResult[];
+  totalRequested: number;
+}
+
+/** One attribute key the caller may grant (`GET /identity/grantable-attributes`). */
+export interface GrantableAttribute {
+  key: string;
+  /** Paths the caller covers for this key; empty for admins (all values). */
+  categories: string[];
+}
+
+/** Attribute keys the signed-in admin or approver may grant. */
+export interface GrantableAttributeList {
+  attributes: GrantableAttribute[];
+  total: number;
 }
 
 /** Optional filters for `GET /identity/assignments`; sent as snake_case query parameters. */

@@ -356,8 +356,9 @@ Identity → Category approvers (or belong to a listed group); `/api/me` exposes
 | --- | --- | --- | --- |
 | Access explorer | yes | yes | yes |
 | Identity → My attributes / Request access / My requests | yes | yes | yes |
-| Identity → Approvals | no | yes | yes |
-| Identity → Category approvers / Assignments / Definitions | no | no | yes |
+| Approvals | no | yes | yes |
+| Identity → Assignments | no | yes (paths they decide) | yes |
+| Identity → Category approvers / Definitions | no | no | yes |
 | Policies, Exceptions, Row filters, Mask rules, App status | no | no | yes |
 | Help | yes | yes | yes |
 
@@ -415,7 +416,9 @@ UC grants are intentionally omitted for now.
 | Row-filter dimensions (`state`, …) | Designated **dimension approvers** (Identity → Approvers → Row-filter dimension). If none are configured → **app admins**. |
 
 Create requests via `POST /api/identity/access-requests` with `attribute_key` + `attribute_value`
-(defaults to `sensitivity` when `attribute_key` is omitted). Approvals appear in Identity → Approvals.
+(defaults to `sensitivity` when `attribute_key` is omitted). Approvals appear on the **Approvals**
+page. Admins and path approvers can also grant directly from **Identity → Assignments**
+(`POST /api/identity/assignments` or `/assignments/bulk`).
 
 ### Decision flow: request to enforcement
 
@@ -454,9 +457,9 @@ matching immediately, and the next grants-sync apply removes data-access group m
 
 | Attribute key | Used by | How users get it |
 | --- | --- | --- |
-| `sensitivity` | `has_sensitivity` / column unmask | Access request → category approver (or app admin) → assign |
-| Row-filter dimension keys (`state`, …) | `has_row_access` | Access request → dimension approver (or app admin) → assign (or admin assign) |
-| Data-access attribute | Grants sync `dac_*` group membership | Access request → data-access category approver (or app admin) → assign |
+| `sensitivity` | `has_sensitivity` / column unmask | Access request → category approver (or app admin) → assign; or Identity → Assignments (admin / path approver) |
+| Row-filter dimension keys (`state`, …) | `has_row_access` | Access request → dimension approver (or app admin) → assign; or Identity → Assignments |
+| Data-access attribute | Grants sync `dac_*` group membership | Access request → data-access category approver (or app admin) → assign; or Identity → Assignments |
 
 Mirror table: `data_governance_app.app.identity_attributes` (synced from Lakebase when that
 backend is active).

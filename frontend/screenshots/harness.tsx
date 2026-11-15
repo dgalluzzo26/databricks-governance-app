@@ -3,7 +3,7 @@
  *
  * Renders the real app routes with in-memory demo data. Open
  * `/screenshots/index.html?role=user|approver&path=/access-explorer` under `npm run dev`;
- * `capture.mjs` drives it with Playwright and writes `public/help-images/*.png`.
+ * `capture.cjs` drives it with Playwright and writes `public/help-images/*.png`.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { StrictMode } from "react";
@@ -62,14 +62,17 @@ function assignment(
   attributeKey: string,
   attributeValue: string,
   expiresAt: string | null,
+  principalName = user.userName,
+  principalType: IdentityAttributeAssignment["principalType"] = "USER",
+  source: IdentityAttributeAssignment["source"] = "ACCESS_REQUEST",
 ): IdentityAttributeAssignment {
   return {
     assignmentId: id,
-    principalName: user.userName,
-    principalType: "USER",
+    principalName,
+    principalType,
     attributeKey,
     attributeValue,
-    source: "ACCESS_REQUEST",
+    source,
     grantedBy: "priya.shah@example.com",
     justification: null,
     expiresAt,
@@ -97,6 +100,39 @@ const myAttributes: AttributeAssignmentList =
         ],
         total: 2,
       };
+
+/** Assignments visible on Identity → Assignments (scoped for approvers). */
+const managedAssignments: AttributeAssignmentList =
+  role === "approver"
+    ? {
+        assignments: [
+          assignment(
+            "mgr-1",
+            "sensitivity",
+            "finance.budget",
+            "2026-11-30T23:59:00Z",
+            "alex.kim@example.com",
+          ),
+          assignment(
+            "mgr-2",
+            "sensitivity",
+            "finance.budget.PII",
+            null,
+            "finance-analysts",
+            "GROUP",
+            "MANUAL",
+          ),
+          assignment(
+            "mgr-3",
+            "sensitivity",
+            "finance.budget.PII.Name",
+            "2027-01-31T23:59:00Z",
+            "sam.rivera@example.com",
+          ),
+        ],
+        total: 3,
+      }
+    : myAttributes;
 
 function request(
   id: string,
@@ -291,7 +327,7 @@ const definitions = {
 const base = fakeServices({
   user,
   myAttributes,
-  assignments: myAttributes,
+  assignments: managedAssignments,
   myAccessRequests: myRequests,
   approvals,
   definitions,

@@ -46,7 +46,10 @@ import type {
   AttributeAssignmentList,
   AttributeDefinition,
   AttributeDefinitionList,
+  BulkAssignRequest,
+  BulkAssignResult,
   CategoryApprover,
+  GrantableAttributeList,
   CategoryApproverList,
   CreateAccessRequestBody,
   CurrentUser,
@@ -528,7 +531,22 @@ export class IdentityAttributesApi {
   }
 
   /**
-   * `GET /identity/assignments` — assignments across all principals (admin only).
+   * `GET /identity/grantable-attributes` — attribute keys the caller may grant.
+   *
+   * App admins get every definition. Path approvers get keys (and category paths) they cover.
+   *
+   * @param signal - Optional abort signal.
+   * @returns Grantable attribute keys.
+   * @throws {@link ApiError} On a non-2xx response.
+   */
+  listGrantableAttributes(signal?: AbortSignal): Promise<GrantableAttributeList> {
+    return this.http.get<GrantableAttributeList>("/identity/grantable-attributes", signal);
+  }
+
+  /**
+   * `GET /identity/assignments` — assignments across principals (admins and path approvers).
+   *
+   * Approvers only receive assignments for paths they can decide.
    *
    * @param params - Optional filters, sent as `principal_name`, `principal_type`, `attribute_key`, and
    *   `include_inactive=true` when requested.
@@ -561,7 +579,9 @@ export class IdentityAttributesApi {
   }
 
   /**
-   * `POST /identity/assignments` — grant an attribute value to a principal (admin only).
+   * `POST /identity/assignments` — grant an attribute value to a principal.
+   *
+   * App admins may assign any defined value. Path approvers may only assign values they can decide.
    *
    * @param body - Assignment to create.
    * @returns The created assignment.
@@ -569,6 +589,19 @@ export class IdentityAttributesApi {
    */
   assign(body: AssignAttributeRequest): Promise<IdentityAttributeAssignment> {
     return this.http.post<IdentityAttributeAssignment>("/identity/assignments", body);
+  }
+
+  /**
+   * `POST /identity/assignments/bulk` — grant many principals × many attribute values.
+   *
+   * Justification and expiry are shared. Each grant is still created and audited individually.
+   *
+   * @param body - Principals, attribute rows, and shared justification/expiry.
+   * @returns Succeeded, skipped, and failed items.
+   * @throws {@link ApiError} On a non-2xx response.
+   */
+  bulkAssign(body: BulkAssignRequest): Promise<BulkAssignResult> {
+    return this.http.post<BulkAssignResult>("/identity/assignments/bulk", body);
   }
 
   /**

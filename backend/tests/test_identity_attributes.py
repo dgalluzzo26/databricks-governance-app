@@ -372,3 +372,257 @@ def test_approver_can_revoke_assignment_for_their_path(
     )
     assert revoked.status_code == 200
     assert revoked.json()["active"] is False
+
+
+def _seed_sensitivity_and_finance_approver(container) -> None:  # noqa: ANN001
+    """Definition + finance-owners group approver, with workspace users for HTTP auth."""
+    from backend.app.models.access_request import UpsertCategoryApproverRequest
+    from backend.app.services.access_requests import AccessRequestService
+    from backend.tests.conftest import FakeWorkspaceFactory
+
+    fake = FakeWorkspaceFactory(
+        {
+            "admin@example.com": ["admins", "users"],
+            "analyst@example.com": ["users"],
+            "finance.lead@example.com": ["finance-owners", "users"],
+            "outsider@example.com": ["users"],
+            "sam@example.com": ["users"],
+        },
+        admin_configured=True,
+    )
+    container.workspace = fake
+    container.identity._factory = fake
+    container.request_context._factory = fake
+
+    identity = _service(container)
+    access = AccessRequestService(container.storage, identity)
+    actor = _admin()
+    identity.upsert_definition(
+        UpsertAttributeDefinitionRequest(
+            key="sensitivity",
+            governed_tag_keys=["sensitivity_category", "sensitivity"],
+        ),
+        actor,  # type: ignore[arg-type]
+    )
+    access.upsert_approver(
+        UpsertCategoryApproverRequest(
+            category_path="finance",
+            principal_name="finance-owners",
+            principal_type=PrincipalKind.GROUP,
+        ),
+        actor,  # type: ignore[arg-type]
+    )
+
+
+def test_admin_bulk_assign_creates_cartesian_product(client: TestClient, container) -> None:  # noqa: ANN001
+    """Admin bulk assign creates one assignment per principal × attribute with shared fields."""
+    _service(container)
+    admin = headers_for("admin@example.com")
+    expires = (datetime.now(UTC) + timedelta(days=30)).isoformat()
+    container.storage.identity_attributes.upsert_definition(
+        AttributeDefinition(
+            key="dga_domain",
+            description="Business domain",
+            governed_tag_keys=["dga_domain"],
+            allowed_values=[],
+            created_by="admin@example.com",
+            created_at=datetime.now(UTC),
+            updated_by="admin@example.com",
+            updated_at=datetime.now(UTC),
+        )
+    )
+
+    response = client.post(
+        "/api/identity/assignments/bulk",
+        headers=admin,
+        json={
+            "principals": [
+                {"principalName": "analyst@example.com", "principalType": "USER"},
+                {"principalName": "data-stewards", "principalType": "GROUP"},
+            ],
+            "attributes": [
+                {"attributeKey": "dga_domain", "attributeValue": "finance"},
+                {"attributeKey": "dga_domain", "attributeValue": "hr"},
+            ],
+            "justification": "Bulk onboard",
+            "expiresAt": expires,
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["totalRequested"] == 4
+    assert len(body["succeeded"]) == 4
+    assert body["skipped"] == []
+    assert body["failed"] == []
+    for item in body["succeeded"]:
+        assert item["justification"] == "Bulk onboard"
+        assert item["expiresAt"] is not None
+        assert item["active"] is True
+
+    listed = client.get("/api/identity/assignments", headers=admin).json()
+    assert listed["total"] >= 4
+
+
+def test_bulk_assign_skips_already_held_and_reports_partial_failure(
+    client: TestClient, container
+) -> None:  # noqa: ANN001
+    """Idempotent re-grants are skipped; invalid values fail without rolling back successes."""
+    _service(container)
+    admin = headers_for("admin@example.com")
+    container.storage.identity_attributes.upsert_definition(
+        AttributeDefinition(
+            key="dga_domain",
+            description="Business domain",
+            governed_tag_keys=["dga_domain"],
+            allowed_values=[],
+            created_by="admin@example.com",
+            created_at=datetime.now(UTC),
+            updated_by="admin@example.com",
+            updated_at=datetime.now(UTC),
+        )
+    )
+    first = client.post(
+        "/api/identity/assignments/bulk",
+        headers=admin,
+        json={
+            "principals": [{"principalName": "analyst@example.com", "principalType": "USER"}],
+            "attributes": [{"attributeKey": "dga_domain", "attributeValue": "finance"}],
+        },
+    )
+    assert first.status_code == 200
+    assert len(first.json()["succeeded"]) == 1
+
+    second = client.post(
+        "/api/identity/assignments/bulk",
+        headers=admin,
+        json={
+            "principals": [{"principalName": "analyst@example.com", "principalType": "USER"}],
+            "attributes": [
+                {"attributeKey": "dga_domain", "attributeValue": "finance"},
+                {"attributeKey": "dga_domain", "attributeValue": "not-a-real-domain"},
+            ],
+        },
+    )
+    assert second.status_code == 200, second.text
+    body = second.json()
+    assert body["totalRequested"] == 2
+    assert len(body["skipped"]) == 1
+    assert body["skipped"][0]["reason"] == "Already held"
+    assert len(body["failed"]) == 1
+    assert "not-a-real-domain" in body["failed"][0]["attributeValue"]
+    assert body["succeeded"] == []
+
+
+def test_bulk_assign_enforces_caps(client: TestClient, container) -> None:  # noqa: ANN001
+    """Server rejects bulk submits that exceed principal / grant caps."""
+    _service(container)
+    admin = headers_for("admin@example.com")
+    container.storage.identity_attributes.upsert_definition(
+        AttributeDefinition(
+            key="dga_domain",
+            description="Business domain",
+            governed_tag_keys=["dga_domain"],
+            allowed_values=[],
+            created_by="admin@example.com",
+            created_at=datetime.now(UTC),
+            updated_by="admin@example.com",
+            updated_at=datetime.now(UTC),
+        )
+    )
+    too_many_principals = client.post(
+        "/api/identity/assignments/bulk",
+        headers=admin,
+        json={
+            "principals": [
+                {"principalName": f"user{i}@example.com", "principalType": "USER"}
+                for i in range(51)
+            ],
+            "attributes": [{"attributeKey": "dga_domain", "attributeValue": "finance"}],
+        },
+    )
+    assert too_many_principals.status_code == 422
+
+    too_many_grants = client.post(
+        "/api/identity/assignments/bulk",
+        headers=admin,
+        json={
+            "principals": [
+                {"principalName": f"user{i}@example.com", "principalType": "USER"}
+                for i in range(50)
+            ],
+            "attributes": [
+                {"attributeKey": "dga_domain", "attributeValue": "finance"}
+                for _ in range(11)
+            ],
+        },
+    )
+    assert too_many_grants.status_code == 422
+    assert "500" in too_many_grants.json()["error"]["message"]
+
+
+def test_approver_bulk_and_list_are_scoped(client: TestClient, container) -> None:  # noqa: ANN001
+    """Approvers may bulk-grant and list only paths they can decide."""
+    _seed_sensitivity_and_finance_approver(container)
+    admin = headers_for("admin@example.com")
+    lead = headers_for("finance.lead@example.com")
+    outsider = headers_for("outsider@example.com")
+
+    grantable = client.get("/api/identity/grantable-attributes", headers=lead)
+    assert grantable.status_code == 200
+    keys = {item["key"] for item in grantable.json()["attributes"]}
+    assert keys == {"sensitivity"}
+
+    assert client.get("/api/identity/grantable-attributes", headers=outsider).status_code == 403
+    assert client.get("/api/identity/assignments", headers=outsider).status_code == 403
+
+    ok = client.post(
+        "/api/identity/assignments/bulk",
+        headers=lead,
+        json={
+            "principals": [
+                {"principalName": "analyst@example.com", "principalType": "USER"},
+                {"principalName": "sam@example.com", "principalType": "USER"},
+            ],
+            "attributes": [
+                {"attributeKey": "sensitivity", "attributeValue": "finance.budget.PII.Name"},
+            ],
+            "justification": "Finance close",
+        },
+    )
+    assert ok.status_code == 200, ok.text
+    assert len(ok.json()["succeeded"]) == 2
+
+    forbidden = client.post(
+        "/api/identity/assignments/bulk",
+        headers=lead,
+        json={
+            "principals": [{"principalName": "analyst@example.com", "principalType": "USER"}],
+            "attributes": [
+                {"attributeKey": "sensitivity", "attributeValue": "public.PII.Name"},
+            ],
+        },
+    )
+    assert forbidden.status_code == 403
+
+    # Seed an out-of-scope assignment as admin; approver list must not include it.
+    seeded = client.post(
+        "/api/identity/assignments",
+        headers=admin,
+        json={
+            "principalName": "outsider@example.com",
+            "principalType": "USER",
+            "attributeKey": "sensitivity",
+            "attributeValue": "public.PII.Name",
+        },
+    )
+    assert seeded.status_code == 200, seeded.text
+
+    lead_list = client.get("/api/identity/assignments", headers=lead).json()
+    values = {item["attributeValue"] for item in lead_list["assignments"]}
+    assert "finance.budget.PII.Name" in values
+    assert "public.PII.Name" not in values
+
+    admin_list = client.get("/api/identity/assignments", headers=admin).json()
+    admin_values = {item["attributeValue"] for item in admin_list["assignments"]}
+    assert "public.PII.Name" in admin_values
+    assert "finance.budget.PII.Name" in admin_values

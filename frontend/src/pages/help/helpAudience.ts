@@ -30,7 +30,7 @@ export function helpPageDescription(role: HelpRole): string {
     return "Technical guides for masking, row filters, grants sync, and the live API reference.";
   }
   if (role === "approver") {
-    return "How to review access requests and inspect attribute holders. Includes the user guide.";
+    return "How to review access requests, grant assignments, and inspect attribute holders. Includes the user guide.";
   }
   return "How to explore tables, request access, and track your attributes.";
 }

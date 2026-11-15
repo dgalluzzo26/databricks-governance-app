@@ -468,7 +468,7 @@ Per data-access assignment, two states:
 | Endpoint | Returns |
 | --- | --- |
 | `GET /api/data-access/access-status/me` | Status for the signed-in user's data-access attributes (any user) |
-| `POST /api/data-access/access-status` `{assignmentIds}` | Status for up to 200 assignments (admin); used by Identity → Assignments for the visible page |
+| `POST /api/data-access/access-status` `{assignmentIds}` | Status for up to 200 assignments; used by Identity → Assignments for the visible page (admins and path approvers) |
 
 ---
 

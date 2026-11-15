@@ -90,6 +90,29 @@ const scenes = [
   ["approver-home", async (page) => open(page, "approver", "/")],
   ["approver-approvals", async (page) => open(page, "approver", "/approvals")],
   [
+    "approver-assignments",
+    async (page) => {
+      await open(page, "approver", "/identity?tab=assignments");
+      const form = card(page, "Assign attributes");
+      const picker = form.getByRole("combobox", { name: "Add principal" });
+      await picker.fill("an");
+      await page.getByRole("listbox", { name: "Matching principals" }).getByRole("button", { name: /Ana Lopez/ }).click();
+      await picker.fill("da");
+      await page.getByRole("listbox", { name: "Matching principals" }).getByRole("button", { name: /data-stewards/ }).click();
+      await form.getByLabel("Attribute").selectOption("sensitivity");
+      await form.getByLabel("Value").selectOption("finance.budget");
+      await form.getByRole("button", { name: "Add attribute" }).click();
+      const rows = form.locator("label").filter({ hasText: "Attribute" });
+      await rows.nth(1).locator("select").selectOption("sensitivity");
+      const valueSelects = form.locator("label").filter({ hasText: "Value" }).locator("select");
+      await valueSelects.nth(1).selectOption("finance.budget.PII.Name");
+      await form.getByLabel("Justification").fill("Q4 close access for analysts");
+      await form.getByLabel("Justification").blur();
+      await page.getByText("2 principals × 2 values = 4 assignments").waitFor();
+      return form;
+    },
+  ],
+  [
     "approver-attribute-explorer",
     async (page) => {
       await open(page, "approver", "/attribute-explorer");

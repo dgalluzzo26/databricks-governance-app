@@ -16,7 +16,10 @@ import type {
   AttachRowFilterRequest,
   AttributeAssignmentList,
   AttributeDefinitionList,
+  BulkAssignRequest,
+  BulkAssignResult,
   CategoryApproverList,
+  GrantableAttributeList,
   CreateAccessRequestBody,
   CurrentUser,
   DecideAccessRequestBody,
@@ -1373,6 +1376,20 @@ export function fakeServices(
         updatedAt: "2026-01-01T00:00:00Z",
       }),
       deleteDefinition: async () => undefined,
+      listGrantableAttributes: async (): Promise<GrantableAttributeList> => {
+        if (user instanceof Error) return Promise.reject(user);
+        if (definitions instanceof Error) return Promise.reject(definitions);
+        if (user.isAdmin) {
+          return {
+            attributes: definitions.definitions.map((item) => ({ key: item.key, categories: [] })),
+            total: definitions.definitions.length,
+          };
+        }
+        return {
+          attributes: [{ key: "sensitivity", categories: ["finance"] }],
+          total: 1,
+        };
+      },
       listAssignments: () =>
         assignments instanceof Error ? Promise.reject(assignments) : Promise.resolve(assignments),
       myAssignments: () =>
@@ -1393,6 +1410,31 @@ export function fakeServices(
           revokedBy: null,
           active: true,
         }) satisfies IdentityAttributeAssignment,
+      bulkAssign: async (body: BulkAssignRequest): Promise<BulkAssignResult> => {
+        const succeeded = body.principals.flatMap((principal) =>
+          body.attributes.map((attribute, index) => ({
+            assignmentId: `bulk-${index}-${principal.principalName}`,
+            principalName: principal.principalName,
+            principalType: principal.principalType,
+            attributeKey: attribute.attributeKey,
+            attributeValue: attribute.attributeValue,
+            source: "MANUAL" as const,
+            grantedBy: "admin",
+            justification: body.justification ?? null,
+            expiresAt: body.expiresAt ?? null,
+            createdAt: "2026-01-01T00:00:00Z",
+            revokedAt: null,
+            revokedBy: null,
+            active: true,
+          })),
+        );
+        return {
+          succeeded,
+          skipped: [],
+          failed: [],
+          totalRequested: succeeded.length,
+        };
+      },
       revoke: async (assignmentId: string) => ({
         ...testMyAttributes.assignments[0]!,
         assignmentId,

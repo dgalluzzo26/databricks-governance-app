@@ -201,6 +201,45 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-1);
+  margin-top: var(--space-2);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px 6px 2px 4px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+  background: var(--surface-muted, rgba(127, 127, 127, 0.06));
+}
+
+.chipRemove {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 1.1em;
+  line-height: 1;
+  color: var(--color-text-muted);
+}
+
+.attrRow {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: var(--space-3);
+  align-items: end;
+}
+
+.resultList {
+  margin: var(--space-2) 0 0;
+  padding-left: 1.25rem;
+  display: grid;
+  gap: var(--space-1);
+  font-size: var(--font-size-sm);
 }
 
 .muted {

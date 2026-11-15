@@ -15,7 +15,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 from backend.app.clients.sql import SqlExecutor
-from backend.app.core.errors import InvalidRequestError, NotFoundError
+from backend.app.core.errors import AppError, ForbiddenError, InvalidRequestError, NotFoundError
 from backend.app.models.access_request import SENSITIVITY_ATTRIBUTE_KEY
 from backend.app.models.audit import AuditEvent
 from backend.app.models.data_access import DataAccessSettings
@@ -27,6 +27,9 @@ from backend.app.models.identity_attribute import (
     AttributeDefinition,
     AttributeDefinitionList,
     AttributeSource,
+    BulkAssignItemResult,
+    BulkAssignRequest,
+    BulkAssignResult,
     GovernedTagList,
     IdentityAttributeAssignment,
     UpsertAttributeDefinitionRequest,
@@ -47,6 +50,11 @@ _DEFAULT_ACCESS_TAG_KEY = "data_access_control"
 ASSIGNMENT_ASSIGNED = "assigned"
 ASSIGNMENT_REVOKED = "revoked"
 AssignmentListener = Callable[[str, IdentityAttributeAssignment, CurrentUser], None]
+
+# Caps for POST /identity/assignments/bulk (also enforced by the request model field lengths).
+_BULK_MAX_PRINCIPALS = 50
+_BULK_MAX_ATTRIBUTES = 20
+_BULK_MAX_GRANTS = 500
 
 
 class IdentityAttributeService:
@@ -342,8 +350,14 @@ class IdentityAttributeService:
         principal_type: PrincipalKind | None = None,
         attribute_key: str | None = None,
         include_inactive: bool = False,
+        actor: CurrentUser | None = None,
+        can_decide: Callable[[str, str], bool] | None = None,
     ) -> AttributeAssignmentList:
         """List assignments matching optional filters.
+
+        When ``actor`` is a non-admin, ``can_decide(attribute_key, attribute_value)`` must be
+        provided; only assignments that pass are returned. Admins (and callers that omit
+        ``actor``) see every matching row.
 
         Args:
             principal_name: Restrict to one principal (exact match).
@@ -351,6 +365,8 @@ class IdentityAttributeService:
             principal_type: Restrict to USER or GROUP principals.
             attribute_key: Restrict to one attribute.
             include_inactive: Include revoked and expired assignments.
+            actor: Signed-in user; non-admins get a scoped list.
+            can_decide: Path authority check for non-admin actors.
 
         Returns:
             Matching assignments.
@@ -364,6 +380,10 @@ class IdentityAttributeService:
                 include_inactive=include_inactive,
             )
         )
+        if actor is not None and not actor.is_admin:
+            if can_decide is None:
+                raise ForbiddenError("Assignment listing for approvers requires a path authority check")
+            items = [item for item in items if can_decide(item.attribute_key, item.attribute_value)]
         return AttributeAssignmentList(assignments=items, total=len(items))
 
     def list_for_user(self, user: CurrentUser) -> AttributeAssignmentList:
@@ -505,6 +525,144 @@ class IdentityAttributeService:
         )
         self._notify(ASSIGNMENT_ASSIGNED, saved, actor)
         return saved
+
+    def bulk_assign(
+        self,
+        request: BulkAssignRequest,
+        actor: CurrentUser,
+        *,
+        require_can_decide: Callable[[str, str], None] | None = None,
+    ) -> BulkAssignResult:
+        """Grant every principal × attribute pair, sharing justification and expiry.
+
+        Each successful create or renew is audited individually (no bulk audit event).
+        Per-item failures are collected; earlier successes are not rolled back.
+
+        Args:
+            request: Principals, attribute rows, and shared justification/expiry.
+            actor: Admin or path approver granting the values.
+            require_can_decide: When set (non-admin callers), called once per distinct
+                ``(attribute_key, attribute_value)`` before the loop; should raise
+                ``ForbiddenError`` when the actor cannot grant that path.
+
+        Returns:
+            Succeeded, skipped (already held), and failed items.
+
+        Raises:
+            ForbiddenError: If the caller is not an admin and ``require_can_decide`` is omitted,
+                or if a distinct attribute value is out of scope (raised before any grant).
+            InvalidRequestError: If caps are exceeded or lists are empty after trimming.
+        """
+        principals = [
+            (p.principal_name.strip(), p.principal_type)
+            for p in request.principals
+            if p.principal_name.strip()
+        ]
+        attributes = [
+            (a.attribute_key.strip(), a.attribute_value.strip())
+            for a in request.attributes
+            if a.attribute_key.strip() and a.attribute_value.strip()
+        ]
+        if not principals:
+            raise InvalidRequestError("Select at least one principal")
+        if not attributes:
+            raise InvalidRequestError("Add at least one attribute and value")
+        if len(principals) > _BULK_MAX_PRINCIPALS:
+            raise InvalidRequestError(f"At most {_BULK_MAX_PRINCIPALS} principals per bulk assign")
+        if len(attributes) > _BULK_MAX_ATTRIBUTES:
+            raise InvalidRequestError(f"At most {_BULK_MAX_ATTRIBUTES} attribute rows per bulk assign")
+        total = len(principals) * len(attributes)
+        if total > _BULK_MAX_GRANTS:
+            raise InvalidRequestError(
+                f"At most {_BULK_MAX_GRANTS} grants per bulk assign "
+                f"({len(principals)} principals × {len(attributes)} attributes = {total})"
+            )
+        if not actor.is_admin:
+            if require_can_decide is None:
+                raise ForbiddenError("Only app admins and path approvers can assign attributes")
+            seen_paths: set[tuple[str, str]] = set()
+            for key, value in attributes:
+                path = (key.lower(), value.lower())
+                if path in seen_paths:
+                    continue
+                seen_paths.add(path)
+                require_can_decide(key, value)
+
+        succeeded: list[IdentityAttributeAssignment] = []
+        skipped: list[BulkAssignItemResult] = []
+        failed: list[BulkAssignItemResult] = []
+        for principal_name, principal_type in principals:
+            for attribute_key, attribute_value in attributes:
+                existing = self._active_assignment(
+                    principal_name, principal_type, attribute_key, attribute_value
+                )
+                try:
+                    saved = self.assign(
+                        AssignAttributeRequest(
+                            principal_name=principal_name,
+                            principal_type=principal_type,
+                            attribute_key=attribute_key,
+                            attribute_value=attribute_value,
+                            justification=request.justification,
+                            expires_at=request.expires_at,
+                        ),
+                        actor,
+                        source=AttributeSource.MANUAL,
+                    )
+                except AppError as exc:
+                    failed.append(
+                        BulkAssignItemResult(
+                            principal_name=principal_name,
+                            principal_type=principal_type,
+                            attribute_key=attribute_key,
+                            attribute_value=attribute_value,
+                            reason=exc.message,
+                        )
+                    )
+                    continue
+                if (
+                    existing is not None
+                    and existing.assignment_id == saved.assignment_id
+                    and existing.expires_at == saved.expires_at
+                ):
+                    skipped.append(
+                        BulkAssignItemResult(
+                            principal_name=principal_name,
+                            principal_type=principal_type,
+                            attribute_key=attribute_key,
+                            attribute_value=attribute_value,
+                            reason="Already held",
+                        )
+                    )
+                else:
+                    succeeded.append(saved)
+        return BulkAssignResult(
+            succeeded=succeeded,
+            skipped=skipped,
+            failed=failed,
+            total_requested=total,
+        )
+
+    def _active_assignment(
+        self,
+        principal_name: str,
+        principal_type: PrincipalKind,
+        attribute_key: str,
+        attribute_value: str,
+    ) -> IdentityAttributeAssignment | None:
+        """Return the active assignment for this principal and value, if any."""
+        needle = attribute_value.strip().lower()
+        for item in self._storage.identity_attributes.list_assignments(
+            AttributeAssignmentFilter(
+                principal_name=principal_name,
+                principal_type=principal_type,
+                attribute_key=attribute_key,
+                include_inactive=False,
+            )
+        ):
+            if item.active and item.attribute_value.lower() == needle:
+                return item
+        return None
 
     def update_expiry(
         self, assignment_id: str, expires_at: datetime, actor: CurrentUser

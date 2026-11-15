@@ -243,7 +243,7 @@ class IdentityAttributeAssignment(ApiModel):
 
 
 class AssignAttributeRequest(ApiModel):
-    """Request body for an admin to assign an attribute value to a principal.
+    """Request body for an admin or path approver to assign an attribute value to a principal.
 
     Attributes:
         principal_name: Principal receiving the value.
@@ -260,6 +260,108 @@ class AssignAttributeRequest(ApiModel):
     attribute_value: str = Field(min_length=1)
     justification: str | None = None
     expires_at: datetime | None = None
+
+
+class BulkPrincipal(ApiModel):
+    """One principal in a bulk assign request.
+
+    Attributes:
+        principal_name: Principal receiving the value.
+        principal_type: Kind of principal (USER or GROUP; service principals allowed for admins).
+    """
+
+    principal_name: str = Field(min_length=1)
+    principal_type: PrincipalKind
+
+
+class BulkAttribute(ApiModel):
+    """One attribute key/value in a bulk assign request.
+
+    Attributes:
+        attribute_key: Attribute key; must have a definition.
+        attribute_value: Value to assign; must be allowed by the definition.
+    """
+
+    attribute_key: str = Field(min_length=1)
+    attribute_value: str = Field(min_length=1)
+
+
+class BulkAssignRequest(ApiModel):
+    """Request body for granting many principals × many attribute values in one submit.
+
+    Justification and expiry are shared across every created assignment. Caps are enforced
+    by the service (principals, attribute rows, and total grants).
+
+    Attributes:
+        principals: Principals to grant (1–50).
+        attributes: Attribute key/value pairs (1–20).
+        justification: Optional business justification applied to every grant.
+        expires_at: Optional shared expiry; None means never expires.
+    """
+
+    principals: list[BulkPrincipal] = Field(min_length=1, max_length=50)
+    attributes: list[BulkAttribute] = Field(min_length=1, max_length=20)
+    justification: str | None = None
+    expires_at: datetime | None = None
+
+
+class BulkAssignItemResult(ApiModel):
+    """One skipped or failed grant from a bulk assign.
+
+    Attributes:
+        principal_name: Principal that was targeted.
+        principal_type: Kind of principal.
+        attribute_key: Attribute key that was targeted.
+        attribute_value: Value that was targeted.
+        reason: Why the grant was skipped or failed.
+    """
+
+    principal_name: str
+    principal_type: PrincipalKind
+    attribute_key: str
+    attribute_value: str
+    reason: str
+
+
+class BulkAssignResult(ApiModel):
+    """Outcome of a bulk assign: per-item succeed / skip / fail, no single bulk audit event.
+
+    Attributes:
+        succeeded: New or renewed assignments.
+        skipped: Already held with the same expiry (idempotent no-ops).
+        failed: Forbidden, invalid value, or other per-item errors.
+        total_requested: ``len(principals) * len(attributes)``.
+    """
+
+    succeeded: list[IdentityAttributeAssignment]
+    skipped: list[BulkAssignItemResult]
+    failed: list[BulkAssignItemResult]
+    total_requested: int
+
+
+class GrantableAttribute(ApiModel):
+    """An attribute key the caller may grant from the Assignments form.
+
+    Attributes:
+        key: Attribute definition key.
+        categories: Paths the caller covers for this key (sensitivity / data-access). Empty for
+            admins (all values) and for dimension keys where the key itself is the scope.
+    """
+
+    key: str
+    categories: list[str] = []
+
+
+class GrantableAttributeList(ApiModel):
+    """Attribute keys the signed-in admin or approver may grant.
+
+    Attributes:
+        attributes: Grantable keys (and optional category paths).
+        total: Number of keys.
+    """
+
+    attributes: list[GrantableAttribute]
+    total: int
 
 
 class AttributeAssignmentFilter(ApiModel):

@@ -3,8 +3,9 @@
  * management of category approvers, attribute assignments, and attribute definitions.
  *
  * Approvals live on `/approvals`. The active tab is stored in the `?tab=` search parameter.
- * Every signed-in user sees "My attributes", "Request access", and "My requests". "Approvers",
- * "Assignments", and "Definitions" are shown only to app admins. Legacy `?tab=approvals`
+ * Every signed-in user sees "My attributes", "Request access", and "My requests". "Assignments"
+ * is shown to app admins and path approvers (approvers only grant paths they can decide).
+ * "Approvers" and "Definitions" are shown only to app admins. Legacy `?tab=approvals`
  * redirects to `/approvals`. This gating is a UI convenience only; the backend enforces
  * authorization on every endpoint.
  */
@@ -12,9 +13,9 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, Navigate, useSearchParams } from "react-router-dom";
 import {
   useAccessStatus,
-  useAssignAttribute,
   useAttributeAssignments,
   useAttributeDefinitions,
+  useBulkAssignAttributes,
   useCancelAccessRequest,
   useCategoryApprovers,
   useCreateAccessRequest,
@@ -22,6 +23,7 @@ import {
   useDeleteAttributeDefinition,
   useDeleteCategoryApprover,
   useGovernedTags,
+  useGrantableAttributes,
   useMyAccessRequests,
   useMyAccessStatus,
   useMyAttributes,
@@ -34,6 +36,7 @@ import { useEffectiveUser } from "@/app/viewAs";
 import type {
   AccessRequest,
   AttributeDefinition,
+  BulkAssignResult,
   CategoryApprover,
   GovernedTagSummary,
   IdentityAttributeAssignment,
@@ -53,8 +56,8 @@ import styles from "./IdentityPage.module.css";
  * Identifier of a top-level tab on the identity page, as stored in the `?tab=` search parameter.
  *
  * @remarks
- * `"approvers"`, `"assignments"`, and `"definitions"` require admin status.
- * See {@link USER_TABS} and {@link ADMIN_TABS}.
+ * `"assignments"` requires admin or approver status. `"approvers"` and `"definitions"` require
+ * admin status. See {@link USER_TABS}, {@link ASSIGNER_TABS}, and {@link ADMIN_TABS}.
  */
 type IdentityTab =
   | "mine"
@@ -79,8 +82,15 @@ const PRINCIPAL_TYPES: PrincipalKind[] = ["USER", "GROUP", "SERVICE_PRINCIPAL"];
 const APPROVER_TYPES: PrincipalKind[] = ["USER", "GROUP"];
 /** Tabs available to every signed-in user. */
 const USER_TABS: IdentityTab[] = ["mine", "request", "my-requests"];
+/** Tabs available to app admins and path approvers. */
+const ASSIGNER_TABS: IdentityTab[] = ["assignments"];
 /** Tabs available only to app admins. */
-const ADMIN_TABS: IdentityTab[] = ["assignments", "definitions", "approvers"];
+const ADMIN_TABS: IdentityTab[] = ["definitions", "approvers"];
+
+/** One selected principal chip in the bulk assign form. */
+type SelectedPrincipal = { name: string; type: PrincipalKind };
+/** One attribute key/value row in the bulk assign form. */
+type AttributeRow = { key: string; value: string; id: string };
 
 /**
  * Formats an ISO timestamp for display using the browser locale.
@@ -102,8 +112,9 @@ function formatWhen(value: string | null | undefined): string {
  * parameter (default `"mine"`). Legacy `?tab=approvals` redirects to `/approvals`.
  *
  * @remarks
- * Tabs are filtered by role: everyone gets {@link USER_TABS}; admins also get {@link ADMIN_TABS}.
- * A disallowed or unknown `tab` value silently falls back to `"mine"`. Respects admin demo preview.
+ * Tabs are filtered by role: everyone gets {@link USER_TABS}; admins and approvers get
+ * {@link ASSIGNER_TABS}; admins also get {@link ADMIN_TABS}. A disallowed or unknown `tab`
+ * value silently falls back to `"mine"`. Respects admin demo preview.
  */
 export function IdentityPage() {
   const { data: user } = useEffectiveUser();
@@ -112,9 +123,11 @@ export function IdentityPage() {
   if (rawTab === "approvals") {
     return <Navigate to="/approvals" replace />;
   }
+  const canAssign = Boolean(user?.isAdmin || user?.isApprover);
   const requested = (rawTab as IdentityTab | null) ?? "mine";
   const allowed = new Set<IdentityTab>([
     ...USER_TABS,
+    ...(canAssign ? ASSIGNER_TABS : []),
     ...(user?.isAdmin ? ADMIN_TABS : []),
   ]);
   const tab: IdentityTab = allowed.has(requested) ? requested : "mine";
@@ -133,7 +146,9 @@ export function IdentityPage() {
         description={
           user?.isAdmin
             ? "Manage attribute definitions, assignments, category approvers, and access requests."
-            : "View your attributes and request access. Approvals are under Approvals in the nav."
+            : user?.isApprover
+              ? "View your attributes, request access, and grant attributes for paths you approve."
+              : "View your attributes and request access. Approvals are under Approvals in the nav."
         }
       />
 
@@ -165,6 +180,17 @@ export function IdentityPage() {
         >
           My requests
         </button>
+        {canAssign && (
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "assignments"}
+            className={`${styles.tab}${tab === "assignments" ? ` ${styles.tabActive}` : ""}`}
+            onClick={() => setTab("assignments")}
+          >
+            Assignments
+          </button>
+        )}
         {user?.isAdmin && (
           <>
             <button
@@ -175,15 +201,6 @@ export function IdentityPage() {
               onClick={() => setTab("approvers")}
             >
               Approvers
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={tab === "assignments"}
-              className={`${styles.tab}${tab === "assignments" ? ` ${styles.tabActive}` : ""}`}
-              onClick={() => setTab("assignments")}
-            >
-              Assignments
             </button>
             <button
               type="button"
@@ -202,7 +219,7 @@ export function IdentityPage() {
       {tab === "request" && <RequestAccessPanel />}
       {tab === "my-requests" && <MyRequestsPanel />}
       {tab === "approvers" && user?.isAdmin && <CategoryApproversPanel />}
-      {tab === "assignments" && user?.isAdmin && <AssignmentsPanel />}
+      {tab === "assignments" && canAssign && <AssignmentsPanel />}
       {tab === "definitions" && user?.isAdmin && <DefinitionsPanel />}
     </>
   );
@@ -851,23 +868,25 @@ function ApproversTable({
 }
 
 /**
- * "Assignments" tab: directly assign attribute values to principals and browse or revoke existing
+ * "Assignments" tab: bulk-grant attribute values to principals and browse or revoke existing
  * assignments.
  *
- * The "Assign attribute" form uses `useAttributeDefinitions` for the attribute picker; when the
- * selected definition has `allowedValues` the value is a select, otherwise free text. Submitting
- * calls `useAssignAttribute` (justification and expiry are optional and sent as `null` when
- * blank), then clears the value, justification, and expiry while keeping principal and attribute.
+ * The form picks many users/groups and one or more attribute+value rows, with one shared
+ * justification and expiry. Submitting calls `useBulkAssignAttributes` (each grant is still
+ * created and audited individually). Approvers only see attribute keys from
+ * `useGrantableAttributes`; the server re-checks path authority per value.
  *
  * The "Assignments" table uses `useAttributeAssignments`, filtered by principal name, principal
  * type, attribute key, and an "Include inactive" toggle. Active rows can be revoked via
- * `useRevokeAttribute`.
+ * `useRevokeAttribute`. Approvers only see assignments for paths they can decide.
  *
  * @remarks
- * Rendered only for app admins. Direct assignments bypass the request/approval workflow.
+ * Rendered for app admins and path approvers. Direct assignments bypass the request inbox.
  */
 function AssignmentsPanel() {
+  const { data: user } = useEffectiveUser();
   const definitions = useAttributeDefinitions();
+  const grantable = useGrantableAttributes();
   const [principalName, setPrincipalName] = useState("");
   // The box filters as you type: the query waits briefly after the last keystroke.
   const principalSearch = useDebouncedValue(principalName.trim(), 300);
@@ -885,7 +904,7 @@ function AssignmentsPanel() {
     [principalSearch, principalType, attributeKey, includeInactive],
   );
   const { data, isPending, error } = useAttributeAssignments(params);
-  const assign = useAssignAttribute();
+  const bulkAssign = useBulkAssignAttributes();
   const revoke = useRevokeAttribute();
   const assignments = data?.assignments ?? [];
   const columns: TableColumn<IdentityAttributeAssignment>[] = [
@@ -914,106 +933,191 @@ function AssignmentsPanel() {
   const access = useAccessStatus(pager.rows.map((item) => item.assignmentId));
   const statusById = new Map((access.data?.statuses ?? []).map((s) => [s.assignmentId, s]));
 
-  const [formPrincipal, setFormPrincipal] = useState("");
-  const [formType, setFormType] = useState<PrincipalKind>("USER");
-  const [formKey, setFormKey] = useState("");
-  const [formValue, setFormValue] = useState("");
+  const [pickerValue, setPickerValue] = useState("");
+  const [principals, setPrincipals] = useState<SelectedPrincipal[]>([]);
+  const [attrRows, setAttrRows] = useState<AttributeRow[]>([{ id: "row-1", key: "", value: "" }]);
   const [formJustification, setFormJustification] = useState("");
   const [formExpires, setFormExpires] = useState("");
+  const [lastResult, setLastResult] = useState<BulkAssignResult | null>(null);
 
-  const selectedDefinition = definitions.data?.definitions.find((item) => item.key === formKey);
-  const valueOptions = selectedDefinition?.allowedValues ?? [];
+  const grantableKeys = useMemo(() => {
+    if (user?.isAdmin) {
+      return (definitions.data?.definitions ?? []).map((item) => item.key);
+    }
+    return (grantable.data?.attributes ?? []).map((item) => item.key);
+  }, [user?.isAdmin, definitions.data?.definitions, grantable.data?.attributes]);
 
-  /** Creates the assignment from the form and resets the value, justification, and expiry on success. */
+  const definitionByKey = useMemo(() => {
+    const map = new Map<string, AttributeDefinition>();
+    for (const item of definitions.data?.definitions ?? []) map.set(item.key, item);
+    return map;
+  }, [definitions.data?.definitions]);
+
+  const validAttrRows = attrRows.filter((row) => row.key.trim() && row.value.trim());
+  const grantCount = principals.length * validAttrRows.length;
+  const canSubmit = principals.length > 0 && validAttrRows.length > 0 && !bulkAssign.isPending;
+
+  const addPrincipal = (name: string, kind?: PrincipalKind) => {
+    const trimmed = name.trim();
+    if (!trimmed || !kind) return;
+    setPrincipals((current) => {
+      if (current.some((item) => item.name.toLowerCase() === trimmed.toLowerCase() && item.type === kind)) {
+        return current;
+      }
+      return [...current, { name: trimmed, type: kind }];
+    });
+    setPickerValue("");
+  };
+
   const onAssign = async () => {
-    await assign.mutateAsync({
-      principalName: formPrincipal.trim(),
-      principalType: formType,
-      attributeKey: formKey,
-      attributeValue: formValue.trim(),
+    const result = await bulkAssign.mutateAsync({
+      principals: principals.map((item) => ({
+        principalName: item.name,
+        principalType: item.type,
+      })),
+      attributes: validAttrRows.map((row) => ({
+        attributeKey: row.key.trim(),
+        attributeValue: row.value.trim(),
+      })),
       justification: formJustification.trim() || null,
       expiresAt: formExpires ? new Date(formExpires).toISOString() : null,
     });
-    setFormValue("");
+    setLastResult(result);
+    setAttrRows([{ id: `row-${Date.now()}`, key: "", value: "" }]);
     setFormJustification("");
     setFormExpires("");
   };
 
   return (
     <div className={styles.stack}>
-      <Card title="Assign attribute">
+      <Card title="Assign attributes">
         <div className={styles.formGrid}>
-          <label className={styles.field}>
-            <span className={styles.label}>Principal</span>
+          <label className={styles.fieldGrow} style={{ gridColumn: "1 / -1" }}>
+            <span className={styles.label}>Principals</span>
             <PrincipalPicker
-              value={formPrincipal}
-              kind={formType === "SERVICE_PRINCIPAL" ? undefined : formType}
-              placeholder="Search users or groups…"
+              value={pickerValue}
+              placeholder="Search users or groups to add…"
+              aria-label="Add principal"
               onChange={(name, nextKind) => {
-                setFormPrincipal(name);
-                if (nextKind) setFormType(nextKind);
+                setPickerValue(name);
+                if (nextKind) addPrincipal(name, nextKind);
               }}
             />
-          </label>
-          <label className={styles.field}>
-            <span className={styles.label}>Principal type</span>
-            <select
-              className={styles.select}
-              value={formType}
-              onChange={(event) => setFormType(event.target.value as PrincipalKind)}
-            >
-              {PRINCIPAL_TYPES.map((type) => (
-                <option key={type} value={type}>
-                  {type.replaceAll("_", " ")}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className={styles.field}>
-            <span className={styles.label}>Attribute</span>
-            <select
-              className={styles.select}
-              value={formKey}
-              onChange={(event) => {
-                setFormKey(event.target.value);
-                setFormValue("");
-              }}
-            >
-              <option value="">Select attribute</option>
-              {(definitions.data?.definitions ?? []).map((item) => (
-                <option key={item.key} value={item.key}>
-                  {item.key}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className={styles.field}>
-            <span className={styles.label}>Value</span>
-            {valueOptions.length ? (
-              <select className={styles.select} value={formValue} onChange={(event) => setFormValue(event.target.value)}>
-                <option value="">Select value</option>
-                {valueOptions.map((value) => (
-                  <option key={value} value={value}>
-                    {value}
-                  </option>
+            {principals.length > 0 && (
+              <div className={styles.chipRow} aria-label="Selected principals">
+                {principals.map((item) => (
+                  <span key={`${item.type}:${item.name}`} className={styles.chip}>
+                    <Badge>{item.type}</Badge>
+                    <code>{item.name}</code>
+                    <button
+                      type="button"
+                      className={styles.chipRemove}
+                      aria-label={`Remove ${item.name}`}
+                      onClick={() =>
+                        setPrincipals((current) =>
+                          current.filter((p) => !(p.name === item.name && p.type === item.type)),
+                        )
+                      }
+                    >
+                      ×
+                    </button>
+                  </span>
                 ))}
-              </select>
-            ) : (
-              <input
-                className={styles.input}
-                value={formValue}
-                onChange={(event) => setFormValue(event.target.value)}
-                placeholder="finance or finance.budget"
-              />
+              </div>
             )}
           </label>
+
+          {attrRows.map((row) => {
+            const valueOptions = definitionByKey.get(row.key)?.allowedValues ?? [];
+            return (
+              <div key={row.id} className={styles.attrRow}>
+                <label className={styles.field}>
+                  <span className={styles.label}>Attribute</span>
+                  <select
+                    className={styles.select}
+                    value={row.key}
+                    onChange={(event) => {
+                      const key = event.target.value;
+                      setAttrRows((current) =>
+                        current.map((item) => (item.id === row.id ? { ...item, key, value: "" } : item)),
+                      );
+                    }}
+                  >
+                    <option value="">Select attribute</option>
+                    {grantableKeys.map((key) => (
+                      <option key={key} value={key}>
+                        {key}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className={styles.field}>
+                  <span className={styles.label}>Value</span>
+                  {valueOptions.length ? (
+                    <select
+                      className={styles.select}
+                      value={row.value}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        setAttrRows((current) =>
+                          current.map((item) => (item.id === row.id ? { ...item, value } : item)),
+                        );
+                      }}
+                    >
+                      <option value="">Select value</option>
+                      {valueOptions.map((value) => (
+                        <option key={value} value={value}>
+                          {value}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      className={styles.input}
+                      value={row.value}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        setAttrRows((current) =>
+                          current.map((item) => (item.id === row.id ? { ...item, value } : item)),
+                        );
+                      }}
+                      placeholder="finance or finance.budget"
+                    />
+                  )}
+                </label>
+                {attrRows.length > 1 && (
+                  <button
+                    type="button"
+                    className={styles.button}
+                    aria-label="Remove attribute row"
+                    onClick={() => setAttrRows((current) => current.filter((item) => item.id !== row.id))}
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+            );
+          })}
+
+          <div className={styles.buttonRow} style={{ gridColumn: "1 / -1" }}>
+            <button
+              type="button"
+              className={styles.button}
+              onClick={() =>
+                setAttrRows((current) => [...current, { id: `row-${Date.now()}`, key: "", value: "" }])
+              }
+            >
+              Add attribute
+            </button>
+          </div>
+
           <label className={styles.fieldGrow}>
             <span className={styles.label}>Justification</span>
             <input
               className={styles.input}
               value={formJustification}
               onChange={(event) => setFormJustification(event.target.value)}
-              placeholder="Optional"
+              placeholder="Optional — applied to every grant"
             />
           </label>
           <label className={styles.field}>
@@ -1030,16 +1134,47 @@ function AssignmentsPanel() {
           <button
             type="button"
             className={`${styles.button} ${styles.buttonPrimary}`}
-            disabled={!formPrincipal.trim() || !formKey || !formValue.trim() || assign.isPending}
+            disabled={!canSubmit}
             onClick={() => void onAssign()}
           >
-            {assign.isPending ? "Assigning…" : "Assign"}
+            {bulkAssign.isPending ? "Assigning…" : "Assign"}
           </button>
-          {assign.error && <ErrorAlert error={assign.error} title="Assign failed" />}
+          {grantCount > 0 && (
+            <span className={styles.muted}>
+              {principals.length} principal{principals.length === 1 ? "" : "s"} × {validAttrRows.length}{" "}
+              value{validAttrRows.length === 1 ? "" : "s"} = {grantCount} assignment
+              {grantCount === 1 ? "" : "s"}
+            </span>
+          )}
+          {bulkAssign.error && <ErrorAlert error={bulkAssign.error} title="Assign failed" />}
         </div>
-        {(definitions.data?.definitions.length ?? 0) === 0 && (
-          <Alert tone="warning" title="No attribute definitions yet">
-            Create a definition on the Definitions tab before assigning values.
+        {lastResult && (
+          <Alert
+            tone={lastResult.failed.length ? "warning" : "success"}
+            title="Bulk assign finished"
+          >
+            {lastResult.succeeded.length} created or renewed, {lastResult.skipped.length} already held
+            {lastResult.failed.length ? `, ${lastResult.failed.length} failed` : ""}.
+            {lastResult.failed.length > 0 && (
+              <ul className={styles.resultList}>
+                {lastResult.failed.slice(0, 8).map((item) => (
+                  <li key={`${item.principalName}:${item.attributeKey}:${item.attributeValue}`}>
+                    <code>
+                      {item.principalName} → {item.attributeKey}={item.attributeValue}
+                    </code>
+                    : {item.reason}
+                  </li>
+                ))}
+                {lastResult.failed.length > 8 && <li>…and {lastResult.failed.length - 8} more</li>}
+              </ul>
+            )}
+          </Alert>
+        )}
+        {grantableKeys.length === 0 && (
+          <Alert tone="warning" title="No grantable attributes">
+            {user?.isAdmin
+              ? "Create a definition on the Definitions tab before assigning values."
+              : "You are not listed as an approver for any attribute path yet."}
           </Alert>
         )}
       </Card>
@@ -1078,9 +1213,9 @@ function AssignmentsPanel() {
               onChange={(event) => setAttributeKey(event.target.value)}
             >
               <option value="">All attributes</option>
-              {(definitions.data?.definitions ?? []).map((item) => (
-                <option key={item.key} value={item.key}>
-                  {item.key}
+              {grantableKeys.map((key) => (
+                <option key={key} value={key}>
+                  {key}
                 </option>
               ))}
             </select>

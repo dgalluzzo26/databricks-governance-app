@@ -13,6 +13,7 @@ import type {
   AssignAttributeRequest,
   AttachRowFilterRequest,
   AssignmentListParams,
+  BulkAssignRequest,
   CreateAccessRequestBody,
   DecideAccessRequestBody,
   PolicyListParams,
@@ -56,6 +57,7 @@ export const queryKeys = {
   policies: (params: PolicyListParams) => ["policies", params] as const,
   policy: (id: string) => ["policy", id] as const,
   attributeDefinitions: ["identity-definitions"] as const,
+  grantableAttributes: ["identity-grantable-attributes"] as const,
   attributeAssignments: (params: AssignmentListParams) => ["identity-assignments", params] as const,
   myAttributes: ["identity-assignments", "me"] as const,
   categoryApprovers: ["category-approvers"] as const,
@@ -566,7 +568,24 @@ export function useAttributeDefinitions() {
 }
 
 /**
- * Fetches attribute assignments across principals (`GET /identity/assignments`, admin only).
+ * Fetches attribute keys the caller may grant (`GET /identity/grantable-attributes`).
+ *
+ * @remarks Key: `queryKeys.grantableAttributes`. Stale after 30 seconds.
+ * @returns The query result for {@link GrantableAttributeList}.
+ */
+export function useGrantableAttributes() {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.grantableAttributes,
+    queryFn: ({ signal }) => api.identityAttributes.listGrantableAttributes(signal),
+    staleTime: 30_000,
+  });
+}
+
+/**
+ * Fetches attribute assignments across principals (`GET /identity/assignments`).
+ *
+ * Admins see all matching rows; path approvers only see paths they can decide.
  *
  * @remarks Key: `queryKeys.attributeAssignments(params)`. Stale after 15 seconds.
  * @param params - Optional principal/attribute filters and `includeInactive`.
@@ -640,6 +659,25 @@ export function useAssignAttribute() {
   return useMutation({
     meta: { busyMessage: "Assigning attribute…" },
     mutationFn: (body: AssignAttributeRequest) => api.identityAttributes.assign(body),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: ["identity-assignments"] });
+      client.invalidateQueries({ queryKey: ["data-access"] });
+    },
+  });
+}
+
+/**
+ * Grants many principals × many attribute values (`POST /identity/assignments/bulk`).
+ *
+ * @remarks Invalidates every `["identity-assignments", ...]` query on success.
+ * @returns A mutation taking a {@link BulkAssignRequest}.
+ */
+export function useBulkAssignAttributes() {
+  const api = useApi();
+  const client = useQueryClient();
+  return useMutation({
+    meta: { busyMessage: "Assigning attributes…" },
+    mutationFn: (body: BulkAssignRequest) => api.identityAttributes.bulkAssign(body),
     onSuccess: () => {
       client.invalidateQueries({ queryKey: ["identity-assignments"] });
       client.invalidateQueries({ queryKey: ["data-access"] });

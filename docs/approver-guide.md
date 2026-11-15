@@ -18,7 +18,8 @@ for you.
 | --- | --- |
 | **Approvals** | Decide pending requests and renew expiring access |
 | **Attribute explorer** | See who holds a path, revoke access, and see which tables a data-access value unlocks |
-| **Access explorer** / **Identity** | The same as any user: explore tables and request access for yourself |
+| **Identity → Assignments** | Grant attribute values directly to users and groups (paths you can decide only) |
+| **Access explorer** / **Identity** | Explore tables and request access for yourself, same as any user |
 
 Admin configuration — who the approvers are, attribute definitions, masks, row-filter packs,
 and grants sync — stays on admin-only pages.
@@ -84,6 +85,35 @@ without granting anything.
 
 ---
 
+## Identity → Assignments
+
+Use **Assignments** when you already know who should get access and want to grant it without
+waiting for a request. Open **Identity**, then the **Assignments** tab.
+
+You only see attribute keys you are designated for, and the server still checks each value
+against the paths you can decide. App admins see every definition.
+
+![Bulk assign form for an approver](../frontend/public/help-images/approver-assignments.png)
+
+1. Add one or more **Principals** (users or groups) from the search box. Each selection becomes
+   a chip; remove a chip if you added the wrong person.
+2. Choose an **Attribute** and **Value**. Click **Add attribute** for another row when several
+   values should go out together.
+3. Optionally enter one shared **Justification** and **Expires** — both apply to every grant in
+   this submit.
+4. Check the preview (`N principals × M values = K assignments`), then click **Assign**.
+
+Each principal × value is still created and audited as its own assignment (the same as approving
+one request). The summary shows how many were created or renewed, already held, or failed. Partial
+success is normal: successful grants stay in place even if some rows fail.
+
+The table under the form lists active assignments for paths you can decide. **Revoke** removes
+one grant the same way Attribute explorer does.
+
+Caps per submit: 50 principals, 20 attribute rows, 500 grants.
+
+---
+
 ## Attribute explorer
 
 Use **Attribute explorer** for reverse lookups, for example: "who already has
@@ -126,6 +156,8 @@ their values on one row. `*` means all rows.
   to your inbox.
 - **Check before approving.** Use Attribute explorer to see whether a teammate or group already
   covers the need, for example through a group the requester could join.
+- **Assign when you already know.** Prefer **Identity → Assignments** for planned grants to
+  several people; leave Approvals for inbound requests you need to review.
 - **Clean up.** Review your paths periodically and revoke access for people who have moved on.
 
 ---
@@ -139,3 +171,9 @@ went to app admins because no approver matched. Ask an app admin to check the ap
 for the next grants sync. Group membership is already in place.
 
 **I cannot change who approves a category.** That is admin configuration. Ask an app admin.
+
+**I do not see the Assignments tab.** You must be listed (or in a listed group) as an approver for
+at least one path. Ask an app admin to check **Identity → Approvers**.
+
+**Assign failed for one value but others succeeded.** Out-of-scope or invalid values are listed in
+the result summary; in-scope grants are kept. Fix the failed rows and submit again.

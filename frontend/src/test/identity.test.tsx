@@ -1,6 +1,6 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { fakeServices, renderApp, testUser } from "./renderApp";
 
 describe("Identity attributes", () => {
@@ -12,6 +12,7 @@ describe("Identity attributes", () => {
     expect(await screen.findByText("finance.budget")).toBeInTheDocument();
 
     await user.click(screen.getByRole("tab", { name: "Assignments" }));
+    expect(await screen.findByRole("heading", { name: "Assign attributes" })).toBeInTheDocument();
     expect(await screen.findByRole("columnheader", { name: "Expires" })).toBeInTheDocument();
     expect(screen.getByText(new Date("2026-12-31T23:59:00Z").toLocaleString())).toBeInTheDocument();
 
@@ -19,6 +20,51 @@ describe("Identity attributes", () => {
     const table = await screen.findByRole("table", { name: "Attribute definitions" });
     expect(within(table).getByText("dga_domain", { selector: "code" })).toBeInTheDocument();
     expect(within(table).getByText("Business domain")).toBeInTheDocument();
+  });
+
+  it("shows Assignments to path approvers without admin tabs", async () => {
+    renderApp(
+      "/identity",
+      fakeServices({
+        user: { ...testUser, isAdmin: false, isApprover: true, groups: ["finance-owners"] },
+      }),
+    );
+    expect(await screen.findByRole("heading", { name: "Identity attributes" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Assignments" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Definitions" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Approvers" })).not.toBeInTheDocument();
+  });
+
+  it("submits a bulk assign and shows the result summary", async () => {
+    const user = userEvent.setup();
+    const services = fakeServices();
+    const bulkAssign = vi.spyOn(services.identityAttributes, "bulkAssign");
+    renderApp("/identity?tab=assignments", services);
+
+    const form = await screen.findByRole("heading", { name: "Assign attributes" });
+    const card = form.closest("section") ?? form.parentElement!;
+    const picker = within(card as HTMLElement).getByRole("combobox", { name: "Add principal" });
+    await user.type(picker, "an");
+    const matches = await screen.findByRole("listbox", { name: "Matching principals" });
+    await user.click(within(matches).getByRole("button", { name: /Ana Lopez/ }));
+    expect(within(card as HTMLElement).getByText("ana.lopez@example.com")).toBeInTheDocument();
+
+    await user.selectOptions(within(card as HTMLElement).getByLabelText("Attribute"), "sensitivity");
+    await user.selectOptions(
+      within(card as HTMLElement).getByLabelText("Value"),
+      "finance.budget.PII.Name",
+    );
+    await user.type(within(card as HTMLElement).getByLabelText("Justification"), "Close support");
+    expect(screen.getByText("1 principal × 1 value = 1 assignment")).toBeInTheDocument();
+    await user.click(within(card as HTMLElement).getByRole("button", { name: "Assign" }));
+
+    expect(bulkAssign).toHaveBeenCalledWith({
+      principals: [{ principalName: "ana.lopez@example.com", principalType: "USER" }],
+      attributes: [{ attributeKey: "sensitivity", attributeValue: "finance.budget.PII.Name" }],
+      justification: "Close support",
+      expiresAt: null,
+    });
+    expect(await screen.findByText(/1 created or renewed, 0 already held/)).toBeInTheDocument();
   });
 
   it("blocks a second sensitivity definition and allows data-access create", async () => {

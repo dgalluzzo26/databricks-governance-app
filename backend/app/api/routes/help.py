@@ -53,7 +53,7 @@ _DOCS: tuple[HelpDoc, ...] = (
     HelpDoc(
         slug="approver",
         title="Approver guide",
-        description="Approvals inbox, attribute explorer, and what category approvers decide.",
+        description="Approvals inbox, Assignments, attribute explorer, and what category approvers decide.",
         source_path="docs/approver-guide.md",
         audiences=[HelpAudience.APPROVER],
     ),

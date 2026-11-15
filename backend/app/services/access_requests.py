@@ -39,6 +39,8 @@ from backend.app.models.identity_attribute import (
     AssignAttributeRequest,
     AttributeAssignmentFilter,
     AttributeSource,
+    GrantableAttribute,
+    GrantableAttributeList,
     ValueSource,
 )
 from backend.app.models.principal import PrincipalKind
@@ -193,6 +195,50 @@ class AccessRequestService:
             ):
                 return True
         return False
+
+    def grantable_attributes(self, actor: CurrentUser) -> GrantableAttributeList:
+        """Attribute keys (and category paths) the actor may grant from Assignments.
+
+        Admins get every definition key with an empty category list (all values allowed).
+        Approvers get keys where they are a designated USER/GROUP approver; ``categories``
+        lists the paths they cover (empty for dimension keys, where the key is the scope).
+
+        Args:
+            actor: Signed-in admin or path approver.
+
+        Returns:
+            Grantable keys sorted by key.
+        """
+        definitions = {
+            item.key.lower(): item.key for item in self._identity.list_definitions().definitions
+        }
+        if actor.is_admin:
+            items = [GrantableAttribute(key=key, categories=[]) for key in sorted(definitions.values())]
+            return GrantableAttributeList(attributes=items, total=len(items))
+
+        actor_groups = {group.lower() for group in actor.groups}
+        by_key: dict[str, set[str]] = {}
+        for approver in self._storage.category_approvers.list_approvers():
+            matches_user = (
+                approver.principal_type == PrincipalKind.USER
+                and approver.principal_name.lower() == actor.user_name.lower()
+            )
+            matches_group = (
+                approver.principal_type == PrincipalKind.GROUP
+                and approver.principal_name.lower() in actor_groups
+            )
+            if not (matches_user or matches_group):
+                continue
+            key = approver.attribute_key.strip()
+            if key.lower() not in definitions:
+                continue
+            by_key.setdefault(definitions[key.lower()], set()).add(approver.category_path)
+
+        items = [
+            GrantableAttribute(key=key, categories=sorted(paths, key=str.lower))
+            for key, paths in sorted(by_key.items(), key=lambda item: item[0].lower())
+        ]
+        return GrantableAttributeList(attributes=items, total=len(items))
 
     def upsert_approver(
         self, request: UpsertCategoryApproverRequest, actor: CurrentUser
