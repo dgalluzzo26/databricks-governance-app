@@ -13,12 +13,18 @@
 .collapsed {
   width: var(--sidenav-collapsed-width);
   align-items: center;
+  /* Let the right-side item tooltips escape the narrow rail. */
+  overflow: visible;
 }
 
 .sections {
   flex: 1;
   overflow-y: auto;
   width: 100%;
+}
+
+.collapsed .sections {
+  overflow: visible;
 }
 
 .section + .section {
