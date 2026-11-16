@@ -38,6 +38,7 @@ from backend.app.models.identity_attribute import (
 from backend.app.models.principal import PrincipalKind
 from backend.app.models.user import CurrentUser
 from backend.app.repositories.base import StorageProvider
+from backend.app.services.data_access_planner import is_managed_group
 from backend.app.services.governed_tags import GovernedTagService
 from backend.app.services.identity_uc_sync import IdentityUcSync
 from backend.app.services.value_seed import run_seed_sql
@@ -46,6 +47,7 @@ logger = logging.getLogger(__name__)
 
 _DATA_ACCESS_SETTINGS_KEY = "data_access"
 _DEFAULT_ACCESS_TAG_KEY = "data_access_control"
+_DEFAULT_GROUP_PREFIX = "dac_"
 
 ASSIGNMENT_ASSIGNED = "assigned"
 ASSIGNMENT_REVOKED = "revoked"
@@ -152,6 +154,30 @@ class IdentityAttributeService:
             return DataAccessSettings.model_validate(raw).access_tag_key.lower()
         except Exception:  # noqa: BLE001
             return _DEFAULT_ACCESS_TAG_KEY
+
+    def managed_group_prefix(self) -> str:
+        """Return the Data Access managed-group prefix (default ``dac_``)."""
+        raw = self._storage.settings.get_all().get(_DATA_ACCESS_SETTINGS_KEY)
+        if not raw:
+            return _DEFAULT_GROUP_PREFIX
+        try:
+            return DataAccessSettings.model_validate(raw).group_prefix or _DEFAULT_GROUP_PREFIX
+        except Exception:  # noqa: BLE001
+            return _DEFAULT_GROUP_PREFIX
+
+    def _reject_managed_group_principal(
+        self, principal_name: str, principal_type: PrincipalKind
+    ) -> None:
+        """Block assigning attributes directly to Data Access sync groups."""
+        if principal_type != PrincipalKind.GROUP:
+            return
+        prefix = self.managed_group_prefix()
+        if is_managed_group(principal_name, prefix):
+            raise InvalidRequestError(
+                f"'{principal_name}' is a managed Data Access group ({prefix}*). "
+                "Assign attributes to users or real groups instead; membership in "
+                f"{prefix}* groups is synced automatically."
+            )
 
     def find_sensitivity_definition(self) -> AttributeDefinition | None:
         """Return the sensitivity definition when configured, else None."""
@@ -464,6 +490,7 @@ class IdentityAttributeService:
                 governed-tag definition is not linked to any tag.
             NotFoundError: If an existing assignment disappears while updating its expiry.
         """
+        self._reject_managed_group_principal(request.principal_name, request.principal_type)
         definition = self._storage.identity_attributes.get_definition(request.attribute_key)
         if definition is None:
             raise InvalidRequestError(

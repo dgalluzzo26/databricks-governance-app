@@ -125,6 +125,38 @@ def normalize_privilege(privilege: str) -> str:
     return " ".join(privilege.strip().upper().replace("_", " ").split())
 
 
+def managed_group_prefix(prefix: str) -> str:
+    """Normalize a Data Access ``group_prefix`` so comparisons use a trailing underscore.
+
+    Args:
+        prefix: Raw settings value (``dac_`` or ``dac``).
+
+    Returns:
+        Lowercased prefix that always ends with ``_``.
+    """
+    head = (prefix or "").strip()
+    if not head:
+        return ""
+    if not head.endswith("_"):
+        head = f"{head}_"
+    return head.lower()
+
+
+def is_managed_group(name: str, prefix: str) -> bool:
+    """Return True when ``name`` is an app-managed Data Access group (``dac_*``).
+
+    These groups are sync machinery: membership and grants are derived from Identity
+    assignments. They must not appear in principal pickers or receive attributes directly.
+
+    Args:
+        name: Group display name.
+        prefix: Data Access ``group_prefix`` setting.
+    """
+    needle = (name or "").strip().lower()
+    head = managed_group_prefix(prefix)
+    return bool(needle and head and needle.startswith(head))
+
+
 def group_name(prefix: str, value: str) -> str | None:
     """Build a managed group name from an access-tag value.
 

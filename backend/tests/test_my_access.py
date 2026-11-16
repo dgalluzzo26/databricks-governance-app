@@ -27,6 +27,31 @@ class _FakeExplorerResources:
         return self.tables
 
 
+def test_my_access_hides_managed_data_access_groups(client: TestClient, container) -> None:
+    """dac_* membership is sync machinery — omit from the My groups list."""
+    from backend.tests.conftest import FakeWorkspaceFactory
+
+    fake = FakeWorkspaceFactory(
+        {
+            "admin@example.com": ["admins", "users", "dac_finance", "dac_public"],
+            "analyst@example.com": ["users"],
+        },
+        admin_configured=True,
+    )
+    container.workspace = fake
+    container.identity._factory = fake
+    container.request_context._factory = fake
+
+    body = client.get("/api/identity/my-access", headers=headers_for("admin@example.com"))
+    assert body.status_code == 200
+    names = {g["name"] for g in body.json()["groups"]}
+    assert "admins" in names
+    assert "users" in names
+    assert "dac_finance" not in names
+    assert "dac_public" not in names
+    assert body.json()["groupCount"] == len(names)
+
+
 def test_my_access_snapshot_includes_groups_and_inherited(client: TestClient, container) -> None:
     identity = _service(container)
     actor = _admin()

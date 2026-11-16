@@ -147,6 +147,25 @@ def test_rejects_unknown_tag_or_disallowed_values(container) -> None:  # noqa: A
         )
 
 
+def test_rejects_assign_to_managed_data_access_group(container) -> None:  # noqa: ANN001
+    service = _service(container)
+    actor = _admin()
+    service.upsert_definition(
+        UpsertAttributeDefinitionRequest(key="domain", governed_tag_keys=["dga_domain"]),
+        actor,  # type: ignore[arg-type]
+    )
+    with pytest.raises(InvalidRequestError, match="managed Data Access group"):
+        service.assign(
+            AssignAttributeRequest(
+                principal_name="dac_finance",
+                principal_type=PrincipalKind.GROUP,
+                attribute_key="domain",
+                attribute_value="finance",
+            ),
+            actor,  # type: ignore[arg-type]
+        )
+
+
 def test_sensitivity_composes_category_and_leaf(container) -> None:  # noqa: ANN001
     service = _service(container)
     actor = _admin()

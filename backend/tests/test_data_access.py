@@ -56,6 +56,18 @@ def test_group_name_slugifies_hierarchy() -> None:
     assert group_name("dac_", "finance.budget") == "dac_finance_budget"
 
 
+def test_is_managed_group_uses_prefix() -> None:
+    from backend.app.services.data_access_planner import is_managed_group, managed_group_prefix
+
+    assert managed_group_prefix("dac") == "dac_"
+    assert managed_group_prefix("dac_") == "dac_"
+    assert is_managed_group("dac_finance", "dac_")
+    assert is_managed_group("DAC_public", "dac")
+    assert not is_managed_group("finance", "dac_")
+    assert not is_managed_group("dacfinance", "dac_")
+    assert not is_managed_group("admins", "dac_")
+
+
 def test_plan_grants_select_only_on_tables() -> None:
     tags = [
         *_reviewed("schema", "sandbox", "public", None, "public"),

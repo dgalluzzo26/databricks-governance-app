@@ -46,6 +46,7 @@ from backend.app.models.identity_attribute import (
 from backend.app.models.principal import PrincipalKind
 from backend.app.models.user import CurrentUser
 from backend.app.repositories.base import StorageProvider
+from backend.app.services.data_access_planner import is_managed_group
 from backend.app.services.identity_attributes import IdentityAttributeService
 
 
@@ -264,6 +265,14 @@ class AccessRequestService:
         """
         if request.principal_type not in {PrincipalKind.USER, PrincipalKind.GROUP}:
             raise InvalidRequestError("Approvers must be USER or GROUP principals")
+        if request.principal_type == PrincipalKind.GROUP and is_managed_group(
+            request.principal_name, self._identity.managed_group_prefix()
+        ):
+            prefix = self._identity.managed_group_prefix()
+            raise InvalidRequestError(
+                f"'{request.principal_name}' is a managed Data Access group ({prefix}*). "
+                "Pick a real user or group as the approver."
+            )
         attribute_key = (request.attribute_key or SENSITIVITY_ATTRIBUTE_KEY).strip().lower()
         data_access = self._identity.find_data_access_definition()
         data_access_key = data_access.key.lower() if data_access is not None else None

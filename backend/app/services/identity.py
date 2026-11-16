@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from databricks.sdk.errors import DatabricksError
@@ -21,6 +22,7 @@ from backend.app.models.directory import DirectoryPrincipal, DirectoryPrincipalL
 from backend.app.models.principal import PrincipalKind
 from backend.app.models.user import CurrentUser
 from backend.app.services.account_groups import AccountGroupResolver
+from backend.app.services.data_access_planner import is_managed_group
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +59,8 @@ class IdentityService:
         admin_group: Workspace group whose members are app admins.
         account_groups: Resolves account groups reached by nesting. When None, only the
             workspace groups from /Me are used.
+        managed_group_prefix: Optional callback returning the Data Access ``group_prefix``
+            so principal search can hide managed ``dac_*`` sync groups.
     """
 
     def __init__(
@@ -65,11 +69,13 @@ class IdentityService:
         cache: TtlCache,
         admin_group: str,
         account_groups: AccountGroupResolver | None = None,
+        managed_group_prefix: Callable[[], str] | None = None,
     ) -> None:
         self._factory = factory
         self._cache = cache
         self._admin_group = admin_group
         self._account_groups = account_groups
+        self._managed_group_prefix = managed_group_prefix
 
     def search_principals(
         self,
@@ -162,19 +168,36 @@ class IdentityService:
     def _search_groups(
         self, client: object, escaped: str, limit: int
     ) -> tuple[list[DirectoryPrincipal], bool]:
-        """Return up to ``limit`` groups matching the escaped SCIM contains filter."""
+        """Return up to ``limit`` groups matching the escaped SCIM contains filter.
+
+        Managed Data Access groups (``dac_*``) are omitted so they cannot be picked for
+        attribute assignment or approver forms.
+        """
+        prefix = ""
+        if self._managed_group_prefix is not None:
+            try:
+                prefix = self._managed_group_prefix() or ""
+            except Exception:  # noqa: BLE001 - settings read must not break search
+                logger.exception("Managed group prefix lookup failed; showing all groups")
+                prefix = ""
+        # Over-fetch when filtering so dac_* hits do not starve the result page.
+        fetch = min(_SEARCH_LIMIT_MAX, limit + 1 + (10 if prefix else 0))
         listed = client.groups.list(  # type: ignore[attr-defined]
             filter=f'displayName co "{escaped}"',
             attributes="id,displayName",
-            count=limit + 1,
+            count=fetch,
         )
         items: list[DirectoryPrincipal] = []
+        seen_extra = False
         for group in listed:
-            if len(items) >= limit:
-                return items, True
             name = (getattr(group, "display_name", None) or "").strip()
             if not name:
                 continue
+            if prefix and is_managed_group(name, prefix):
+                continue
+            if len(items) >= limit:
+                seen_extra = True
+                break
             items.append(
                 DirectoryPrincipal(
                     name=name,
@@ -183,7 +206,7 @@ class IdentityService:
                     email=None,
                 )
             )
-        return items, False
+        return items, seen_extra
 
     def current_user(self, ctx: RequestContext) -> CurrentUser:
         """Resolve the caller to a ``CurrentUser``, using the cache when possible.

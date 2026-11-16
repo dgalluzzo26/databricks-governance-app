@@ -176,6 +176,7 @@ class ServiceContainer:
                 identity_cache,
                 config.admin_group,
                 account_groups=AccountGroupResolver(workspace, identity_cache),
+                managed_group_prefix=lambda: data_access._settings().group_prefix,  # noqa: SLF001
             ),
             app_info=AppInfoService(config, workspace, storage),
             app_settings=app_settings,

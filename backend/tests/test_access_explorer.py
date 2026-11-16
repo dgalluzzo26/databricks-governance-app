@@ -629,6 +629,27 @@ def test_directory_principal_search(client: TestClient) -> None:
     assert forbidden.status_code == 403
 
 
+def test_directory_principal_search_hides_managed_groups(client: TestClient, container) -> None:
+    from types import SimpleNamespace
+
+    groups = [
+        SimpleNamespace(id="1", display_name="data-stewards"),
+        SimpleNamespace(id="2", display_name="dac_finance"),
+        SimpleNamespace(id="3", display_name="dac_public"),
+        SimpleNamespace(id="4", display_name="finance-ops"),
+    ]
+    container.workspace._client.groups = SimpleNamespace(list=lambda **_kwargs: iter(groups))
+    body = client.get(
+        "/api/directory/principals",
+        params={"q": "da", "kind": "GROUP"},
+        headers=headers_for("admin@example.com"),
+    ).json()
+    names = {p["name"] for p in body["principals"]}
+    assert "data-stewards" in names
+    assert "dac_finance" not in names
+    assert "dac_public" not in names
+
+
 class _RestTables:
     def __init__(self, info: Any) -> None:
         self.info = info

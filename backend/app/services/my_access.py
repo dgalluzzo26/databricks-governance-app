@@ -17,6 +17,7 @@ from backend.app.models.principal import PrincipalKind
 from backend.app.models.user import CurrentUser
 from backend.app.services.attribute_explorer import AttributeExplorerService
 from backend.app.services.data_access import DataAccessService
+from backend.app.services.data_access_planner import is_managed_group
 from backend.app.services.identity_attributes import IdentityAttributeService
 
 
@@ -109,9 +110,12 @@ class MyAccessService:
                 row.attribute_value.lower(),
             )
         )
+        # Hide Data Access sync groups (dac_*): membership is derived, not assignable.
+        prefix = settings.group_prefix
         groups = [
             MyAccessGroup(name=name, attribute_count=group_counts.get(name, 0))
             for name in user.attribute_groups
+            if not is_managed_group(name, prefix)
         ]
         return MyAccessSnapshot(
             groups=groups,
