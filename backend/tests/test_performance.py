@@ -62,6 +62,17 @@ def test_activity_for_known_route_uses_catalog() -> None:
     assert activity.expected_ms == 5000
 
 
+def test_mask_rule_writes_expect_warehouse_regenerate_budget() -> None:
+    """Save/delete/seed/rotate regenerate apply_mask_rule on the warehouse (~45s+)."""
+    for method, route in (
+        ("PUT", "/api/mask-rules"),
+        ("DELETE", "/api/mask-rules/{rule_key}"),
+        ("POST", "/api/mask-rules/seed"),
+        ("POST", "/api/mask-rules/salt/rotate"),
+    ):
+        assert activity_for(method, route).expected_ms == 60000
+
+
 def test_activity_for_unknown_route_gets_generic_name() -> None:
     activity = activity_for("GET", "/api/not-in-catalog")
     assert activity.name == "GET /api/not-in-catalog"

@@ -173,6 +173,26 @@ LLM draft uses Foundation Model endpoint `MASK_HANDLER_LLM_ENDPOINT`.
 Governed tag values for `mask_rule` are ensured via `GovernedTagService.ensure_values` so
 admins can attach the names as column tags.
 
+### Query-time cost of masked columns
+
+On a 100k-row bench table cloned from `abac_type_test` (server-side
+`CREATE TABLE AS SELECT *`, median of 3 runs after one warmup on the app warehouse):
+
+| Masked columns | Median CTAS | Delta vs 0 |
+| --- | ---: | ---: |
+| 0 | ~1.9 s | — |
+| 5 | ~3.9 s | ~+2.0 s |
+| 10 | ~5.9 s | ~+4.0 s |
+| 15 | ~7.0 s | ~+5.1 s |
+| 23 (all) | ~13.6 s | ~+11.7 s |
+
+Roughly **0.3–0.5 s per additional masked column** on this warehouse and row count.
+Presentation handlers (`email`, `phone`, `joinable`, `keep_last_4`) and geo policies add more
+than simple `non-string` nulling. Saving a mask **rule** is a different cost: it regenerates
+`apply_mask_rule` on the warehouse (see Performance expected time for Save mask rule).
+
+Reproduce with `scripts/mask_column_perf.py` (results: `scripts/mask_column_perf_results.json`).
+
 ### Decision flow: one column value at query time
 
 ```mermaid

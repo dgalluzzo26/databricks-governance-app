@@ -1,0 +1,928 @@
+{
+  "source": "dgalluzzo_sandbox_7474655957102538.default.abac_type_test",
+  "bench": "dgalluzzo_sandbox_7474655957102538.default.abac_type_test_mask_bench",
+  "rows": 100000,
+  "warmups": 1,
+  "runs": 3,
+  "warehouse_id": "21dd266e614f0a03",
+  "column_order": [
+    {
+      "name": "id",
+      "mask_rule": "non-string",
+      "category": "finance.budget",
+      "sensitivity": "PII.Name",
+      "data_type": "int"
+    },
+    {
+      "name": "s_name",
+      "mask_rule": "mask",
+      "category": "finance.budget",
+      "sensitivity": "PII.Name",
+      "data_type": "string"
+    },
+    {
+      "name": "s_open",
+      "mask_rule": "joinable",
+      "category": "finance.budget",
+      "sensitivity": "PII.Name",
+      "data_type": "string"
+    },
+    {
+      "name": "i_val",
+      "mask_rule": "non-string",
+      "category": "finance.budget",
+      "sensitivity": "PII.Name",
+      "data_type": "int"
+    },
+    {
+      "name": "big_val",
+      "mask_rule": "non-string",
+      "category": "public",
+      "sensitivity": "PII.Name",
+      "data_type": "bigint"
+    },
+    {
+      "name": "dec_val",
+      "mask_rule": "non-string",
+      "category": "public",
+      "sensitivity": "PII.Name",
+      "data_type": "decimal"
+    },
+    {
+      "name": "dbl_val",
+      "mask_rule": "non-string",
+      "category": "public",
+      "sensitivity": "PII.Name",
+      "data_type": "double"
+    },
+    {
+      "name": "flt_val",
+      "mask_rule": "non-string",
+      "category": "public",
+      "sensitivity": "PII.Name",
+      "data_type": "float"
+    },
+    {
+      "name": "bool_val",
+      "mask_rule": "non-string",
+      "category": "public",
+      "sensitivity": "PII.Name",
+      "data_type": "boolean"
+    },
+    {
+      "name": "dt_val",
+      "mask_rule": "non-string",
+      "category": "public",
+      "sensitivity": "PII.Name",
+      "data_type": "date"
+    },
+    {
+      "name": "ts_val",
+      "mask_rule": "non-string",
+      "category": "public",
+      "sensitivity": "PII.Name",
+      "data_type": "timestamp"
+    },
+    {
+      "name": "ts_ntz",
+      "mask_rule": "non-string",
+      "category": "public",
+      "sensitivity": "PII.Name",
+      "data_type": "timestamp_ntz"
+    },
+    {
+      "name": "bin_val",
+      "mask_rule": "non-string",
+      "category": "public",
+      "sensitivity": "PII.Name",
+      "data_type": "binary"
+    },
+    {
+      "name": "arr_val",
+      "mask_rule": "non-string",
+      "category": "public",
+      "sensitivity": "PII.Name",
+      "data_type": "array"
+    },
+    {
+      "name": "st_val",
+      "mask_rule": "non-string",
+      "category": "public",
+      "sensitivity": "PII.Name",
+      "data_type": "struct"
+    },
+    {
+      "name": "map_val",
+      "mask_rule": "non-string",
+      "category": "public",
+      "sensitivity": "PII.Name",
+      "data_type": "map"
+    },
+    {
+      "name": "geom_val",
+      "mask_rule": "non-string",
+      "category": "public",
+      "sensitivity": "PII.Name",
+      "data_type": "geometry"
+    },
+    {
+      "name": "geog_val",
+      "mask_rule": "non-string",
+      "category": "public",
+      "sensitivity": "PII.Name",
+      "data_type": "geography"
+    },
+    {
+      "name": "email",
+      "mask_rule": "email",
+      "category": "finance.budget",
+      "sensitivity": "PII.Name",
+      "data_type": "string"
+    },
+    {
+      "name": "phone",
+      "mask_rule": "phone",
+      "category": "finance.budget",
+      "sensitivity": "PII.Name",
+      "data_type": "string"
+    },
+    {
+      "name": "pk",
+      "mask_rule": "joinable",
+      "category": "finance.budget",
+      "sensitivity": "PII.Name",
+      "data_type": "string"
+    },
+    {
+      "name": "full_redact",
+      "mask_rule": "full",
+      "category": "finance.budget",
+      "sensitivity": "PII.Name",
+      "data_type": "string"
+    },
+    {
+      "name": "keep_last_4",
+      "mask_rule": "keep_last_4",
+      "category": "finance.budget",
+      "sensitivity": "PII.Name",
+      "data_type": "string"
+    }
+  ],
+  "results": [
+    {
+      "masked_columns": 0,
+      "columns": [],
+      "client_ms": [
+        1772.037332993932,
+        1900.1261250232346,
+        2099.4824999943376
+      ],
+      "median_client_ms": 1900.1261250232346,
+      "mean_client_ms": 1923.8819860038348,
+      "min_client_ms": 1772.037332993932,
+      "max_client_ms": 2099.4824999943376,
+      "statement_ids": [
+        "01f1e1e0-33f5-1324-9fa7-ad4dd43244d8",
+        "01f1e1e0-3511-1eb9-9ca6-eeaee62388f1",
+        "01f1e1e0-3635-1e24-8647-7223d7226a2f"
+      ],
+      "row_count": 100000
+    },
+    {
+      "masked_columns": 1,
+      "columns": [
+        "id"
+      ],
+      "client_ms": [
+        2594.373916974291,
+        2631.9974579964764,
+        2471.6233749932144
+      ],
+      "median_client_ms": 2594.373916974291,
+      "mean_client_ms": 2565.998249987994,
+      "min_client_ms": 2471.6233749932144,
+      "max_client_ms": 2631.9974579964764,
+      "statement_ids": [
+        "01f1e1e0-3c37-19c9-b2a3-babbbdbbc8e6",
+        "01f1e1e0-3dc1-1604-a359-dd22c74bcf6a",
+        "01f1e1e0-3f4f-180b-90e4-1cab9085f69e"
+      ],
+      "row_count": 100000
+    },
+    {
+      "masked_columns": 2,
+      "columns": [
+        "id",
+        "s_name"
+      ],
+      "client_ms": [
+        2856.5135830140207,
+        2832.811959000537,
+        2849.2662080097944
+      ],
+      "median_client_ms": 2849.2662080097944,
+      "mean_client_ms": 2846.1972500081174,
+      "min_client_ms": 2832.811959000537,
+      "max_client_ms": 2856.5135830140207,
+      "statement_ids": [
+        "01f1e1e0-4459-1bf0-affa-ee3ba60a1aa3",
+        "01f1e1e0-460c-11c3-bc7a-02178ee958f4",
+        "01f1e1e0-47bb-11e9-b6d5-3a2ef66f6e98"
+      ],
+      "row_count": 100000
+    },
+    {
+      "masked_columns": 3,
+      "columns": [
+        "id",
+        "s_name",
+        "s_open"
+      ],
+      "client_ms": [
+        3703.3607920166105,
+        3651.134208019357,
+        3656.261458003428
+      ],
+      "median_client_ms": 3656.261458003428,
+      "mean_client_ms": 3670.2521526797987,
+      "min_client_ms": 3651.134208019357,
+      "max_client_ms": 3703.3607920166105,
+      "statement_ids": [
+        "01f1e1e0-4d64-1f3d-a5ae-42cd2f4588c9",
+        "01f1e1e0-4fa2-16be-876b-561b09ce3226",
+        "01f1e1e0-51c5-1f91-a6bd-cafe88d9dc0e"
+      ],
+      "row_count": 100000
+    },
+    {
+      "masked_columns": 4,
+      "columns": [
+        "id",
+        "s_name",
+        "s_open",
+        "i_val"
+      ],
+      "client_ms": [
+        4211.365458992077,
+        4040.564541995991,
+        3928.1986249843612
+      ],
+      "median_client_ms": 4040.564541995991,
+      "mean_client_ms": 4060.042875324143,
+      "min_client_ms": 3928.1986249843612,
+      "max_client_ms": 4211.365458992077,
+      "statement_ids": [
+        "01f1e1e0-586a-1975-9687-4883aed4efec",
+        "01f1e1e0-5aef-15f3-84e5-13820b780047",
+        "01f1e1e0-5d55-1079-969e-26cba6a4730b"
+      ],
+      "row_count": 100000
+    },
+    {
+      "masked_columns": 5,
+      "columns": [
+        "id",
+        "s_name",
+        "s_open",
+        "i_val",
+        "big_val"
+      ],
+      "client_ms": [
+        3785.649375000503,
+        3940.1112079794984,
+        4053.919500001939
+      ],
+      "median_client_ms": 3940.1112079794984,
+      "mean_client_ms": 3926.560027660647,
+      "min_client_ms": 3785.649375000503,
+      "max_client_ms": 4053.919500001939,
+      "statement_ids": [
+        "01f1e1e0-63e2-1d57-8f3f-53d0497d7ddc",
+        "01f1e1e0-6626-1b5e-97dc-de2baf844504",
+        "01f1e1e0-687d-19b4-94e1-5e420ee94f18"
+      ],
+      "row_count": 100000
+    },
+    {
+      "masked_columns": 6,
+      "columns": [
+        "id",
+        "s_name",
+        "s_open",
+        "i_val",
+        "big_val",
+        "dec_val"
+      ],
+      "client_ms": [
+        4410.787041997537,
+        4030.2955000079237,
+        3996.1865420045797
+      ],
+      "median_client_ms": 4030.2955000079237,
+      "mean_client_ms": 4145.75636133668,
+      "min_client_ms": 3996.1865420045797,
+      "max_client_ms": 4410.787041997537,
+      "statement_ids": [
+        "01f1e1e0-6f91-18e1-a670-b781643e79ab",
+        "01f1e1e0-7231-1b25-a95b-6fa528b12eb8",
+        "01f1e1e0-7497-1d49-8682-b0f6b6968b01"
+      ],
+      "row_count": 100000
+    },
+    {
+      "masked_columns": 7,
+      "columns": [
+        "id",
+        "s_name",
+        "s_open",
+        "i_val",
+        "big_val",
+        "dec_val",
+        "dbl_val"
+      ],
+      "client_ms": [
+        5261.3806249864865,
+        5249.3605419876985,
+        4959.320249996381
+      ],
+      "median_client_ms": 5249.3605419876985,
+      "mean_client_ms": 5156.687138990189,
+      "min_client_ms": 4959.320249996381,
+      "max_client_ms": 5261.3806249864865,
+      "statement_ids": [
+        "01f1e1e0-7be2-11b0-abcd-55f476cfcbbd",
+        "01f1e1e0-7f03-16b5-893a-520273cac856",
+        "01f1e1e0-8220-17e0-93d8-3aad9b4b75ab"
+      ],
+      "row_count": 100000
+    },
+    {
+      "masked_columns": 8,
+      "columns": [
+        "id",
+        "s_name",
+        "s_open",
+        "i_val",
+        "big_val",
+        "dec_val",
+        "dbl_val",
+        "flt_val"
+      ],
+      "client_ms": [
+        4600.743416987825,
+        4574.948291003238,
+        4669.028291013092
+      ],
+      "median_client_ms": 4600.743416987825,
+      "mean_client_ms": 4614.9066663347185,
+      "min_client_ms": 4574.948291003238,
+      "max_client_ms": 4669.028291013092,
+      "statement_ids": [
+        "01f1e1e0-8a8c-1fd5-926f-33f0ccf5c62e",
+        "01f1e1e0-8d4c-1180-a5df-969d6ae95131",
+        "01f1e1e0-9006-13a9-bace-4f16c79a9eb1"
+      ],
+      "row_count": 100000
+    },
+    {
+      "masked_columns": 9,
+      "columns": [
+        "id",
+        "s_name",
+        "s_open",
+        "i_val",
+        "big_val",
+        "dec_val",
+        "dbl_val",
+        "flt_val",
+        "bool_val"
+      ],
+      "client_ms": [
+        4870.298542024102,
+        6383.772583998507,
+        5234.157375001814
+      ],
+      "median_client_ms": 5234.157375001814,
+      "mean_client_ms": 5496.076167008141,
+      "min_client_ms": 4870.298542024102,
+      "max_client_ms": 6383.772583998507,
+      "statement_ids": [
+        "01f1e1e0-97aa-1dd2-b8fe-644ff412d020",
+        "01f1e1e0-9a92-1fb0-9319-88243bf10b7b",
+        "01f1e1e0-9e69-15f8-aaf0-dc15cff7dab2"
+      ],
+      "row_count": 100000
+    },
+    {
+      "masked_columns": 10,
+      "columns": [
+        "id",
+        "s_name",
+        "s_open",
+        "i_val",
+        "big_val",
+        "dec_val",
+        "dbl_val",
+        "flt_val",
+        "bool_val",
+        "dt_val"
+      ],
+      "client_ms": [
+        5125.708666979335,
+        5867.925875005312,
+        6305.721083015669
+      ],
+      "median_client_ms": 5867.925875005312,
+      "mean_client_ms": 5766.451875000105,
+      "min_client_ms": 5125.708666979335,
+      "max_client_ms": 6305.721083015669,
+      "statement_ids": [
+        "01f1e1e0-a6fe-1a63-8743-d0e33cccd669",
+        "01f1e1e0-aa0a-14ef-b4d2-e700312e5db5",
+        "01f1e1e0-ad8a-16e0-b9cb-a82a3b1437ec"
+      ],
+      "row_count": 100000
+    },
+    {
+      "masked_columns": 11,
+      "columns": [
+        "id",
+        "s_name",
+        "s_open",
+        "i_val",
+        "big_val",
+        "dec_val",
+        "dbl_val",
+        "flt_val",
+        "bool_val",
+        "dt_val",
+        "ts_val"
+      ],
+      "client_ms": [
+        6395.138249994488,
+        5654.427875007968,
+        5833.78529100446
+      ],
+      "median_client_ms": 5833.78529100446,
+      "mean_client_ms": 5961.117138668972,
+      "min_client_ms": 5654.427875007968,
+      "max_client_ms": 6395.138249994488,
+      "statement_ids": [
+        "01f1e1e0-b7bf-1d83-acba-60b8ca07c5a2",
+        "01f1e1e0-bb93-1f9f-bcb5-a4216561b187",
+        "01f1e1e0-beef-1a2a-ac3c-ebee80b7ef33"
+      ],
+      "row_count": 100000
+    },
+    {
+      "masked_columns": 12,
+      "columns": [
+        "id",
+        "s_name",
+        "s_open",
+        "i_val",
+        "big_val",
+        "dec_val",
+        "dbl_val",
+        "flt_val",
+        "bool_val",
+        "dt_val",
+        "ts_val",
+        "ts_ntz"
+      ],
+      "client_ms": [
+        6487.156707997201,
+        6852.457875007531,
+        7819.470832997467
+      ],
+      "median_client_ms": 6852.457875007531,
+      "mean_client_ms": 7053.028472000733,
+      "min_client_ms": 6487.156707997201,
+      "max_client_ms": 7819.470832997467,
+      "statement_ids": [
+        "01f1e1e0-c7f9-1f12-abea-629c2a48f4e7",
+        "01f1e1e0-cbe2-11b0-91fa-fbaaa0ed42e4",
+        "01f1e1e0-cff0-1f77-b486-c92934de2b5b"
+      ],
+      "row_count": 100000
+    },
+    {
+      "masked_columns": 13,
+      "columns": [
+        "id",
+        "s_name",
+        "s_open",
+        "i_val",
+        "big_val",
+        "dec_val",
+        "dbl_val",
+        "flt_val",
+        "bool_val",
+        "dt_val",
+        "ts_val",
+        "ts_ntz",
+        "bin_val"
+      ],
+      "client_ms": [
+        6966.837250016397,
+        6437.94579198584,
+        6018.432207987644
+      ],
+      "median_client_ms": 6437.94579198584,
+      "mean_client_ms": 6474.40508332996,
+      "min_client_ms": 6018.432207987644,
+      "max_client_ms": 6966.837250016397,
+      "statement_ids": [
+        "01f1e1e0-daaf-1914-a492-97c3400ef6b1",
+        "01f1e1e0-ded5-1e4b-9778-94ae2572ef97",
+        "01f1e1e0-e2ac-134b-a2d6-662dc9af0020"
+      ],
+      "row_count": 100000
+    },
+    {
+      "masked_columns": 14,
+      "columns": [
+        "id",
+        "s_name",
+        "s_open",
+        "i_val",
+        "big_val",
+        "dec_val",
+        "dbl_val",
+        "flt_val",
+        "bool_val",
+        "dt_val",
+        "ts_val",
+        "ts_ntz",
+        "bin_val",
+        "arr_val"
+      ],
+      "client_ms": [
+        7464.871875010431,
+        6880.73545799125,
+        6671.010707999812
+      ],
+      "median_client_ms": 6880.73545799125,
+      "mean_client_ms": 7005.539347000497,
+      "min_client_ms": 6671.010707999812,
+      "max_client_ms": 7464.871875010431,
+      "statement_ids": [
+        "01f1e1e0-ecab-1390-bf16-9572402a738a",
+        "01f1e1e0-f115-11af-a916-94cb33dcc6ed",
+        "01f1e1e0-f530-1ce8-9e80-e59cbf6c9a2b"
+      ],
+      "row_count": 100000
+    },
+    {
+      "masked_columns": 15,
+      "columns": [
+        "id",
+        "s_name",
+        "s_open",
+        "i_val",
+        "big_val",
+        "dec_val",
+        "dbl_val",
+        "flt_val",
+        "bool_val",
+        "dt_val",
+        "ts_val",
+        "ts_ntz",
+        "bin_val",
+        "arr_val",
+        "st_val"
+      ],
+      "client_ms": [
+        6960.400792013388,
+        6563.782084005652,
+        7200.678625027649
+      ],
+      "median_client_ms": 6960.400792013388,
+      "mean_client_ms": 6908.287167015563,
+      "min_client_ms": 6563.782084005652,
+      "max_client_ms": 7200.678625027649,
+      "statement_ids": [
+        "01f1e1e0-ff12-17ca-8075-b05502d419f4",
+        "01f1e1e1-0336-1948-aeed-efb475bcfc71",
+        "01f1e1e1-071f-1e2a-9eef-d581df62e41a"
+      ],
+      "row_count": 100000
+    },
+    {
+      "masked_columns": 16,
+      "columns": [
+        "id",
+        "s_name",
+        "s_open",
+        "i_val",
+        "big_val",
+        "dec_val",
+        "dbl_val",
+        "flt_val",
+        "bool_val",
+        "dt_val",
+        "ts_val",
+        "ts_ntz",
+        "bin_val",
+        "arr_val",
+        "st_val",
+        "map_val"
+      ],
+      "client_ms": [
+        6809.153625014005,
+        6488.929749990348,
+        6527.762959012762
+      ],
+      "median_client_ms": 6527.762959012762,
+      "mean_client_ms": 6608.615444672371,
+      "min_client_ms": 6488.929749990348,
+      "max_client_ms": 6809.153625014005,
+      "statement_ids": [
+        "01f1e1e1-1147-1629-a507-b2a36cde9427",
+        "01f1e1e1-1555-1759-8a07-1936a8571919",
+        "01f1e1e1-1937-10f6-a1b4-3b5b343a8709"
+      ],
+      "row_count": 100000
+    },
+    {
+      "masked_columns": 17,
+      "columns": [
+        "id",
+        "s_name",
+        "s_open",
+        "i_val",
+        "big_val",
+        "dec_val",
+        "dbl_val",
+        "flt_val",
+        "bool_val",
+        "dt_val",
+        "ts_val",
+        "ts_ntz",
+        "bin_val",
+        "arr_val",
+        "st_val",
+        "map_val",
+        "geom_val"
+      ],
+      "client_ms": [
+        8489.060583000537,
+        8414.124333008658,
+        8745.573708991287
+      ],
+      "median_client_ms": 8489.060583000537,
+      "mean_client_ms": 8549.586208333494,
+      "min_client_ms": 8414.124333008658,
+      "max_client_ms": 8745.573708991287,
+      "statement_ids": [
+        "01f1e1e1-24b0-1372-aa5d-a37c043477f3",
+        "01f1e1e1-29ba-1313-a8f1-cf9cd2398774",
+        "01f1e1e1-2ec0-1b0e-855a-b2ccf50d443a"
+      ],
+      "row_count": 100000
+    },
+    {
+      "masked_columns": 18,
+      "columns": [
+        "id",
+        "s_name",
+        "s_open",
+        "i_val",
+        "big_val",
+        "dec_val",
+        "dbl_val",
+        "flt_val",
+        "bool_val",
+        "dt_val",
+        "ts_val",
+        "ts_ntz",
+        "bin_val",
+        "arr_val",
+        "st_val",
+        "map_val",
+        "geom_val",
+        "geog_val"
+      ],
+      "client_ms": [
+        9853.285791003145,
+        8431.43404100556,
+        9036.16575000342
+      ],
+      "median_client_ms": 9036.16575000342,
+      "mean_client_ms": 9106.961860670708,
+      "min_client_ms": 8431.43404100556,
+      "max_client_ms": 9853.285791003145,
+      "statement_ids": [
+        "01f1e1e1-3b42-1564-a2ff-0b03d0827c9b",
+        "01f1e1e1-4122-1927-a9e6-fee856397ef9",
+        "01f1e1e1-4627-170b-b28a-fb0ea1568a40"
+      ],
+      "row_count": 100000
+    },
+    {
+      "masked_columns": 19,
+      "columns": [
+        "id",
+        "s_name",
+        "s_open",
+        "i_val",
+        "big_val",
+        "dec_val",
+        "dbl_val",
+        "flt_val",
+        "bool_val",
+        "dt_val",
+        "ts_val",
+        "ts_ntz",
+        "bin_val",
+        "arr_val",
+        "st_val",
+        "map_val",
+        "geom_val",
+        "geog_val",
+        "email"
+      ],
+      "client_ms": [
+        9513.2477080042,
+        9722.727374988608,
+        9589.371750014834
+      ],
+      "median_client_ms": 9589.371750014834,
+      "mean_client_ms": 9608.448944335882,
+      "min_client_ms": 9513.2477080042,
+      "max_client_ms": 9722.727374988608,
+      "statement_ids": [
+        "01f1e1e1-53a1-1b37-ab36-f52ddce6f34b",
+        "01f1e1e1-594d-161d-8919-b4729d92805e",
+        "01f1e1e1-5f1d-1baa-b26f-f1fd441e03cf"
+      ],
+      "row_count": 100000
+    },
+    {
+      "masked_columns": 20,
+      "columns": [
+        "id",
+        "s_name",
+        "s_open",
+        "i_val",
+        "big_val",
+        "dec_val",
+        "dbl_val",
+        "flt_val",
+        "bool_val",
+        "dt_val",
+        "ts_val",
+        "ts_ntz",
+        "bin_val",
+        "arr_val",
+        "st_val",
+        "map_val",
+        "geom_val",
+        "geog_val",
+        "email",
+        "phone"
+      ],
+      "client_ms": [
+        11327.297082985751,
+        11370.701832987834,
+        11398.95199998864
+      ],
+      "median_client_ms": 11370.701832987834,
+      "mean_client_ms": 11365.650305320742,
+      "min_client_ms": 11327.297082985751,
+      "max_client_ms": 11398.95199998864,
+      "statement_ids": [
+        "01f1e1e1-6d93-1b14-8419-eebe8c0c0eae",
+        "01f1e1e1-7453-1861-9833-60d8f969c6b4",
+        "01f1e1e1-7b21-19db-a7b3-eedfb18c205f"
+      ],
+      "row_count": 100000
+    },
+    {
+      "masked_columns": 21,
+      "columns": [
+        "id",
+        "s_name",
+        "s_open",
+        "i_val",
+        "big_val",
+        "dec_val",
+        "dbl_val",
+        "flt_val",
+        "bool_val",
+        "dt_val",
+        "ts_val",
+        "ts_ntz",
+        "bin_val",
+        "arr_val",
+        "st_val",
+        "map_val",
+        "geom_val",
+        "geog_val",
+        "email",
+        "phone",
+        "pk"
+      ],
+      "client_ms": [
+        11757.544417021563,
+        11526.581500016619,
+        11940.88545802515
+      ],
+      "median_client_ms": 11757.544417021563,
+      "mean_client_ms": 11741.670458354443,
+      "min_client_ms": 11526.581500016619,
+      "max_client_ms": 11940.88545802515,
+      "statement_ids": [
+        "01f1e1e1-8b0d-1e6f-b530-74481486eff6",
+        "01f1e1e1-920c-1b37-8f33-1a4f7bfa6104",
+        "01f1e1e1-98f4-1590-811a-09e93973904e"
+      ],
+      "row_count": 100000
+    },
+    {
+      "masked_columns": 22,
+      "columns": [
+        "id",
+        "s_name",
+        "s_open",
+        "i_val",
+        "big_val",
+        "dec_val",
+        "dbl_val",
+        "flt_val",
+        "bool_val",
+        "dt_val",
+        "ts_val",
+        "ts_ntz",
+        "bin_val",
+        "arr_val",
+        "st_val",
+        "map_val",
+        "geom_val",
+        "geog_val",
+        "email",
+        "phone",
+        "pk",
+        "full_redact"
+      ],
+      "client_ms": [
+        12102.126542013139,
+        12426.805958995828,
+        11813.186874991516
+      ],
+      "median_client_ms": 12102.126542013139,
+      "mean_client_ms": 12114.039792000161,
+      "min_client_ms": 11813.186874991516,
+      "max_client_ms": 12426.805958995828,
+      "statement_ids": [
+        "01f1e1e1-aa01-1445-825a-5f5c06eca85f",
+        "01f1e1e1-b135-1416-8dd1-088d204d5f94",
+        "01f1e1e1-b89d-1c3d-a3eb-c91833527578"
+      ],
+      "row_count": 100000
+    },
+    {
+      "masked_columns": 23,
+      "columns": [
+        "id",
+        "s_name",
+        "s_open",
+        "i_val",
+        "big_val",
+        "dec_val",
+        "dbl_val",
+        "flt_val",
+        "bool_val",
+        "dt_val",
+        "ts_val",
+        "ts_ntz",
+        "bin_val",
+        "arr_val",
+        "st_val",
+        "map_val",
+        "geom_val",
+        "geog_val",
+        "email",
+        "phone",
+        "pk",
+        "full_redact",
+        "keep_last_4"
+      ],
+      "client_ms": [
+        13584.891541977413,
+        13767.726707999827,
+        13555.356332974043
+      ],
+      "median_client_ms": 13584.891541977413,
+      "mean_client_ms": 13635.991527650427,
+      "min_client_ms": 13555.356332974043,
+      "max_client_ms": 13767.726707999827,
+      "statement_ids": [
+        "01f1e1e1-c9f6-19be-8631-9a7a37015ef7",
+        "01f1e1e1-d20e-1543-8e0b-a4bde52d3fdd",
+        "01f1e1e1-da41-11c3-95e2-2ec3fa327806"
+      ],
+      "row_count": 100000
+    }
+  ]
+}
