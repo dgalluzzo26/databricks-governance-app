@@ -122,7 +122,7 @@ in process memory.
 | Service | File | Databricks APIs |
 | --- | --- | --- |
 | `IdentityService` | `services/identity.py` | `current_user.me`, `users.list`, `groups.list` (admin group, directory search). `CurrentUser.attribute_groups` adds account groups reached by nesting (see `AccountGroupResolver`). |
-| `AccountGroupResolver` | `services/account_groups.py` | Account SCIM `Groups` (Account Admin SP, paged, cached with identity TTL): walks group-to-group membership upward so a `dac_finance` member also gets `dac_finance_budget` attributes |
+| `AccountGroupResolver` | `services/account_groups.py` | Account SCIM `Users/{id}?attributes=groups` (Account Admin SP, cached with identity TTL): returns nested account groups already expanded so a `dac_finance` member also gets `dac_finance_budget` attributes |
 | `IdentityAttributeService` | `services/identity_attributes.py` | Tag policies (governed values), SQL seed queries; UC mirror via `IdentityUcSync` |
 | `IdentityUcSync` | `services/identity_uc_sync.py` | Statement Execution: MERGE into `…app.identity_attributes` |
 | `AccessRequestService` | `services/access_requests.py` | None directly (storage + `IdentityAttributeService.assign`) |
@@ -192,7 +192,10 @@ through `quote_identifier` and literals through `string_literal`; never interpol
   per-table analyze metadata (2 minutes). Analyze reads the table, its columns, and its own tags
   through the Unity Catalog REST APIs, so only the column-tag lookup uses the warehouse. Sync
   runs always read live inventory. After a policy change on one instance, other instances can show
-  the old policy list until their next refresh.
+  the old policy list until their next refresh. Admins can set Data Access
+  ``disable_metadata_cache`` (demo / live-metadata mode) to bypass and clear the shared metadata
+  ``TtlCache`` so tag edits outside the app show up immediately; identity lookups keep their own
+  cache.
 - **Parallel lookups.** `core/concurrency.run_parallel` runs independent warehouse queries for one
   request at once (Access Explorer analyze, the catalog/schema/table tag reads) while keeping
   their time attributed to that request.

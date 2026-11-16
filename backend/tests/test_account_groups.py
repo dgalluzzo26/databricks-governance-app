@@ -1,4 +1,4 @@
-"""Nested account group resolution: parent membership inherits child groups."""
+"""Account group resolution via Account SCIM Users/{id} (nested groups expanded)."""
 
 from __future__ import annotations
 
@@ -6,80 +6,34 @@ from databricks.sdk.errors import DatabricksError
 
 from backend.app.clients.cache import TtlCache
 from backend.app.models.user import CurrentUser
-from backend.app.services.account_groups import (
-    AccountGroupResolver,
-    build_graph,
-    groups_for_user,
-)
+from backend.app.services.account_groups import AccountGroupResolver, group_names_from_user_resource
 
 USER_ID = "77269872132114"
-OTHER_USER_ID = "5551234"
 
 
-def _user(member_id: str) -> dict:
-    return {"$ref": f"Users/{member_id}", "value": member_id, "display": "someone"}
-
-
-def _group(group_id: str, name: str, members: list[dict]) -> dict:
-    return {"id": group_id, "displayName": name, "members": members}
-
-
-def _group_member(group_id: str, name: str) -> dict:
-    return {"$ref": f"Groups/{group_id}", "value": group_id, "display": name}
-
-
-def _fixture_resources() -> list[dict]:
-    """dac_finance (direct member David) is nested in budget; contracts sits in pii_name."""
-    return [
-        _group("g-finance", "dac_finance", [_user(USER_ID), _group_member("g-other", "grp_other")]),
-        _group("g-budget", "dac_finance_budget", [_group_member("g-finance", "dac_finance")]),
-        _group("g-contracts", "dac_finance_contracts", [_group_member("g-finance", "dac_finance")]),
-        _group(
-            "g-pii",
-            "dac_finance_contracts_pii_name",
-            [_group_member("g-contracts", "dac_finance_contracts")],
-        ),
-        _group("g-unrelated", "dac_public", [_user(OTHER_USER_ID)]),
-        _group("g-other", "grp_other", []),
-    ]
-
-
-def test_direct_member_inherits_every_child_group_transitively() -> None:
-    graph = build_graph(_fixture_resources())
-    assert groups_for_user(graph, USER_ID) == [
-        "dac_finance",
-        "dac_finance_budget",
-        "dac_finance_contracts",
-        "dac_finance_contracts_pii_name",
-    ]
-
-
-def test_membership_does_not_flow_down_to_parent_groups() -> None:
-    # Being in a child group must not grant the parent: nesting points parent -> child.
-    graph = build_graph(_fixture_resources())
-    assert groups_for_user(graph, OTHER_USER_ID) == ["dac_public"]
-
-
-def test_cycles_terminate() -> None:
-    resources = [
-        _group("a", "grp_a", [_user(USER_ID), _group_member("b", "grp_b")]),
-        _group("b", "grp_b", [_group_member("a", "grp_a")]),
-    ]
-    assert groups_for_user(build_graph(resources), USER_ID) == ["grp_a", "grp_b"]
-
-
-def test_unknown_user_has_no_account_groups() -> None:
-    assert groups_for_user(build_graph(_fixture_resources()), "nobody") == []
+def test_group_names_from_user_resource_dedupes_and_sorts() -> None:
+    names = group_names_from_user_resource(
+        {
+            "groups": [
+                {"display": "dac_finance_budget"},
+                {"display": "dac_finance"},
+                {"display": "dac_finance"},
+                {"display": "  "},
+                {},
+            ]
+        }
+    )
+    assert names == ["dac_finance", "dac_finance_budget"]
 
 
 class _FakeApiClient:
-    def __init__(self, pages: list[dict]) -> None:
-        self._pages = pages
-        self.calls: list[dict] = []
+    def __init__(self, responses: list[dict]) -> None:
+        self._responses = responses
+        self.calls: list[tuple[str, str, dict]] = []
 
     def do(self, method: str, path: str, query: dict) -> dict:
-        self.calls.append(query)
-        return self._pages[len(self.calls) - 1]
+        self.calls.append((method, path, query))
+        return self._responses[len(self.calls) - 1]
 
 
 class _FakeAdmin:
@@ -103,23 +57,32 @@ class _FakeFactory:
         return _FakeAdmin(self._api_client)
 
 
-def test_resolver_reads_all_pages_and_caches_the_graph() -> None:
-    resources = _fixture_resources()
-    pages = [
-        {"Resources": resources[:4], "totalResults": len(resources)},
-        {"Resources": resources[4:], "totalResults": len(resources)},
-    ]
-    client = _FakeApiClient(pages)
+def test_resolver_loads_user_groups_once_then_caches() -> None:
+    client = _FakeApiClient(
+        [
+            {
+                "id": USER_ID,
+                "groups": [
+                    {"display": "dac_finance"},
+                    {"display": "dac_finance_budget"},
+                ],
+            }
+        ]
+    )
     factory = _FakeFactory(api_client=client)
     resolver = AccountGroupResolver(factory, TtlCache(60))
 
     first = resolver.groups_for(USER_ID)
     second = resolver.groups_for(USER_ID)
 
-    assert "dac_finance_budget" in first
+    assert first == ["dac_finance", "dac_finance_budget"]
     assert first == second
-    assert [call["startIndex"] for call in client.calls] == [1, 5]
-    assert factory.admin_calls == 1  # the graph is loaded once, then served from cache
+    assert factory.admin_calls == 1
+    assert len(client.calls) == 1
+    method, path, query = client.calls[0]
+    assert method == "GET"
+    assert path.endswith(f"/Users/{USER_ID}")
+    assert query == {"attributes": "id,groups"}
 
 
 def test_resolver_returns_nothing_when_admin_not_configured() -> None:

@@ -154,6 +154,8 @@ class ServiceContainer:
             sync_job_id=config.data_access_sync_job_id,
             metadata_cache=metadata_cache,
         )
+        # Honor persisted demo setting so Access Explorer skips stale metadata after restart.
+        data_access.apply_metadata_cache_preference()
         app_cost = AppCostService(sql, workspace, config, data_access)
         attribute_explorer = AttributeExplorerService(
             storage, identity_attributes, access_requests, data_access, sql, row_filters

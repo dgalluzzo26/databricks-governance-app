@@ -66,6 +66,45 @@ def test_get_or_refresh_first_load_error_is_not_cached_and_invalidate_reloads() 
     assert cache.get_or_refresh("k", lambda: "new", refresh_after=60) == "new"
 
 
+def test_set_disabled_bypasses_load_and_refresh_and_clears_entries() -> None:
+    cache = TtlCache(60)
+    calls = {"n": 0}
+
+    def loader() -> int:
+        calls["n"] += 1
+        return calls["n"]
+
+    assert cache.get_or_refresh("k", loader, refresh_after=60) == 1
+    assert cache.get_or_load("k2", loader) == 2
+    cache.set_disabled(True)
+    assert cache.disabled is True
+    assert cache.get_or_refresh("k", loader, refresh_after=60) == 3
+    assert cache.get_or_refresh("k", loader, refresh_after=60) == 4
+    assert cache.get_or_load("k2", loader) == 5
+    cache.set_disabled(False)
+    assert cache.disabled is False
+    assert cache.get_or_refresh("k", loader, refresh_after=60) == 6
+    assert cache.get_or_refresh("k", loader, refresh_after=60) == 6
+
+
+def test_disabled_check_bypasses_without_local_flag() -> None:
+    cache = TtlCache(60)
+    calls = {"n": 0}
+    live = {"on": False}
+
+    def loader() -> int:
+        calls["n"] += 1
+        return calls["n"]
+
+    cache.set_disabled_check(lambda: live["on"])
+    assert cache.get_or_refresh("k", loader, refresh_after=60) == 1
+    assert cache.get_or_refresh("k", loader, refresh_after=60) == 1
+    live["on"] = True
+    assert cache.disabled is True
+    assert cache.get_or_refresh("k", loader, refresh_after=60) == 2
+    assert cache.get_or_refresh("k", loader, refresh_after=60) == 3
+
+
 def test_run_parallel_keeps_order_and_request_timings() -> None:
     timings = perf.start_request()
 

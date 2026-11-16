@@ -931,6 +931,11 @@ export interface DataAccessSettings {
   warehouseMaxClusters: number;
   /** Warehouse max clusters after the grants phase. */
   warehouseBaselineClusters: number;
+  /**
+   * When true, Access Explorer / Attribute Explorer / policy lists skip the in-process
+   * UC metadata cache (demo / live-metadata mode).
+   */
+  disableMetadataCache: boolean;
 }
 
 /** Settings plus constants the UI needs (`GET /data-access/settings`). */

@@ -178,6 +178,7 @@ export const testDataAccessSettings: DataAccessSettingsView = {
     warehouseAutoscale: false,
     warehouseMaxClusters: 8,
     warehouseBaselineClusters: 4,
+    disableMetadataCache: false,
   },
   minIntervalMinutes: 5,
   applyAvailable: true,

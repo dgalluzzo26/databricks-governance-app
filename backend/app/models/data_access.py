@@ -78,6 +78,9 @@ class DataAccessSettings(ApiModel):
         schedule_mode: ``dry_run`` (plan only) or ``apply`` (plan then mutate UC).
         conflict_policy: Legacy field; parent/child tag mismatches are not reported.
         dry_run: Preferred mode for the settings form (legacy; schedule uses schedule_mode).
+        disable_metadata_cache: When true, UC metadata reads (Access Explorer, Attribute
+            Explorer, policy lists, enrolled catalogs) skip the in-process cache. Intended for
+            demos after changing tags outside the app; leave false in normal use.
     """
 
     access_tag_key: str = "data_access_control"
@@ -105,6 +108,8 @@ class DataAccessSettings(ApiModel):
     warehouse_max_clusters: int = Field(default=8, ge=1, le=10)
     # Ceiling after the grants phase, and the cluster count used for grant concurrency.
     warehouse_baseline_clusters: int = Field(default=4, ge=1, le=10)
+    # Demo / live-metadata mode: bypass the shared UC metadata TtlCache.
+    disable_metadata_cache: bool = False
 
     @field_validator(
         "access_tag_key",

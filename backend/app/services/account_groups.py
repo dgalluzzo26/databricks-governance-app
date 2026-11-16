@@ -1,17 +1,15 @@
-"""Account group nesting: every group a user reaches through group-to-group membership.
+"""Account group memberships for attribute inheritance, including nested groups.
 
-Workspace ``/Me`` lists only groups assigned to this workspace, and only direct memberships.
-Account groups can contain other groups. ``dac_finance`` is a member of ``dac_finance_budget``,
-so a direct member of ``dac_finance`` also holds ``dac_finance_budget`` for Unity Catalog. This
-module reads the account group graph through Account SCIM and walks it upward from the user's
-direct memberships, so attribute inheritance matches what grants give the user.
+Workspace ``/Me`` lists only groups assigned to this workspace. Account SCIM
+``Users/{id}?attributes=groups`` returns the user's account groups with nesting already
+expanded (a direct ``dac_finance`` member also sees ``dac_finance_budget``). That single
+lookup is used instead of paging every account group with its members, which is too slow
+for interactive ``/api/me`` calls.
 """
 
 from __future__ import annotations
 
 import logging
-from collections import deque
-from dataclasses import dataclass, field
 
 from databricks.sdk.errors import DatabricksError
 
@@ -20,85 +18,31 @@ from backend.app.clients.workspace import WorkspaceClientFactory
 
 logger = logging.getLogger(__name__)
 
-_ACCOUNT_SCIM_GROUPS = "/api/2.0/account/scim/v2/Groups"
-_PAGE_SIZE = 1000
-_GRAPH_KEY: tuple[str] = ("account-group-graph",)
+_ACCOUNT_SCIM_USER = "/api/2.0/account/scim/v2/Users/{user_id}"
 
 
-@dataclass(frozen=True)
-class AccountGroupGraph:
-    """Account groups with membership edges, keyed by SCIM id.
-
-    Attributes:
-        names: Group id to display name.
-        parents: Group id to ids of the groups that contain it as a member.
-        direct: User id to ids of the groups the user is a direct member of.
-    """
-
-    names: dict[str, str] = field(default_factory=dict)
-    parents: dict[str, set[str]] = field(default_factory=dict)
-    direct: dict[str, set[str]] = field(default_factory=dict)
-
-
-def build_graph(resources: list[dict]) -> AccountGroupGraph:
-    """Build the membership graph from Account SCIM group resources.
-
-    Members are classified by their ``$ref`` (``Users/{id}`` or ``Groups/{id}``). Members
-    without a recognizable reference are ignored.
+def group_names_from_user_resource(resource: dict) -> list[str]:
+    """Display names from an Account SCIM User ``groups`` attribute.
 
     Args:
-        resources: Group resources as returned by Account SCIM with ``members`` included.
+        resource: User resource as returned by Account SCIM.
 
     Returns:
-        The graph used by ``groups_for_user``.
+        Sorted, de-duplicated group display names.
     """
-    graph = AccountGroupGraph()
-    for resource in resources:
-        group_id = str(resource.get("id") or "")
-        if not group_id:
-            continue
-        graph.names[group_id] = str(resource.get("displayName") or group_id)
-        for member in resource.get("members") or []:
-            ref = str(member.get("$ref") or "").lower()
-            member_id = str(member.get("value") or "")
-            if not member_id:
-                continue
-            if ref.startswith("users/") or "/users/" in ref:
-                graph.direct.setdefault(member_id, set()).add(group_id)
-            elif ref.startswith("groups/") or "/groups/" in ref:
-                graph.parents.setdefault(member_id, set()).add(group_id)
-    return graph
-
-
-def groups_for_user(graph: AccountGroupGraph, user_id: str) -> list[str]:
-    """Display names of every group the user is in, directly or through nesting.
-
-    Args:
-        graph: Membership graph from ``build_graph``.
-        user_id: Account SCIM id of the user.
-
-    Returns:
-        Sorted, de-duplicated group display names. Empty when the user is in no account group.
-    """
-    seeds = graph.direct.get(user_id, set())
-    seen = set(seeds)
-    queue = deque(seeds)
-    while queue:
-        group_id = queue.popleft()
-        for parent in graph.parents.get(group_id, set()):
-            if parent not in seen:
-                seen.add(parent)
-                queue.append(parent)
-    names = {graph.names[g] for g in seen if g in graph.names}
-    return sorted(names, key=str.lower)
+    names = {
+        str(group.get("display") or "").strip()
+        for group in (resource.get("groups") or [])
+        if group.get("display")
+    }
+    return sorted({name for name in names if name}, key=str.lower)
 
 
 class AccountGroupResolver:
     """Resolves account group memberships for a user, including nested groups.
 
-    The whole account graph is read once per cache TTL, so per-user lookups stay cheap. When
-    Account SCIM is unavailable the resolver returns no extra groups and the caller falls back
-    to the workspace groups from ``/Me``.
+    Each user is read once per cache TTL via Account SCIM. When Account SCIM is unavailable
+    the resolver returns no extra groups and the caller falls back to workspace ``/Me``.
 
     Args:
         factory: Workspace client factory; the Account Admin SP reads Account SCIM.
@@ -121,27 +65,23 @@ class AccountGroupResolver:
         if not user_id or not self._factory.admin_configured:
             return []
         try:
-            graph = self._cache.get_or_load(_GRAPH_KEY, self._load_graph)
-        except DatabricksError as exc:
-            logger.warning("Reading account group memberships failed; using workspace groups: %s", exc)
-            return []
-        return groups_for_user(graph, user_id)
-
-    def _load_graph(self) -> AccountGroupGraph:
-        """Read every account group with its members, following SCIM pagination."""
-        admin = self._factory.admin()
-        resources: list[dict] = []
-        start = 1
-        while True:
-            payload = admin.api_client.do(
-                "GET",
-                _ACCOUNT_SCIM_GROUPS,
-                query={"attributes": "id,displayName,members", "startIndex": start, "count": _PAGE_SIZE},
+            return self._cache.get_or_load(
+                ("account-user-groups", user_id),
+                lambda: self._load_user_groups(user_id),
             )
-            page = list((payload.get("Resources") if isinstance(payload, dict) else None) or [])
-            resources.extend(page)
-            total = payload.get("totalResults") if isinstance(payload, dict) else None
-            if not page or not isinstance(total, int) or len(resources) >= total:
-                break
-            start += len(page)
-        return build_graph(resources)
+        except DatabricksError as exc:
+            logger.warning(
+                "Reading account group memberships failed; using workspace groups: %s", exc
+            )
+            return []
+
+    def _load_user_groups(self, user_id: str) -> list[str]:
+        """Read one Account SCIM user and return expanded group display names."""
+        admin = self._factory.admin()
+        payload = admin.api_client.do(
+            "GET",
+            _ACCOUNT_SCIM_USER.format(user_id=user_id),
+            query={"attributes": "id,groups"},
+        )
+        resource = payload if isinstance(payload, dict) else {}
+        return group_names_from_user_resource(resource)
