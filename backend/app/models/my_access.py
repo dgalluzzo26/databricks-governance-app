@@ -51,7 +51,8 @@ class MyAccessSnapshot(ApiModel):
 
     Attributes:
         groups: Every group from the caller's SCIM membership.
-        attributes: Effective assignments (direct first, then via groups).
+        attributes: Assignments the caller holds, including the same value both
+            directly and via a group when both exist (direct first, then via groups).
         group_count: ``len(groups)``.
         attribute_count: ``len(attributes)``.
         direct_attribute_count: Assignments on the user principal.

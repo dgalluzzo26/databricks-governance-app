@@ -386,14 +386,20 @@ class IdentityAttributeService:
             items = [item for item in items if can_decide(item.attribute_key, item.attribute_value)]
         return AttributeAssignmentList(assignments=items, total=len(items))
 
-    def list_for_user(self, user: CurrentUser) -> AttributeAssignmentList:
+    def list_for_user(
+        self, user: CurrentUser, *, unique: bool = True
+    ) -> AttributeAssignmentList:
         """Active attributes for the signed-in user and their groups.
 
-        Mirrors what the UDFs see: direct USER assignments plus assignments to any of the
-        user's groups, de-duplicated by (key, value) with direct grants taking precedence.
+        Direct USER assignments plus assignments to any of the user's groups. When
+        ``unique`` is true (the default, used by UDFs, Access Explorer, and My attributes),
+        rows are de-duplicated by (key, value) with direct grants taking precedence. My
+        access passes ``unique=False`` so a value held both directly and via a group is
+        listed twice.
 
         Args:
             user: The signed-in user, including resolved group memberships.
+            unique: When true, keep one row per (key, value).
 
         Returns:
             The user's effective active assignments.
@@ -417,14 +423,17 @@ class IdentityAttributeService:
                     )
                 )
             )
-        seen: set[tuple[str, str]] = set()
         merged: list[IdentityAttributeAssignment] = []
-        for item in [*direct, *via_groups]:
-            key = (item.attribute_key, item.attribute_value)
-            if key in seen:
-                continue
-            seen.add(key)
-            merged.append(item)
+        if unique:
+            seen: set[tuple[str, str]] = set()
+            for item in [*direct, *via_groups]:
+                key = (item.attribute_key, item.attribute_value)
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged.append(item)
+        else:
+            merged = [*direct, *via_groups]
         return AttributeAssignmentList(assignments=merged, total=len(merged))
 
     def assign(

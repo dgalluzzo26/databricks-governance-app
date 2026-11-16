@@ -41,7 +41,7 @@ class MyAccessService:
 
     def snapshot(self, user: CurrentUser) -> MyAccessSnapshot:
         """Groups the user belongs to and every attribute they hold (direct or via group)."""
-        assignments = self._identity.list_for_user(user).assignments
+        assignments = self._identity.list_for_user(user, unique=False).assignments
         settings = self._data_access._settings()  # noqa: SLF001
         definitions = {
             d.key.lower(): d for d in self._identity.list_definitions().definitions

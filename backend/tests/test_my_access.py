@@ -46,6 +46,15 @@ def test_my_access_snapshot_includes_groups_and_inherited(client: TestClient, co
         ),
         actor,
     )
+    identity.upsert_definition(
+        UpsertAttributeDefinitionRequest(
+            key="data_access",
+            description="DAC",
+            value_source=ValueSource.FREE_FORM,
+            allowed_values=["public", "finance"],
+        ),
+        actor,
+    )
     identity.assign(
         AssignAttributeRequest(
             principal_name="admin@example.com",
@@ -66,6 +75,26 @@ def test_my_access_snapshot_includes_groups_and_inherited(client: TestClient, co
         ),
         actor,
     )
+    identity.assign(
+        AssignAttributeRequest(
+            principal_name="admin@example.com",
+            principal_type=PrincipalKind.USER,
+            attribute_key="data_access",
+            attribute_value="public",
+            expires_at=datetime.now(UTC) + timedelta(days=30),
+        ),
+        actor,
+    )
+    identity.assign(
+        AssignAttributeRequest(
+            principal_name="admins",
+            principal_type=PrincipalKind.GROUP,
+            attribute_key="data_access",
+            attribute_value="public",
+            expires_at=datetime.now(UTC) + timedelta(days=30),
+        ),
+        actor,
+    )
 
     body = client.get("/api/identity/my-access", headers=headers_for("admin@example.com"))
     assert body.status_code == 200
@@ -75,6 +104,8 @@ def test_my_access_snapshot_includes_groups_and_inherited(client: TestClient, co
     keys = {(a["attributeKey"], a["attributeValue"], a["principalType"]) for a in payload["attributes"]}
     assert ("sensitivity", "finance", "USER") in keys
     assert ("state", "CA", "GROUP") in keys
+    assert ("data_access", "public", "USER") in keys
+    assert ("data_access", "public", "GROUP") in keys
     assert payload["directAttributeCount"] >= 1
     assert payload["inheritedAttributeCount"] >= 1
     state_kind = next(a["kind"] for a in payload["attributes"] if a["attributeKey"] == "state")

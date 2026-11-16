@@ -15,8 +15,9 @@ describe("Identity My access", () => {
       "true",
     );
     expect(await screen.findByText("2 groups")).toBeInTheDocument();
-    expect(screen.getByText("3 attributes")).toBeInTheDocument();
-    expect(screen.getByText("1 via groups")).toBeInTheDocument();
+    expect(screen.getByText("4 attributes")).toBeInTheDocument();
+    expect(screen.getByText("2 via groups")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Via admins" })).toBeInTheDocument();
 
     const groups = await screen.findByRole("table", { name: "My groups" });
     expect(within(groups).getByText("admins")).toBeInTheDocument();
@@ -24,7 +25,7 @@ describe("Identity My access", () => {
 
     expect(screen.getByRole("heading", { name: "Via users" })).toBeInTheDocument();
     expect(screen.getByText("CA")).toBeInTheDocument();
-    expect(screen.getByText("Has access")).toBeInTheDocument();
+    expect(screen.getAllByText("Has access").length).toBeGreaterThan(0);
 
     await user.click(screen.getAllByRole("button", { name: "Show resources" })[0]!);
     expect(resources).toHaveBeenCalled();

@@ -618,7 +618,7 @@ export const testMyAttributes: AttributeAssignmentList = {
 
 export const testMyAccess: MyAccessSnapshot = {
   groups: [
-    { name: "admins", attributeCount: 0 },
+    { name: "admins", attributeCount: 1 },
     { name: "users", attributeCount: 1 },
   ],
   attributes: [
@@ -660,12 +660,30 @@ export const testMyAccess: MyAccessSnapshot = {
         detail: "Member of dac_finance; groups and grants are in place",
       },
     },
+    {
+      assignmentId: "a-dac-group",
+      attributeKey: "data_access",
+      attributeValue: "finance",
+      kind: "data_access",
+      principalType: "GROUP",
+      principalName: "admins",
+      expiresAt: null,
+      accessStatus: {
+        assignmentId: "a-dac-group",
+        principalName: "admins",
+        value: "finance",
+        groupName: "dac_finance",
+        membership: "member",
+        structure: "ready",
+        detail: "Member of dac_finance; groups and grants are in place",
+      },
+    },
   ],
   groupCount: 2,
-  attributeCount: 3,
+  attributeCount: 4,
   directAttributeCount: 2,
-  inheritedAttributeCount: 1,
-  dataAccessReadyCount: 1,
+  inheritedAttributeCount: 2,
+  dataAccessReadyCount: 2,
 };
 
 export const testCategoryApprovers: CategoryApproverList = {

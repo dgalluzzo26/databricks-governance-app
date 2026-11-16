@@ -137,8 +137,8 @@ A fuller picture of what you can use:
 
 - **My groups** — every workspace group you belong to, and how many attributes each group
   contributes
-- **Effective attributes by source** — the same attributes as My attributes, grouped under
-  **Direct** or **Via group-name**
+- **Effective attributes by source** — grouped under **Direct** or **Via group-name**. The same
+  value can appear in both when you hold it yourself and through a group.
 - **Show resources** — expand a sensitivity, row-filter, or data-access row to load the
   tables or columns that path affects (on demand)
 

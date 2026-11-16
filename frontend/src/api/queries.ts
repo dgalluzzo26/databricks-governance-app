@@ -698,6 +698,7 @@ export function useAssignAttribute() {
     mutationFn: (body: AssignAttributeRequest) => api.identityAttributes.assign(body),
     onSuccess: () => {
       client.invalidateQueries({ queryKey: ["identity-assignments"] });
+      client.invalidateQueries({ queryKey: queryKeys.myAccess });
       client.invalidateQueries({ queryKey: ["data-access"] });
     },
   });
@@ -717,6 +718,7 @@ export function useBulkAssignAttributes() {
     mutationFn: (body: BulkAssignRequest) => api.identityAttributes.bulkAssign(body),
     onSuccess: () => {
       client.invalidateQueries({ queryKey: ["identity-assignments"] });
+      client.invalidateQueries({ queryKey: queryKeys.myAccess });
       client.invalidateQueries({ queryKey: ["data-access"] });
     },
   });
@@ -738,6 +740,7 @@ export function useRevokeAttribute() {
     mutationFn: (assignmentId: string) => api.identityAttributes.revoke(assignmentId),
     onSuccess: () => {
       client.invalidateQueries({ queryKey: ["identity-assignments"] });
+      client.invalidateQueries({ queryKey: queryKeys.myAccess });
       client.invalidateQueries({ queryKey: ["data-access"] });
     },
   });
@@ -880,6 +883,7 @@ export function useApproveAccessRequest() {
       client.invalidateQueries({ queryKey: queryKeys.approvals });
       client.invalidateQueries({ queryKey: queryKeys.myAccessRequests });
       client.invalidateQueries({ queryKey: ["identity-assignments"] });
+      client.invalidateQueries({ queryKey: queryKeys.myAccess });
       client.invalidateQueries({ queryKey: ["data-access"] });
     },
   });
@@ -921,6 +925,7 @@ export function useApproveRenewal() {
     onSuccess: () => {
       client.invalidateQueries({ queryKey: queryKeys.approvals });
       client.invalidateQueries({ queryKey: ["identity-assignments"] });
+      client.invalidateQueries({ queryKey: queryKeys.myAccess });
     },
   });
 }
