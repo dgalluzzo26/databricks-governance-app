@@ -154,8 +154,9 @@ class ServiceContainer:
             sync_job_id=config.data_access_sync_job_id,
             metadata_cache=metadata_cache,
         )
-        # Honor persisted demo setting so Access Explorer skips stale metadata after restart.
-        data_access.apply_metadata_cache_preference()
+        # Install the settings callback only; reading Lakebase waits until startup opens the pool.
+        if metadata_cache is not None:
+            metadata_cache.set_disabled_check(data_access.metadata_cache_disabled)
         app_cost = AppCostService(sql, workspace, config, data_access)
         attribute_explorer = AttributeExplorerService(
             storage, identity_attributes, access_requests, data_access, sql, row_filters
@@ -233,6 +234,11 @@ class ServiceContainer:
         except Exception:
             # Keep serving so the UI can show the storage problem instead of a dead app.
             logger.exception("Storage backend %s failed to initialize", self.storage.kind)
+        # After the pool is open, honor the persisted demo / live-metadata cache setting.
+        try:
+            self.data_access.apply_metadata_cache_preference()
+        except Exception:
+            logger.exception("Could not apply metadata cache preference from settings")
         if mirror_uc and mirror_in_background:
             threading.Thread(target=self._mirror_to_uc, name="uc-mirror-resync", daemon=True).start()
         elif mirror_uc:
