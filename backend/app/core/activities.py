@@ -96,7 +96,7 @@ _CATALOG: tuple[tuple[str, str, str, float], ...] = (
     ("GET", "/api/data-access/runs", "List data-access runs", 2000),
     ("GET", "/api/data-access/runs/latest", "Latest data-access run", 2000),
     ("GET", "/api/data-access/runs/{run_id}", "Open data-access run", 2000),
-    ("POST", "/api/data-access/runs", "Run data-access sync (dry run or apply)", 120000),
+    ("POST", "/api/data-access/runs", "Start data-access sync (dry run or apply)", 5000),
     ("GET", "/api/data-access/analytics", "Load data-access analytics", 3000),
     ("GET", "/api/data-access/analytics/runs", "Load data-access run history view", 2000),
     ("GET", "/api/data-access/analytics/grants", "Load data-access grant changes view", 2000),

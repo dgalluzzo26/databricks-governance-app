@@ -617,7 +617,7 @@ class _Identity:
 
 
 class _JobsApi:
-    """Records Job schedule updates and run_now_and_wait calls."""
+    """Records Job schedule updates and run_now calls."""
 
     def __init__(
         self, *, on_run=None, run_error: Exception | None = None, update_error: Exception | None = None
@@ -628,13 +628,13 @@ class _JobsApi:
         self.run_calls: list[dict[str, Any]] = []
         self.update_calls: list[Any] = []
 
-    def run_now_and_wait(self, job_id: int, **kwargs):  # noqa: ANN003, ANN201
+    def run_now(self, job_id: int, **kwargs):  # noqa: ANN003, ANN201
         self.run_calls.append({"job_id": job_id, **kwargs})
         if self.run_error is not None:
             raise self.run_error
         if self.on_run is not None:
             return self.on_run(job_id, **kwargs)
-        return SimpleNamespace(state=SimpleNamespace(life_cycle_state="TERMINATED"))
+        return SimpleNamespace(run_id=123)
 
     def update(self, job_id: int, *, new_settings=None, fields_to_remove=None):  # noqa: ANN001, ANN201
         del fields_to_remove
@@ -1107,39 +1107,31 @@ def test_save_settings_pushes_job_schedule() -> None:
     assert jobs.update_calls[0]["new_settings"].schedule.pause_status.value == "PAUSED"
 
 
-def test_trigger_job_and_wait_returns_run_written_by_job() -> None:
+def test_trigger_job_returns_running_without_waiting() -> None:
     storage = InMemoryStorageProvider()
-    svc = _service(storage=storage, sync_job_id="99")
-    _loaders(svc)
-
-    def _on_run(job_id: int, **kwargs):  # noqa: ANN003, ANN202
-        params = kwargs["job_parameters"]
-        assert job_id == 99
-        assert params["mode"] == "dry_run"
-        assert params["trigger"] == "user"
-        assert params["actor"] == "admin@example.com"
-        return svc.run_sync(
-            actor=params["actor"],
-            trigger=SyncTrigger.USER,
-            mode=params["mode"],
-            run_id=params["run_id"],
-        )
-
-    jobs = _JobsApi(on_run=_on_run)
+    jobs = _JobsApi()
     svc = _service(storage=storage, sync_job_id="99", jobs=jobs)
     _loaders(svc)
-    finished = svc.run_now(ADMIN, mode="dry_run")
-    assert finished.status == SyncRunStatus.SUCCESS
-    assert finished.triggered_by == "admin@example.com"
-    assert jobs.run_calls[0]["job_parameters"]["run_id"] == finished.run_id
+    started = svc.run_now(ADMIN, mode="dry_run")
+    assert started.status == SyncRunStatus.RUNNING
+    assert started.triggered_by == "admin@example.com"
+    assert jobs.run_calls[0]["job_id"] == 99
+    assert jobs.run_calls[0]["job_parameters"]["run_id"] == started.run_id
+    assert jobs.run_calls[0]["job_parameters"]["mode"] == "dry_run"
+    assert svc.get_run(started.run_id).status == SyncRunStatus.RUNNING
 
 
-def test_trigger_job_and_wait_surfaces_job_failure_when_run_missing() -> None:
+def test_trigger_job_marks_failed_when_job_cannot_start() -> None:
     from backend.app.core.errors import UpstreamError
 
     jobs = _JobsApi(run_error=RuntimeError("job exploded"))
-    with pytest.raises(UpstreamError, match="Data-access sync Job failed"):
-        _service(sync_job_id="1", jobs=jobs).trigger_job_and_wait(actor=ADMIN, mode="dry_run")
+    svc = _service(sync_job_id="1", jobs=jobs)
+    with pytest.raises(UpstreamError, match="failed to start"):
+        svc.trigger_job(actor=ADMIN, mode="dry_run")
+    latest = svc.latest_run(mode="dry_run")
+    assert latest is not None
+    assert latest.status == SyncRunStatus.FAILED
+    assert "Could not start" in (latest.error or "")
 
 
 def test_run_sync_accepts_predetermined_run_id() -> None:

@@ -250,8 +250,9 @@ def get_run(_: Admin, container: Container, run_id: str) -> DataAccessRun:
 def run_now(admin: Admin, container: Container, body: RunDataAccessRequest | None = None) -> DataAccessRun:
     """Run a data-access sync now (dry-run or apply) via the sync Job.
 
-    Requires app admin. Starts the Databricks Job and waits for it to finish. Apply
-    creates/nests groups, syncs membership, and GRANT/REVOKE.
+    Requires app admin. Starts the Databricks Job and returns a ``running`` record
+    immediately so the Apps proxy does not time out. Poll ``/runs/latest`` until the
+    Job finishes. Apply creates/nests groups, syncs membership, and GRANT/REVOKE.
 
     Args:
         admin: Signed-in app admin.
@@ -259,7 +260,7 @@ def run_now(admin: Admin, container: Container, body: RunDataAccessRequest | Non
         body: Optional mode (defaults to dry_run).
 
     Returns:
-        The finished run.
+        The started run (``running`` when triggered via the Job).
     """
     mode = body.mode if body is not None else "dry_run"
     return container.data_access.run_now(admin, mode=mode)

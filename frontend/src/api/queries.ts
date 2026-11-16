@@ -191,15 +191,21 @@ export function useDataAccessReadiness() {
  */
 export function useDataAccessRuns(mode: "dry_run" | "apply", page = 1, table?: TableQueryParams) {
   const api = useApi();
+  const latest = useDataAccessLatestRun(mode);
+  const running = latest.data?.status === "running";
   return useQuery({
     queryKey: queryKeys.dataAccessRuns(mode, page, tableQueryKey(table)),
     queryFn: ({ signal }) => api.dataAccess.listRuns({ mode, page, pageSize: 20, ...table }, signal),
     placeholderData: keepPreviousData,
+    refetchInterval: running ? 3000 : false,
   });
 }
 
 /**
  * Fetches the latest run for one mode including its plan (`GET /data-access/runs/latest`).
+ *
+ * Polls every 3s while the latest run is still ``running`` so Run now can return as soon as
+ * the Job starts without waiting for the Apps proxy timeout.
  *
  * @param mode - ``dry_run`` or ``apply``.
  * @returns The query result for {@link DataAccessRun} or `null`.
@@ -209,6 +215,7 @@ export function useDataAccessLatestRun(mode: "dry_run" | "apply") {
   return useQuery({
     queryKey: queryKeys.dataAccessLatestRun(mode),
     queryFn: ({ signal }) => api.dataAccess.latestRun(mode, signal),
+    refetchInterval: (query) => (query.state.data?.status === "running" ? 3000 : false),
   });
 }
 
@@ -362,7 +369,7 @@ export function useRunDataAccessSync() {
   const api = useApi();
   const client = useQueryClient();
   return useMutation({
-    meta: { busyMessage: "Running data-access sync…" },
+    meta: { busyMessage: "Starting data-access sync…" },
     mutationFn: (mode: "dry_run" | "apply" = "dry_run") => api.dataAccess.runNow(mode),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: ["data-access"] });

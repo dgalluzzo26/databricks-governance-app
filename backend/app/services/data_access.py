@@ -110,9 +110,6 @@ from backend.app.services.warehouse_scaling import WarehouseScaler
 
 logger = logging.getLogger(__name__)
 
-_JOB_WAIT = timedelta(minutes=30)
-
-
 def collapse_membership_by_principal_id(
     changes: list[tuple[str, str, MembershipChange]],
 ) -> list[tuple[str, str, MembershipChange]]:
@@ -543,39 +540,47 @@ class DataAccessService:
         return runs[0] if runs else None
 
     def run_now(self, actor: CurrentUser, *, mode: str = "dry_run") -> DataAccessRun:
-        """Run a sync as the signed-in admin via the Databricks Job (waits for completion).
+        """Start a sync as the signed-in admin via the Databricks Job.
 
-        When ``DATA_ACCESS_SYNC_JOB_ID`` is unset (tests/local), runs in-process instead.
+        Returns as soon as the Job is triggered with a ``running`` history row. The UI
+        polls until the Job finishes. Waiting for completion inside the Apps request would
+        hit the proxy timeout (~2 minutes) on large inventories.
+
+        When ``DATA_ACCESS_SYNC_JOB_ID`` is unset (tests/local), runs in-process and waits.
 
         Args:
             actor: Admin who clicked Run now.
             mode: ``dry_run`` or ``apply``.
 
         Returns:
-            The finished run (success or failed).
+            A ``running`` run when the Job was started, or the finished in-process run.
 
         Raises:
             InvalidRequestError: If another run holds the lock or apply is not ready.
-            UpstreamError: If the Job cannot be started or fails before writing a run.
+            UpstreamError: If the Job cannot be started.
         """
         if self._sync_job_id is None:
             return self.run_sync(actor=actor.user_name, trigger=SyncTrigger.USER, mode=mode)
-        return self.trigger_job_and_wait(actor=actor, mode=mode)
+        return self.trigger_job(actor=actor, mode=mode)
 
-    def trigger_job_and_wait(self, *, actor: CurrentUser, mode: str = "dry_run") -> DataAccessRun:
-        """Start the data-access sync Job and wait until it finishes, then return the run.
+    def trigger_job(self, *, actor: CurrentUser, mode: str = "dry_run") -> DataAccessRun:
+        """Start the data-access sync Job and return the ``running`` history row.
+
+        Writes the run record before ``jobs.run_now`` so refresh after a proxy timeout still
+        shows progress. The Job entrypoint reuses ``run_id``, takes the sync lock, and
+        updates the same row when it finishes.
 
         Args:
             actor: Admin who clicked Run now.
             mode: ``dry_run`` or ``apply``.
 
         Returns:
-            The run written by the Job entrypoint.
+            The ``running`` run.
 
         Raises:
             NotConfiguredError: If the Job id is not configured.
-            InvalidRequestError: If apply is blocked by readiness.
-            UpstreamError: If the Job fails or the run record is missing afterward.
+            InvalidRequestError: If a sync is already running or apply is blocked.
+            UpstreamError: If the Job cannot be started.
         """
         if self._sync_job_id is None:
             raise NotConfiguredError("DATA_ACCESS_SYNC_JOB_ID is not set")
@@ -590,10 +595,23 @@ class DataAccessService:
                 )
             if not readiness.setup_ready:
                 raise InvalidRequestError("Apply requires sensitivity and data-access Identity definitions")
+        self._reconcile_stale_runs()
+        if self._lock_held():
+            raise InvalidRequestError("A data-access sync is already running")
         run_id = str(uuid.uuid4())
+        started = datetime.now(UTC)
+        running = DataAccessRun(
+            run_id=run_id,
+            status=SyncRunStatus.RUNNING,
+            trigger=SyncTrigger.USER,
+            mode=mode,
+            started_at=started,
+            triggered_by=actor.user_name,
+        )
+        self._write_run(running)
         job_id = int(self._sync_job_id)
         try:
-            self._factory.app().jobs.run_now_and_wait(
+            self._factory.app().jobs.run_now(
                 job_id,
                 job_parameters={
                     "mode": mode,
@@ -601,19 +619,18 @@ class DataAccessService:
                     "actor": actor.user_name,
                     "run_id": run_id,
                 },
-                timeout=_JOB_WAIT,
             )
-        except Exception as exc:  # noqa: BLE001 - map Job failures to a clear API error
-            try:
-                return self.get_run(run_id)
-            except NotFoundError:
-                raise UpstreamError(f"Data-access sync Job failed: {exc}") from exc
-        try:
-            return self.get_run(run_id)
-        except NotFoundError as exc:
-            raise UpstreamError(
-                f"Data-access sync Job finished but run {run_id} was not found in history"
-            ) from exc
+        except Exception as exc:  # noqa: BLE001 - mark the placeholder failed if trigger fails
+            failed = running.model_copy(
+                update={
+                    "status": SyncRunStatus.FAILED,
+                    "finished_at": datetime.now(UTC),
+                    "error": f"Could not start data-access sync Job: {exc}",
+                }
+            )
+            self._write_run(failed)
+            raise UpstreamError(f"Data-access sync Job failed to start: {exc}") from exc
+        return running
 
     def sync_job_schedule_from_storage(self) -> None:
         """Re-apply stored interval and pause state to the Job (called on app startup).
@@ -1460,7 +1477,8 @@ class DataAccessService:
             held_by_this = lock_run_id == run.run_id and not lock_stale
             if held_by_this:
                 continue
-            if age < _ORPHAN_RUNNING and not lock_stale:
+            # Run now writes RUNNING before the Job takes the lock; keep young rows while it queues.
+            if age < _ORPHAN_RUNNING:
                 continue
             self._write_run(
                 run.model_copy(
@@ -1510,6 +1528,20 @@ class DataAccessService:
                 *[r.model_dump(mode="json", exclude={"duration_seconds"}) for r in existing],
             ]
             self._storage.settings.put_many({_RUNS_KEY: blob[:RUN_HISTORY_LIMIT]}, "system")
+
+    def _lock_held(self) -> bool:
+        """True when a non-stale sync lock is present."""
+        current = self._storage.settings.get_all().get(_LOCK_KEY) or {}
+        if not isinstance(current, dict) or not current.get("run_id"):
+            return False
+        held_at = current.get("started_at")
+        if not held_at:
+            return False
+        try:
+            when = datetime.fromisoformat(str(held_at).replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        return datetime.now(UTC) - when < _LOCK_STALE
 
     def _acquire_lock(self, run_id: str, started: datetime) -> bool:
         """Take the sync lock unless a non-stale lock is held.

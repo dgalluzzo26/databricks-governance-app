@@ -147,17 +147,21 @@ export function DataAccessPage() {
               <button
                 type="button"
                 className={`${styles.button} ${styles.buttonPrimary}`}
-                disabled={run.isPending || readiness.data?.dryRunReady === false}
+                disabled={
+                  run.isPending ||
+                  dryLatest.data?.status === "running" ||
+                  readiness.data?.dryRunReady === false
+                }
                 onClick={() =>
-                  void run.mutateAsync("dry_run").then((finished) => setDrySelectedId(finished.runId))
+                  void run.mutateAsync("dry_run").then((started) => setDrySelectedId(started.runId))
                 }
               >
-                {run.isPending ? "Running…" : "Run now"}
+                {run.isPending || dryLatest.data?.status === "running" ? "Running…" : "Run now"}
               </button>
             }
           >
             <p className={styles.muted}>
-              Starts the sync Job and waits for it to finish. Plans groups, nesting,
+              Starts the sync Job and updates this page when it finishes. Plans groups, nesting,
               Identity→membership diffs, and table SELECT grants without mutating Unity Catalog.
             </p>
             {run.error && <ErrorAlert error={run.error} title="Dry-run failed" />}
@@ -202,6 +206,7 @@ export function DataAccessPage() {
           page={livePage}
           onPageChange={setLivePage}
           latestPending={liveLatest.isPending}
+          latestRunning={liveLatest.data?.status === "running"}
           displayed={liveReport}
           selectedPending={liveSelectedId !== null && liveSelected.isPending}
           selectedError={liveSelected.error}
@@ -239,6 +244,7 @@ function LiveTab(props: {
   page: number;
   onPageChange: (page: number) => void;
   latestPending: boolean;
+  latestRunning: boolean;
   displayed: DataAccessRun | null | undefined;
   selectedPending: boolean;
   selectedError: Error | null;
@@ -259,6 +265,7 @@ function LiveTab(props: {
     page,
     onPageChange,
     latestPending,
+    latestRunning,
     displayed,
     selectedPending,
     selectedError,
@@ -269,7 +276,11 @@ function LiveTab(props: {
     run,
   } = props;
   const canApply =
-    applyAvailable && readiness.data?.applyReady === true && setupReady && !run.isPending;
+    applyAvailable &&
+    readiness.data?.applyReady === true &&
+    setupReady &&
+    !run.isPending &&
+    !latestRunning;
   const scheduleApplies = scheduleEnabled === true && scheduleMode === "apply";
 
   return (
@@ -333,11 +344,11 @@ function LiveTab(props: {
                   "Apply will create/nest dac_* groups, sync membership from Identity, and GRANT/REVOKE table access. Continue?",
                 )
               ) {
-                void run.mutateAsync("apply").then((finished) => onSelectRun(finished.runId));
+                void run.mutateAsync("apply").then((started) => onSelectRun(started.runId));
               }
             }}
           >
-            {run.isPending ? "Applying…" : "Run apply"}
+            {run.isPending || latestRunning ? "Applying…" : "Run apply"}
           </button>
         }
       >
