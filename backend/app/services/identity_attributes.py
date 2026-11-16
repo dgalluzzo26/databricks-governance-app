@@ -407,7 +407,7 @@ class IdentityAttributeService:
             )
         )
         via_groups: list[IdentityAttributeAssignment] = []
-        for group in user.groups:
+        for group in user.attribute_groups:
             via_groups.extend(
                 repo.list_assignments(
                     AttributeAssignmentFilter(

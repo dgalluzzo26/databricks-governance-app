@@ -19,6 +19,7 @@ from backend.app.repositories.base import StorageProvider
 from backend.app.repositories.factory import build_storage
 from backend.app.services.access_explorer import AccessExplorerService
 from backend.app.services.access_requests import AccessRequestService
+from backend.app.services.account_groups import AccountGroupResolver
 from backend.app.services.app_cost import AppCostService
 from backend.app.services.app_info import AppInfoService
 from backend.app.services.attribute_explorer import AttributeExplorerService
@@ -165,7 +166,12 @@ class ServiceContainer:
             sql=sql,
             storage=storage,
             request_context=RequestContextResolver(config, workspace, identity_cache),
-            identity=IdentityService(workspace, identity_cache, config.admin_group),
+            identity=IdentityService(
+                workspace,
+                identity_cache,
+                config.admin_group,
+                account_groups=AccountGroupResolver(workspace, identity_cache),
+            ),
             app_info=AppInfoService(config, workspace, storage),
             policies=PolicyService(workspace, sql, metadata_cache),
             identity_attributes=identity_attributes,

@@ -13,7 +13,9 @@ class CurrentUser(ApiModel):
         email: Email address of the caller.
         display_name: Human-readable name shown in the UI.
         user_id: Databricks user ID, or None when it could not be resolved.
-        groups: Display names of the groups the user belongs to.
+        groups: Display names of the workspace groups the user belongs to (from /Me).
+        effective_groups: Every group the user is in, directly or through account nesting
+            (for example ``dac_finance`` members are also in ``dac_finance_budget``).
         is_admin: True when the user is a member of the configured app admin group.
         is_approver: True when the user can decide access requests: always True for admins,
             otherwise derived from the category-approver registry.
@@ -25,6 +27,12 @@ class CurrentUser(ApiModel):
     display_name: str
     user_id: str | None = None
     groups: list[str] = []
+    effective_groups: list[str] = []
     is_admin: bool = False
     is_approver: bool = False
     workspace_host: str | None = None
+
+    @property
+    def attribute_groups(self) -> list[str]:
+        """Groups whose attributes apply to the user: ``groups`` plus ``effective_groups``."""
+        return sorted({*self.groups, *self.effective_groups}, key=str.lower)

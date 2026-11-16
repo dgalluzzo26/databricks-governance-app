@@ -20,6 +20,7 @@ from backend.app.core.errors import InvalidRequestError, UpstreamError
 from backend.app.models.directory import DirectoryPrincipal, DirectoryPrincipalList
 from backend.app.models.principal import PrincipalKind
 from backend.app.models.user import CurrentUser
+from backend.app.services.account_groups import AccountGroupResolver
 
 logger = logging.getLogger(__name__)
 
@@ -54,12 +55,21 @@ class IdentityService:
         factory: Workspace client factory for user-token and service principal clients.
         cache: TTL cache for resolved users.
         admin_group: Workspace group whose members are app admins.
+        account_groups: Resolves account groups reached by nesting. When None, only the
+            workspace groups from /Me are used.
     """
 
-    def __init__(self, factory: WorkspaceClientFactory, cache: TtlCache, admin_group: str) -> None:
+    def __init__(
+        self,
+        factory: WorkspaceClientFactory,
+        cache: TtlCache,
+        admin_group: str,
+        account_groups: AccountGroupResolver | None = None,
+    ) -> None:
         self._factory = factory
         self._cache = cache
         self._admin_group = admin_group
+        self._account_groups = account_groups
 
     def search_principals(
         self,
@@ -197,12 +207,16 @@ class IdentityService:
         if entry is None:
             entry = self._from_scim(ctx)
         groups = sorted(set(entry.groups))
+        # Admin rights stay on the direct workspace groups; nesting only widens attribute lookups.
+        nested = self._account_groups.groups_for(entry.user_id) if self._account_groups else []
+        effective = sorted({*groups, *nested}, key=str.lower)
         return CurrentUser(
             user_name=ctx.user_name,
             email=ctx.email,
             display_name=entry.display_name or ctx.display_name or ctx.user_name,
             user_id=entry.user_id,
             groups=groups,
+            effective_groups=effective,
             is_admin=self._admin_group in groups,
             workspace_host=self._factory.host,
         )

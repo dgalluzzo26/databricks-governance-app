@@ -121,7 +121,8 @@ in process memory.
 
 | Service | File | Databricks APIs |
 | --- | --- | --- |
-| `IdentityService` | `services/identity.py` | `current_user.me`, `users.list`, `groups.list` (admin group, directory search) |
+| `IdentityService` | `services/identity.py` | `current_user.me`, `users.list`, `groups.list` (admin group, directory search). `CurrentUser.attribute_groups` adds account groups reached by nesting (see `AccountGroupResolver`). |
+| `AccountGroupResolver` | `services/account_groups.py` | Account SCIM `Groups` (Account Admin SP, paged, cached with identity TTL): walks group-to-group membership upward so a `dac_finance` member also gets `dac_finance_budget` attributes |
 | `IdentityAttributeService` | `services/identity_attributes.py` | Tag policies (governed values), SQL seed queries; UC mirror via `IdentityUcSync` |
 | `IdentityUcSync` | `services/identity_uc_sync.py` | Statement Execution: MERGE into `…app.identity_attributes` |
 | `AccessRequestService` | `services/access_requests.py` | None directly (storage + `IdentityAttributeService.assign`) |

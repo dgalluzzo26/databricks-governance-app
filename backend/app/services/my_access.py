@@ -50,7 +50,7 @@ class MyAccessService:
             s.assignment_id: s for s in self._data_access.access_status(assignments)
         }
 
-        group_counts: dict[str, int] = {g: 0 for g in user.groups}
+        group_counts: dict[str, int] = {g: 0 for g in user.attribute_groups}
         attributes: list[MyAccessAttribute] = []
         direct = 0
         inherited = 0
@@ -111,7 +111,7 @@ class MyAccessService:
         )
         groups = [
             MyAccessGroup(name=name, attribute_count=group_counts.get(name, 0))
-            for name in sorted(user.groups, key=str.lower)
+            for name in user.attribute_groups
         ]
         return MyAccessSnapshot(
             groups=groups,
