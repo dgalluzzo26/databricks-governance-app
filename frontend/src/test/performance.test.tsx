@@ -202,10 +202,11 @@ describe("App cost card", () => {
     renderApp("/performance");
     expect(await screen.findByText("App cost")).toBeInTheDocument();
     expect(await screen.findByText("Avg cost per sync")).toBeInTheDocument();
+    expect(screen.getByText("Lakebase last 7 days")).toBeInTheDocument();
     expect(screen.getByText("$5.50")).toBeInTheDocument();
     expect(screen.getByText("$1.50")).toBeInTheDocument();
+    expect(screen.getByText("$3.20")).toBeInTheDocument();
     expect(screen.getByText("$7.50")).toBeInTheDocument();
-    expect(screen.getByText("$2.50")).toBeInTheDocument();
     expect(screen.getByText(testAppCost.lagNote)).toBeInTheDocument();
   });
 

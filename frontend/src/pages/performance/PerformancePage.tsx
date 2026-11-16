@@ -397,6 +397,7 @@ function AppCostCard() {
         app: day.appUsd,
         warehouse: day.warehouseUsd,
         job: day.jobUsd,
+        lakebase: day.lakebaseUsd,
       })),
     [report],
   );
@@ -435,9 +436,13 @@ function AppCostCard() {
             <Kpi label="Today so far" value={formatUsd(report.todayAppUsd)} hint="App compute, partial day" />
             <Kpi label="Last 7 days" value={formatUsd(report.appUsdLast7Days)} hint="App compute" />
             <Kpi
-              label="Per active day"
-              value={formatUsd(report.appUsdPerActiveDay)}
-              hint="App compute, average"
+              label="Lakebase last 7 days"
+              value={formatUsd(report.lakebaseUsdLast7Days)}
+              hint={
+                report.lakebaseEndpointId
+                  ? `Endpoint ${report.lakebaseEndpointId} · today ${formatUsd(report.todayLakebaseUsd)}`
+                  : `Today ${formatUsd(report.todayLakebaseUsd)}`
+              }
             />
             <Kpi
               label="Avg cost per sync"
@@ -459,6 +464,7 @@ function AppCostCard() {
               <Bar dataKey="app" name="App compute" stackId="cost" fill={COST_COLORS.app} />
               <Bar dataKey="warehouse" name="SQL warehouse" stackId="cost" fill={COST_COLORS.warehouse} />
               <Bar dataKey="job" name="Sync job" stackId="cost" fill={COST_COLORS.job} />
+              <Bar dataKey="lakebase" name="Lakebase" stackId="cost" fill={COST_COLORS.lakebase} />
             </BarChart>
           </ResponsiveContainer>
           <p className={styles.caption}>{report.lagNote}</p>
@@ -478,6 +484,7 @@ const COST_COLORS = {
   app: "#9a3412",
   warehouse: "#2272b4",
   job: "#b45309",
+  lakebase: "#0f766e",
 };
 
 /**

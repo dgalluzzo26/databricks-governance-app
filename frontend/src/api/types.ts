@@ -1576,6 +1576,8 @@ export interface AppCostDay {
   warehouseUsd: number;
   /** Data-access sync job compute. */
   jobUsd: number;
+  /** Lakebase Postgres for this app's endpoint. */
+  lakebaseUsd: number;
 }
 
 /** App cost report (`GET /performance/app-cost`). Amounts are list prices, not invoice amounts. */
@@ -1584,6 +1586,8 @@ export interface AppCostReport {
   detail: string | null;
   appName: string;
   dedicatedWarehouseId: string | null;
+  /** Billing endpoint_id for this app's Lakebase (e.g. ep-…), when known. */
+  lakebaseEndpointId?: string | null;
   days: number;
   generatedAt: string;
   /** App compute so far today (partial day). */
@@ -1592,6 +1596,10 @@ export interface AppCostReport {
   appUsdLast7Days: number;
   /** Average app compute per day that has usage; null when there is none. */
   appUsdPerActiveDay: number | null;
+  /** Lakebase list-price spend so far today. */
+  todayLakebaseUsd: number;
+  /** Lakebase spend over the last seven UTC days. */
+  lakebaseUsdLast7Days: number;
   /** Finished sync runs (dry-run and apply) in the window. */
   syncCount: number;
   /** Warehouse and job cost that falls inside those runs' start and finish times. */

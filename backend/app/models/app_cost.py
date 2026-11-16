@@ -15,12 +15,14 @@ class AppCostDay(ApiModel):
         app_usd: Always-on Databricks Apps compute for this app.
         warehouse_usd: Dedicated SQL warehouse, all hours of the day.
         job_usd: Data-access sync job compute.
+        lakebase_usd: Lakebase Postgres for this app's endpoint (compute/storage list price).
     """
 
     usage_date: date
     app_usd: float = 0.0
     warehouse_usd: float = 0.0
     job_usd: float = 0.0
+    lakebase_usd: float = 0.0
 
 
 class AppCostReport(ApiModel):
@@ -31,11 +33,14 @@ class AppCostReport(ApiModel):
         detail: Error text when unavailable.
         app_name: Databricks App name.
         dedicated_warehouse_id: SQL warehouse the app and its sync job use.
+        lakebase_endpoint_id: Billing ``endpoint_id`` for this app's Lakebase (e.g. ``ep-…``).
         days: Window length in days, ending today (UTC).
         generated_at: When the report was computed.
         today_app_usd: App compute for today so far (partial day).
         app_usd_last_7_days: App compute for the last seven UTC days, today included.
         app_usd_per_active_day: Average app compute per day that has usage.
+        today_lakebase_usd: Lakebase list-price spend for today so far.
+        lakebase_usd_last_7_days: Lakebase spend for the last seven UTC days.
         sync_count: Finished sync runs (dry-run and apply) in the window.
         sync_usd: Warehouse and job cost that falls inside those runs' start and finish times.
         avg_usd_per_sync: ``sync_usd`` divided by ``sync_count``; None with no syncs.
@@ -48,11 +53,14 @@ class AppCostReport(ApiModel):
     detail: str | None = None
     app_name: str
     dedicated_warehouse_id: str | None = None
+    lakebase_endpoint_id: str | None = None
     days: int
     generated_at: datetime
     today_app_usd: float = 0.0
     app_usd_last_7_days: float = 0.0
     app_usd_per_active_day: float | None = None
+    today_lakebase_usd: float = 0.0
+    lakebase_usd_last_7_days: float = 0.0
     sync_count: int = 0
     sync_usd: float = 0.0
     avg_usd_per_sync: float | None = None

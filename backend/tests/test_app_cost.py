@@ -15,6 +15,7 @@ from backend.app.services.app_cost import (
     AppCostService,
     _overlap_fraction,
     _UsageRecord,
+    lakebase_endpoint_id_from_config,
     sync_usd,
 )
 from backend.tests.conftest import headers_for
@@ -54,8 +55,18 @@ def _workspace() -> SimpleNamespace:
     return SimpleNamespace(admin_configured=True, admin=lambda: client, app=lambda: client)
 
 
-def _config() -> SimpleNamespace:
-    return SimpleNamespace(app_name="data-governance-app", warehouse_id="wh-1", data_access_sync_job_id="42")
+def _config(
+    *,
+    pg_host: str | None = "ep-noisy-forest-d2p43vti.database.us-east-1.cloud.databricks.com",
+    lakebase_endpoint: str | None = "projects/data-governance-app/branches/production/endpoints/primary",
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        app_name="data-governance-app",
+        warehouse_id="wh-1",
+        data_access_sync_job_id="42",
+        pg_host=pg_host,
+        lakebase_endpoint=lakebase_endpoint,
+    )
 
 
 def _at(day: date, hour: int, minute: int = 0) -> datetime:
@@ -128,6 +139,22 @@ def test_sync_usd_sums_across_runs_and_ignores_unfinished_runs() -> None:
 # --- report -------------------------------------------------------------------------------------
 
 
+def test_lakebase_endpoint_id_from_pghost_and_endpoint() -> None:
+    assert (
+        lakebase_endpoint_id_from_config(
+            _config(pg_host="ep-noisy-forest-d2p43vti.database.us-east-1.cloud.databricks.com")
+        )
+        == "ep-noisy-forest-d2p43vti"
+    )
+    assert (
+        lakebase_endpoint_id_from_config(
+            _config(pg_host=None, lakebase_endpoint="ep-still-art-d1ki94q1")
+        )
+        == "ep-still-art-d1ki94q1"
+    )
+    assert lakebase_endpoint_id_from_config(_config(pg_host=None, lakebase_endpoint=None)) is None
+
+
 def test_report_builds_daily_series_and_summary() -> None:
     today = datetime.now(UTC).date()
     yesterday = today - timedelta(days=1)
@@ -138,6 +165,8 @@ def test_report_builds_daily_series_and_summary() -> None:
         _row(_at(six_days_ago, 0), _at(six_days_ago, 1), "APPS", 4.0),
         _row(_at(today, 10), _at(today, 11), "SQL", 10.0),
         _row(_at(today, 10, 20), _at(today, 10, 40), "JOBS", 6.0),
+        _row(_at(today, 8), _at(today, 9), "LAKEBASE", 3.25),
+        _row(_at(yesterday, 8), _at(yesterday, 9), "DATABASE", 1.75),  # legacy origin → lakebase
         _row(_at(yesterday, 0), _at(yesterday, 1), "APPS", None),  # no list price
     ]
     sql = FakeSql(rows)
@@ -154,9 +183,14 @@ def test_report_builds_daily_series_and_summary() -> None:
     assert report.daily[-1].app_usd == pytest.approx(1.5)
     assert report.daily[-1].warehouse_usd == pytest.approx(10.0)
     assert report.daily[-1].job_usd == pytest.approx(6.0)
+    assert report.daily[-1].lakebase_usd == pytest.approx(3.25)
+    assert report.daily[-2].lakebase_usd == pytest.approx(1.75)
     assert report.today_app_usd == pytest.approx(1.5)
     assert report.app_usd_last_7_days == pytest.approx(1.5 + 2.0 + 4.0)
     assert report.app_usd_per_active_day == pytest.approx((1.5 + 2.0 + 4.0) / 3)
+    assert report.today_lakebase_usd == pytest.approx(3.25)
+    assert report.lakebase_usd_last_7_days == pytest.approx(3.25 + 1.75)
+    assert report.lakebase_endpoint_id == "ep-noisy-forest-d2p43vti"
     assert report.unpriced_records == 1
     assert report.sync_count == 1
     assert report.sync_usd == pytest.approx(2.5 + 3.0)
@@ -172,11 +206,13 @@ def test_report_uses_admin_sql_with_named_parameters_and_run_window_start() -> N
 
     statement, parameters = sql.calls[0]
     assert ":since" in statement and ":app_id" in statement and ":warehouse_id" in statement
+    assert "LAKEBASE" in statement
     assert parameters == {
         "since": (today - timedelta(days=2)).isoformat(),
         "app_id": APP_ID,
         "warehouse_id": "wh-1",
         "job_id": "42",
+        "lakebase_endpoint_id": "ep-noisy-forest-d2p43vti",
     }
     assert runs.since == [datetime.combine(today - timedelta(days=2), time.min, tzinfo=UTC)]
     assert report.sync_count == 0

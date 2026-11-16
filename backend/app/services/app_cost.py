@@ -1,12 +1,14 @@
-"""App cost report: Databricks Apps compute per day, and warehouse plus job cost per sync.
+"""App cost report: Databricks Apps compute per day, warehouse/job per sync, and Lakebase.
 
 Reads ``system.billing.usage`` joined to ``system.billing.list_prices`` through the Account
-Admin SP, which is a billing admin. Three billing sources are used:
+Admin SP, which is a billing admin. Four billing sources are used:
 
 - ``APPS`` usage with this app's ``app_id``: always-on compute, reported per day.
 - ``SQL`` usage on the app's dedicated warehouse and ``JOBS`` usage on the sync job. These
   count toward a sync only inside that sync's start and finish window, pro-rated by time.
   Hourly warehouse records are split in proportion to the overlap.
+- ``LAKEBASE`` / ``DATABASE`` usage for this app's Lakebase endpoint (``usage_metadata.endpoint_id``
+  derived from ``PGHOST`` / ``LAKEBASE_ENDPOINT``). Always-on OLTP; not attributed to syncs.
 
 Costs are list prices, not invoice amounts. Billing data lags behind real usage, so today's
 figure is partial. Successful reports are cached; failures are not.
@@ -15,6 +17,7 @@ figure is partial. Successful reports are cached; failures are not.
 from __future__ import annotations
 
 import logging
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
@@ -37,8 +40,8 @@ LAG_NOTE = (
     "Amounts use Databricks list prices, not your invoice."
 )
 
-# Records for the app's compute, the dedicated warehouse, and the sync job. A filter whose ID is
-# NULL matches nothing, so an unset job ID drops only job cost. Quantities are DBUs.
+# Apps / warehouse / job are DBU-priced. Lakebase may also bill storage (non-DBU); include those
+# rows when scoped to this endpoint so list_prices can still attach a USD amount.
 _USAGE_SQL = """
 SELECT
   u.usage_start_time,
@@ -53,15 +56,28 @@ LEFT JOIN system.billing.list_prices p
  AND u.usage_end_time >= p.price_start_time
  AND (p.price_end_time IS NULL OR u.usage_end_time < p.price_end_time)
 WHERE u.usage_date >= :since
-  AND u.usage_unit = 'DBU'
   AND (
-        (u.billing_origin_product = 'APPS' AND u.usage_metadata.app_id = :app_id)
-     OR (u.billing_origin_product = 'SQL' AND u.usage_metadata.warehouse_id = :warehouse_id)
-     OR (u.billing_origin_product = 'JOBS' AND u.usage_metadata.job_id = :job_id)
+        (
+          u.usage_unit = 'DBU'
+          AND (
+                (u.billing_origin_product = 'APPS' AND u.usage_metadata.app_id = :app_id)
+             OR (u.billing_origin_product = 'SQL' AND u.usage_metadata.warehouse_id = :warehouse_id)
+             OR (u.billing_origin_product = 'JOBS' AND u.usage_metadata.job_id = :job_id)
+          )
+        )
+     OR (
+          u.billing_origin_product IN ('LAKEBASE', 'DATABASE')
+          AND :lakebase_endpoint_id IS NOT NULL
+          AND (
+                u.usage_metadata.endpoint_id = :lakebase_endpoint_id
+             OR u.usage_metadata.database_instance_id = :lakebase_endpoint_id
+          )
+        )
   )
 """
 
-_SOURCES = ("APPS", "SQL", "JOBS")
+_SOURCES = ("APPS", "SQL", "JOBS", "LAKEBASE")
+_ENDPOINT_ID_RE = re.compile(r"(ep-[a-z0-9-]+)", re.IGNORECASE)
 
 
 class _RunSource(Protocol):
@@ -74,7 +90,7 @@ class _RunSource(Protocol):
 
 @dataclass(frozen=True)
 class _UsageRecord:
-    """One priced billing record (DBUs times list price, USD)."""
+    """One priced billing record (quantity times list price, USD)."""
 
     start: datetime
     end: datetime
@@ -122,13 +138,43 @@ def sync_usd(records: list[_UsageRecord], runs: list[DataAccessRun]) -> float:
     return total
 
 
+def lakebase_endpoint_id_from_config(config: AppConfig | Any) -> str | None:
+    """Billing ``endpoint_id`` (e.g. ``ep-noisy-forest-…``) from PGHOST or LAKEBASE_ENDPOINT.
+
+    Apps inject ``PGHOST`` as ``{endpoint_id}.database.…``. ``LAKEBASE_ENDPOINT`` may be that
+    host, the ``ep-…`` id, or a resource path that embeds ``ep-…``.
+    """
+    candidates = [
+        getattr(config, "pg_host", None),
+        getattr(config, "lakebase_endpoint", None),
+    ]
+    for raw in candidates:
+        text = (raw or "").strip()
+        if not text:
+            continue
+        match = _ENDPOINT_ID_RE.search(text)
+        if match:
+            return match.group(1).lower()
+        # Bare ep- id without a domain.
+        if text.lower().startswith("ep-") and "/" not in text:
+            return text.split(".", 1)[0].lower()
+    return None
+
+
+def _normalize_origin(origin: str) -> str:
+    """Map legacy ``DATABASE`` billing into the Lakebase bucket."""
+    if origin in {"LAKEBASE", "DATABASE"}:
+        return "LAKEBASE"
+    return origin
+
+
 class AppCostService:
     """Builds the app cost report from billing system tables and sync run records.
 
     Args:
         sql: Executor bound to the Account Admin SP (billing reads) and the dedicated warehouse.
         workspace: Factory used to look up this app's ID through the Apps API.
-        config: App configuration (app name, warehouse ID, sync job ID).
+        config: App configuration (app name, warehouse ID, sync job ID, Lakebase host).
         runs: Data-access service that supplies finished sync runs.
     """
 
@@ -166,8 +212,9 @@ class AppCostService:
             The report.
         """
         window = self.clamp_days(days)
+        endpoint_id = lakebase_endpoint_id_from_config(self._config)
         try:
-            return self._cache.get_or_load(window, lambda: self._build(window))
+            return self._cache.get_or_load(window, lambda: self._build(window, endpoint_id))
         except Exception as exc:  # noqa: BLE001 - shown to the admin, not raised
             logger.warning("App cost report unavailable: %s", exc)
             return AppCostReport(
@@ -175,6 +222,7 @@ class AppCostService:
                 detail=str(exc),
                 app_name=self._config.app_name,
                 dedicated_warehouse_id=self._config.warehouse_id,
+                lakebase_endpoint_id=endpoint_id,
                 days=window,
                 generated_at=datetime.now(UTC),
                 lag_note=LAG_NOTE,
@@ -190,7 +238,7 @@ class AppCostService:
             self._app_id = app.id
         return self._app_id
 
-    def _usage(self, since: date, app_id: str) -> list[_UsageRecord]:
+    def _usage(self, since: date, app_id: str, lakebase_endpoint_id: str | None) -> list[_UsageRecord]:
         rows = self._sql.query(
             _USAGE_SQL,
             {
@@ -198,6 +246,7 @@ class AppCostService:
                 "app_id": app_id,
                 "warehouse_id": self._config.warehouse_id,
                 "job_id": self._config.data_access_sync_job_id,
+                "lakebase_endpoint_id": lakebase_endpoint_id,
             },
         )
         records: list[_UsageRecord] = []
@@ -208,17 +257,17 @@ class AppCostService:
                     start=_parse_timestamp(row["usage_start_time"]),
                     end=_parse_timestamp(row["usage_end_time"]),
                     usage_date=date.fromisoformat(str(row["usage_date"])[:10]),
-                    origin=str(row["origin"]),
+                    origin=_normalize_origin(str(row["origin"])),
                     usd=float(usd) if usd not in (None, "") else None,
                 )
             )
         return records
 
-    def _build(self, days: int) -> AppCostReport:
+    def _build(self, days: int, lakebase_endpoint_id: str | None) -> AppCostReport:
         now = datetime.now(UTC)
         today = now.date()
         since = today - timedelta(days=days - 1)
-        records = self._usage(since, self._resolve_app_id())
+        records = self._usage(since, self._resolve_app_id(), lakebase_endpoint_id)
         runs = self._runs.finished_runs_since(datetime.combine(since, time.min, tzinfo=UTC))
 
         by_day: dict[date, dict[str, float]] = defaultdict(lambda: defaultdict(float))
@@ -232,6 +281,9 @@ class AppCostService:
             by_day[record.usage_date][record.origin] += record.usd
 
         app_by_day = {d: totals["APPS"] for d, totals in by_day.items() if totals.get("APPS")}
+        lakebase_by_day = {
+            d: totals["LAKEBASE"] for d, totals in by_day.items() if totals.get("LAKEBASE")
+        }
         week_start = today - timedelta(days=6)
         sync_total = sync_usd(records, runs)
         daily: list[AppCostDay] = []
@@ -244,17 +296,23 @@ class AppCostService:
                     app_usd=round(totals.get("APPS", 0.0), 4),
                     warehouse_usd=round(totals.get("SQL", 0.0), 4),
                     job_usd=round(totals.get("JOBS", 0.0), 4),
+                    lakebase_usd=round(totals.get("LAKEBASE", 0.0), 4),
                 )
             )
         return AppCostReport(
             app_name=self._config.app_name,
             dedicated_warehouse_id=self._config.warehouse_id,
+            lakebase_endpoint_id=lakebase_endpoint_id,
             days=days,
             generated_at=now,
             today_app_usd=round(app_by_day.get(today, 0.0), 4),
             app_usd_last_7_days=round(sum(usd for d, usd in app_by_day.items() if d >= week_start), 4),
             app_usd_per_active_day=(
                 round(sum(app_by_day.values()) / len(app_by_day), 4) if app_by_day else None
+            ),
+            today_lakebase_usd=round(lakebase_by_day.get(today, 0.0), 4),
+            lakebase_usd_last_7_days=round(
+                sum(usd for d, usd in lakebase_by_day.items() if d >= week_start), 4
             ),
             sync_count=len(runs),
             sync_usd=round(sync_total, 4),

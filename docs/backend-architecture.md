@@ -195,12 +195,14 @@ through `quote_identifier` and literals through `string_literal`; never interpol
 - **Parallel lookups.** `core/concurrency.run_parallel` runs independent warehouse queries for one
   request at once (Access Explorer analyze, the catalog/schema/table tag reads) while keeping
   their time attributed to that request.
-- **App cost.** `AppCostService` (`services/app_cost.py`) reports app compute per UTC day, and the
-  warehouse and job cost of each sync. App compute is matched by `usage_metadata.app_id`, warehouse
-  cost by the dedicated warehouse, and job cost by the sync job. Warehouse and job cost count toward
-  a sync only inside that run's start and finish time, pro-rated by time. Costs use list prices, not
-  invoice amounts, and billing data lags by up to about a day. Reports are cached for 15 minutes;
-  failed reads are reported as unavailable and are not cached.
+- **App cost.** `AppCostService` (`services/app_cost.py`) reports app compute per UTC day, Lakebase
+  Postgres spend for this app's endpoint, and the warehouse and job cost of each sync. App compute
+  is matched by `usage_metadata.app_id`, Lakebase by `usage_metadata.endpoint_id` (from `PGHOST` /
+  `LAKEBASE_ENDPOINT`), warehouse cost by the dedicated warehouse, and job cost by the sync job.
+  Warehouse and job cost count toward a sync only inside that run's start and finish time,
+  pro-rated by time; Lakebase is always-on and is not attributed to syncs. Costs use list prices,
+  not invoice amounts, and billing data lags by up to about a day. Reports are cached for 15
+  minutes; failed reads are reported as unavailable and are not cached.
 
 ---
 
@@ -212,6 +214,7 @@ through `quote_identifier` and literals through `string_literal`; never interpol
 | Mask registry mirror | `ServiceContainer.startup` | App start when rules exist |
 | Grants sync scheduler | `DataAccessService.start_scheduler` | Every `interval_minutes` when `schedule_enabled` |
 | Grants sync Job | Lakeflow Job `data-governance-app-data-access-sync` (`backend/jobs/run_data_access_sync.py`) | Schedule and manual runs; the Job preflights Lakebase and the Admin SP, then runs the sync with `mirror_uc=False` |
+| Recovery Git schedule | `RecoveryService.start_scheduler` | Every `interval_hours` (1–24) when `schedule_enabled`; shared settings lease across app instances |
 | Immediate group membership | `DataAccessService.on_assignment_event` (Identity listener) | Each data-access approval, assign, or revoke |
 | Outstanding work and tag snapshot | `DataAccessService._record_state` | End of every sync run |
 | Request metrics flush | `MetricsRecorder` (daemon thread) | Every 5 seconds; queued metrics are written in batches of 200 |
