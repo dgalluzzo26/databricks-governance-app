@@ -76,6 +76,8 @@ export const testRecoverySettings: RecoveryGitSettings = {
   pathPrefix: "governance-export",
   username: "",
   tokenSecretKey: "git-token",
+  scheduleEnabled: false,
+  intervalHours: 24,
 };
 
 export const testRecoveryPreview: RecoveryPreview = {

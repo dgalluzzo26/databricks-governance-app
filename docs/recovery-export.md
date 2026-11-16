@@ -97,8 +97,23 @@ The app service principal needs READ on the `databricks-governance-app` scope.
 ## Settings
 
 `GET`/`PUT /api/recovery/settings` store the repository URL (https only), branch, path prefix,
-Git user name, and the token secret key name. Path and branch values reject `..` and absolute paths.
-Configure these on the new app before importing; Git settings are not transferred automatically.
+Git user name, the token secret key name, and the push schedule. Path and branch values reject
+`..` and absolute paths. Configure these on the new app before importing; Git settings are not
+transferred automatically.
+
+## Scheduled push
+
+The app can push on a timer without a Databricks Job: recovery only reads app-owned state and
+writes YAML to Git.
+
+- `schedule_enabled` (default off) and `interval_hours` (1–24, default **24** = nightly).
+- A daemon on each app instance wakes about once a minute. A push is due when the last
+  successful scheduled push is older than the interval (or there has never been one).
+- A shared lease in app settings (`recovery_git_lock`) ensures only one of the two app instances
+  pushes; the other no-ops. An unchanged export still counts as success for the interval.
+- Scheduled runs audit as actor `scheduler`. Manual **Push to Git** is unchanged.
+- `GET /settings` returns last scheduled success/attempt times, commit SHA, and the last error
+  when a run failed. Those status fields are ignored on `PUT`.
 
 ## API
 

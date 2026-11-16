@@ -203,11 +203,37 @@ function GitTargetCard(props: {
               onChange={(e) => setForm({ ...form, tokenSecretKey: e.target.value })}
             />
           </label>
+          <label className={styles.field}>
+            <span className={styles.label}>Scheduled push</span>
+            <select
+              className={styles.input}
+              value={form.scheduleEnabled ? "on" : "off"}
+              onChange={(e) => setForm({ ...form, scheduleEnabled: e.target.value === "on" })}
+              aria-label="Scheduled push"
+            >
+              <option value="off">Off</option>
+              <option value="on">On</option>
+            </select>
+          </label>
+          <label className={styles.field}>
+            <span className={styles.label}>Interval (hours, 1–24)</span>
+            <input
+              className={styles.input}
+              type="number"
+              min={1}
+              max={24}
+              value={form.intervalHours}
+              onChange={(e) => setForm({ ...form, intervalHours: Number(e.target.value) })}
+              aria-label="Interval hours"
+            />
+          </label>
         </div>
         <p className={styles.muted}>
           The token itself lives in the admin secret scope under this key name. It is not stored in
-          the app.
+          the app. Scheduled push runs inside the app (default every 24 hours) and skips when Git is
+          not configured; a shared lease keeps the two app instances from double-pushing.
         </p>
+        <ScheduleStatus settings={props.initial} />
         {props.error && <ErrorAlert error={props.error} title="Could not save settings" />}
         <div className={styles.actions}>
           <button
@@ -221,6 +247,53 @@ function GitTargetCard(props: {
       </form>
     </Card>
   );
+}
+
+/**
+ * Shows the last scheduled push outcome from the settings response.
+ *
+ * @param props.settings - Current settings including read-only schedule status.
+ */
+function ScheduleStatus({ settings }: { settings: RecoveryGitSettings }) {
+  if (!settings.scheduleEnabled && !settings.lastScheduledAttemptAt && !settings.lastScheduledSuccessAt) {
+    return null;
+  }
+  if (settings.lastScheduledError) {
+    return (
+      <Alert tone="warning" title="Last scheduled push failed">
+        {formatWhen(settings.lastScheduledAttemptAt)} — {settings.lastScheduledError}
+      </Alert>
+    );
+  }
+  if (settings.lastScheduledSuccessAt) {
+    const sha = settings.lastScheduledCommitSha
+      ? settings.lastScheduledCommitSha.slice(0, 12)
+      : "unknown";
+    const detail =
+      settings.lastScheduledCommitted === false
+        ? `Branch already matched at ${sha}; nothing was pushed.`
+        : `Committed ${sha}.`;
+    return (
+      <Alert tone="success" title="Last scheduled push">
+        {formatWhen(settings.lastScheduledSuccessAt)} — {detail}
+      </Alert>
+    );
+  }
+  if (settings.scheduleEnabled) {
+    return (
+      <p className={styles.muted}>
+        Scheduled push is on (every {settings.intervalHours} hour
+        {settings.intervalHours === 1 ? "" : "s"}). Waiting for the first run.
+      </p>
+    );
+  }
+  return null;
+}
+
+function formatWhen(value: string | null | undefined): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
 /**

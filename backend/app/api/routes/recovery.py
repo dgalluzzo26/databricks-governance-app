@@ -38,9 +38,10 @@ def get_settings(_: Admin, container: Container) -> RecoveryGitSettings:
 
 @router.put("/settings", response_model=RecoveryGitSettings)
 def save_settings(body: RecoveryGitSettings, admin: Admin, container: Container) -> RecoveryGitSettings:
-    """Save the Git target settings (URL, branch, path, user, token secret key name).
+    """Save the Git target and schedule settings (URL, branch, path, user, token key, interval).
 
-    Requires app admin.
+    Requires app admin. Last scheduled-run fields on the body are ignored; they are returned on
+    GET from the in-app scheduler state.
 
     Args:
         body: Settings to persist.
@@ -48,7 +49,7 @@ def save_settings(body: RecoveryGitSettings, admin: Admin, container: Container)
         container: Process-scoped service container (dependency injection).
 
     Returns:
-        The settings as stored.
+        The settings as stored, merged with the latest schedule status.
 
     Raises:
         ForbiddenError: If the caller is not an app admin (HTTP 403).

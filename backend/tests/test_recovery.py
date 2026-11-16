@@ -167,9 +167,11 @@ def test_settings_default_then_round_trip(container: ServiceContainer) -> None:
         {"path_prefix": "/abs"},
         {"branch": "bad branch"},
         {"token_secret_key": "bad/key"},
+        {"interval_hours": 0},
+        {"interval_hours": 25},
     ],
 )
-def test_settings_reject_unsafe_values(kwargs: dict[str, str]) -> None:
+def test_settings_reject_unsafe_values(kwargs: dict[str, object]) -> None:
     with pytest.raises(ValidationError):
         RecoveryGitSettings(**kwargs)
 
@@ -560,3 +562,122 @@ def test_import_and_recover_api_are_admin_only(client: TestClient, container: Se
         json={"confirm": False},
     )
     assert rejected.status_code == 422
+
+
+def _enable_schedule(container: ServiceContainer, *, interval_hours: int = 24) -> None:
+    current = container.recovery.get_settings()
+    container.recovery.save_settings(
+        current.model_copy(update={"schedule_enabled": True, "interval_hours": interval_hours}),
+        _admin(),  # type: ignore[arg-type]
+    )
+
+
+def test_scheduled_push_skips_when_disabled_or_unconfigured(container: ServiceContainer) -> None:
+    publisher = _FakePublisher()
+    _wire_push(container, _FakeSecrets({"git-token-dev": "tok"}), publisher)
+
+    assert container.recovery.run_scheduled_push_if_due() is None
+    assert publisher.calls == []
+
+    _configure_git(container)
+    assert container.recovery.run_scheduled_push_if_due() is None
+    assert publisher.calls == []
+
+
+def test_scheduled_push_runs_when_due_and_audits_as_scheduler(container: ServiceContainer) -> None:
+    _seed(container)
+    _configure_git(container)
+    _enable_schedule(container, interval_hours=24)
+    publisher = _FakePublisher()
+    _wire_push(container, _FakeSecrets({"git-token-dev": "tok-value-123"}), publisher)
+
+    now = datetime(2026, 11, 16, 12, 0, tzinfo=UTC)
+    result = container.recovery.run_scheduled_push_if_due(now=now)
+
+    assert result is not None
+    assert result.pushed_by == "scheduler"
+    assert result.committed is True
+    assert len(publisher.calls) == 1
+    assert publisher.calls[0]["author_email"] == "governance-app@local"
+
+    settings = container.recovery.get_settings()
+    assert settings.last_scheduled_success_at is not None
+    assert settings.last_scheduled_commit_sha == "c0ffee1234"
+    assert settings.last_scheduled_committed is True
+    assert settings.last_scheduled_error is None
+
+    events = [e for e in container.storage.audit.list_recent(20) if e.event_type == "recovery.export_pushed"]
+    assert events
+    assert events[0].actor == "scheduler"
+    assert events[0].payload.get("scheduled") is True
+
+
+def test_scheduled_push_respects_interval_hours(container: ServiceContainer) -> None:
+    _seed(container)
+    _configure_git(container)
+    _enable_schedule(container, interval_hours=1)
+    publisher = _FakePublisher()
+    _wire_push(container, _FakeSecrets({"git-token-dev": "tok"}), publisher)
+
+    # Use wall clock: push records last_scheduled_success_at from result.pushed_at.
+    first_at = datetime.now(UTC)
+    assert container.recovery.run_scheduled_push_if_due(now=first_at) is not None
+    assert len(publisher.calls) == 1
+    success_at = container.recovery.get_settings().last_scheduled_success_at
+    assert success_at is not None
+
+    # Still within the 1-hour window.
+    assert container.recovery.run_scheduled_push_if_due(now=success_at + timedelta(minutes=30)) is None
+    assert len(publisher.calls) == 1
+
+    # Due again after the interval.
+    assert container.recovery.run_scheduled_push_if_due(now=success_at + timedelta(hours=1)) is not None
+    assert len(publisher.calls) == 2
+
+    _enable_schedule(container, interval_hours=24)
+    latest = container.recovery.get_settings().last_scheduled_success_at
+    assert latest is not None
+    assert container.recovery.run_scheduled_push_if_due(now=latest + timedelta(hours=23)) is None
+    assert container.recovery.run_scheduled_push_if_due(now=latest + timedelta(hours=24)) is not None
+    assert len(publisher.calls) == 3
+
+
+def test_scheduled_push_lease_blocks_second_instance(container: ServiceContainer) -> None:
+    _seed(container)
+    _configure_git(container)
+    _enable_schedule(container)
+    publisher = _FakePublisher()
+    _wire_push(container, _FakeSecrets({"git-token-dev": "tok"}), publisher)
+
+    # Use wall clock so the lease is not treated as stale by _LOCK_STALE.
+    now = datetime.now(UTC)
+    held = container.recovery._acquire_lock("peer-run", now)  # noqa: SLF001
+    assert held is True
+
+    assert container.recovery.run_scheduled_push_if_due(now=now) is None
+    assert publisher.calls == []
+
+    container.recovery._release_lock("peer-run")  # noqa: SLF001
+    assert container.recovery.run_scheduled_push_if_due(now=now) is not None
+    assert len(publisher.calls) == 1
+
+
+def test_scheduled_push_records_error_without_advancing_success(container: ServiceContainer) -> None:
+    _seed(container)
+    _configure_git(container)
+    _enable_schedule(container)
+    publisher = _FakePublisher(error=GitPublishError("git push failed (exit 1): rejected"))
+    _wire_push(container, _FakeSecrets({"git-token-dev": "tok"}), publisher)
+
+    now = datetime(2026, 11, 16, 9, 0, tzinfo=UTC)
+    assert container.recovery.run_scheduled_push_if_due(now=now) is None
+
+    settings = container.recovery.get_settings()
+    assert settings.last_scheduled_success_at is None
+    assert settings.last_scheduled_error is not None
+    assert "rejected" in settings.last_scheduled_error
+    # Still due after a failure so the next tick retries.
+    publisher_ok = _FakePublisher()
+    _wire_push(container, _FakeSecrets({"git-token-dev": "tok"}), publisher_ok)
+    assert container.recovery.run_scheduled_push_if_due(now=now + timedelta(minutes=5)) is not None
+    assert container.recovery.get_settings().last_scheduled_error is None

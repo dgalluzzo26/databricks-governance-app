@@ -17,6 +17,8 @@ describe("Recovery export preview", () => {
     expect(await screen.findByRole("heading", { name: "Recovery" })).toBeInTheDocument();
     expect(await screen.findByLabelText(/Repository URL/)).toBeInTheDocument();
     expect(await screen.findByDisplayValue("governance-export")).toBeInTheDocument();
+    expect(screen.getByLabelText("Scheduled push")).toHaveValue("off");
+    expect(screen.getByLabelText("Interval hours")).toHaveValue(24);
 
     const pushButton = screen.getByRole("button", { name: "Push to Git" });
     expect(pushButton).toBeDisabled();
@@ -28,6 +30,27 @@ describe("Recovery export preview", () => {
     expect(screen.getByText(/joinable salt is not exported/i)).toBeInTheDocument();
     expect(screen.getByLabelText("YAML for masking/config.yaml")).toHaveTextContent("<redacted>");
     expect(push).not.toHaveBeenCalled();
+  });
+
+  it("saves schedule settings from the Git target form", async () => {
+    const user = userEvent.setup();
+    const services = fakeServices();
+    const save = vi.spyOn(services.recovery, "saveSettings");
+    renderApp("/recovery", services);
+
+    await screen.findByLabelText("Scheduled push");
+    await user.selectOptions(screen.getByLabelText("Scheduled push"), "on");
+    await user.clear(screen.getByLabelText("Interval hours"));
+    await user.type(screen.getByLabelText("Interval hours"), "6");
+    await user.click(screen.getByRole("button", { name: "Save settings" }));
+
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scheduleEnabled: true,
+        intervalHours: 6,
+      }),
+    );
   });
 
   it("pushes the export after a preview when a repository is saved", async () => {

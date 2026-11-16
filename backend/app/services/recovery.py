@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import yaml
@@ -52,9 +53,32 @@ logger = logging.getLogger(__name__)
 
 FORMAT_VERSION = 1
 SETTINGS_KEY = "recovery_git"
+SCHEDULE_STATE_KEY = "recovery_git_schedule"
+LOCK_KEY = "recovery_git_lock"
 DATA_ACCESS_SETTINGS_KEY = "data_access"
 REDACTED = "<redacted>"
 _SECRET_KEY_HINT = re.compile(r"secret|token|password|credential", re.IGNORECASE)
+
+# Writable Git target fields persisted under SETTINGS_KEY (status lives under SCHEDULE_STATE_KEY).
+_WRITABLE_SETTINGS_KEYS = (
+    "repo_url",
+    "branch",
+    "path_prefix",
+    "username",
+    "token_secret_key",
+    "schedule_enabled",
+    "interval_hours",
+)
+
+_LOCK_STALE = timedelta(minutes=15)
+_TICK_SECONDS = 60.0
+
+_SCHEDULER_ACTOR = CurrentUser(
+    user_name="scheduler",
+    email="governance-app@local",
+    display_name="Recovery scheduler",
+    is_admin=True,
+)
 
 EXPECTED_FILES = (
     "manifest.yaml",
@@ -112,32 +136,48 @@ class RecoveryService:
         storage: StorageProvider,
         workspace: WorkspaceClientFactory,
         publisher: GitPublisher | None = None,
+        *,
+        tick_seconds: float = _TICK_SECONDS,
     ) -> None:
         self._config = config
         self._storage = storage
         self._workspace = workspace
         self._publisher = publisher or GitPublisher()
+        self._tick_seconds = tick_seconds
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
 
     def get_settings(self) -> RecoveryGitSettings:
-        """Return the saved Git target settings, or defaults when none are saved."""
+        """Return the saved Git target settings merged with schedule status, or defaults."""
         raw = self._storage.settings.get_all().get(SETTINGS_KEY)
-        if not isinstance(raw, dict):
-            return RecoveryGitSettings()
-        return RecoveryGitSettings.model_validate(raw)
+        merged: dict[str, Any] = dict(raw) if isinstance(raw, dict) else {}
+        merged.update(self._schedule_state())
+        return RecoveryGitSettings.model_validate(merged)
 
     def save_settings(self, body: RecoveryGitSettings, actor: CurrentUser) -> RecoveryGitSettings:
-        """Persist the Git target settings. Validation happens in the model."""
-        self._storage.settings.put_many({SETTINGS_KEY: body.model_dump(mode="json")}, actor.user_name)
+        """Persist the writable Git target and schedule settings. Validation happens in the model."""
+        cleaned = RecoveryGitSettings.model_validate(
+            {key: getattr(body, key) for key in _WRITABLE_SETTINGS_KEYS}
+        )
+        stored = cleaned.model_dump(mode="json", include=set(_WRITABLE_SETTINGS_KEYS))
+        self._storage.settings.put_many({SETTINGS_KEY: stored}, actor.user_name)
         self._storage.audit.record(
             AuditEvent(
                 event_id=str(uuid.uuid4()),
                 event_type="recovery.settings_saved",
                 actor=actor.user_name,
-                payload={"repo_url": body.repo_url, "branch": body.branch, "path_prefix": body.path_prefix},
+                payload={
+                    "repo_url": cleaned.repo_url,
+                    "branch": cleaned.branch,
+                    "path_prefix": cleaned.path_prefix,
+                    "schedule_enabled": cleaned.schedule_enabled,
+                    "interval_hours": cleaned.interval_hours,
+                },
                 created_at=datetime.now(UTC),
             )
         )
-        return body
+        return self.get_settings()
 
     def build_preview(self, actor: CurrentUser) -> RecoveryPreview:
         """Build the files a recovery push would commit, without writing anything.
@@ -195,7 +235,7 @@ class RecoveryService:
                 username=git.username or "governance-app",
                 token=token,
                 author_name=git.username or "governance-app",
-                author_email=actor.user_name,
+                author_email=getattr(actor, "email", None) or actor.user_name,
                 message=message,
             )
         except GitPublishError as exc:
@@ -215,6 +255,7 @@ class RecoveryService:
                     "commit_sha": outcome.commit_sha,
                     "committed": outcome.committed,
                     "files": len(files),
+                    "scheduled": actor.user_name == _SCHEDULER_ACTOR.user_name,
                 },
                 created_at=pushed_at,
             )
@@ -228,6 +269,76 @@ class RecoveryService:
             branch_created=outcome.branch_created,
             files=len(files),
         )
+
+    def start_scheduler(self) -> None:
+        """Start the background schedule loop (idempotent)."""
+        if self._thread is not None:
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(
+            target=self._scheduler_loop, name="recovery-git-scheduler", daemon=True
+        )
+        self._thread.start()
+        logger.info("Recovery Git schedule loop started (tick=%.0fs)", self._tick_seconds)
+
+    def stop_scheduler(self) -> None:
+        """Stop the background schedule loop if it is running."""
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=10)
+            self._thread = None
+
+    def run_scheduled_push_if_due(self, *, now: datetime | None = None) -> RecoveryPushResult | None:
+        """Push once when the schedule is due; no-op when disabled, not due, or the lease is held.
+
+        Args:
+            now: Clock override for tests; defaults to current UTC.
+
+        Returns:
+            The push result when this instance ran a push, otherwise None.
+        """
+        clock = now or datetime.now(UTC)
+        settings = self.get_settings()
+        if not self._schedule_is_due(settings, clock):
+            return None
+
+        run_id = str(uuid.uuid4())
+        if not self._acquire_lock(run_id, clock):
+            return None
+
+        self._write_schedule_state(
+            {
+                "last_scheduled_attempt_at": clock.isoformat(),
+                "last_scheduled_error": None,
+            }
+        )
+        try:
+            # Re-check after the lease so a peer that just succeeded is not duplicated.
+            settings = self.get_settings()
+            if not self._schedule_is_due(settings, clock):
+                return None
+            result = self.push(_SCHEDULER_ACTOR)
+            self._write_schedule_state(
+                {
+                    "last_scheduled_success_at": result.pushed_at.isoformat(),
+                    "last_scheduled_attempt_at": clock.isoformat(),
+                    "last_scheduled_error": None,
+                    "last_scheduled_commit_sha": result.commit_sha,
+                    "last_scheduled_committed": result.committed,
+                }
+            )
+            return result
+        except Exception as exc:  # noqa: BLE001 - record and keep the loop alive
+            logger.warning("Scheduled recovery push failed: %s", exc)
+            self._write_schedule_state(
+                {
+                    "last_scheduled_attempt_at": clock.isoformat(),
+                    "last_scheduled_error": str(exc),
+                }
+            )
+            return None
+        finally:
+            self._release_lock(run_id)
 
     def import_from_git(self, actor: CurrentUser) -> RecoveryImportPreview:
         """Fetch the recovery snapshot from Git and return it without writing app state.
@@ -502,6 +613,79 @@ class RecoveryService:
                 raise InvalidRequestError(f"{path}: item {index} must be a mapping.")
             out.append(item)
         return out
+
+    def _scheduler_loop(self) -> None:
+        """Wake periodically and push when the configured interval has elapsed."""
+        while not self._stop.wait(self._tick_seconds):
+            try:
+                self.run_scheduled_push_if_due()
+            except Exception:  # noqa: BLE001 - never kill the daemon on a tick failure
+                logger.exception("Recovery Git schedule tick failed")
+
+    @staticmethod
+    def _schedule_is_due(settings: RecoveryGitSettings, now: datetime) -> bool:
+        """Whether a scheduled push should run for these settings at ``now``."""
+        if not settings.schedule_enabled:
+            return False
+        if not settings.repo_url or not settings.path_prefix:
+            return False
+        if settings.last_scheduled_success_at is None:
+            return True
+        return now - settings.last_scheduled_success_at >= timedelta(hours=settings.interval_hours)
+
+    def _schedule_state(self) -> dict[str, Any]:
+        """Last-run fields stored under ``SCHEDULE_STATE_KEY``."""
+        raw = self._storage.settings.get_all().get(SCHEDULE_STATE_KEY)
+        if not isinstance(raw, dict):
+            return {}
+        keys = (
+            "last_scheduled_success_at",
+            "last_scheduled_attempt_at",
+            "last_scheduled_error",
+            "last_scheduled_commit_sha",
+            "last_scheduled_committed",
+        )
+        return {key: raw[key] for key in keys if key in raw}
+
+    def _write_schedule_state(self, patch: dict[str, Any]) -> None:
+        """Merge ``patch`` into the persisted schedule status blob."""
+        current = self._storage.settings.get_all().get(SCHEDULE_STATE_KEY)
+        merged = dict(current) if isinstance(current, dict) else {}
+        merged.update(patch)
+        self._storage.settings.put_many({SCHEDULE_STATE_KEY: merged}, "system")
+
+    def _acquire_lock(self, run_id: str, started: datetime) -> bool:
+        """Take the schedule lease unless a non-stale lock is held.
+
+        Args:
+            run_id: Id written into the lock record.
+            started: Timestamp written into the lock record.
+
+        Returns:
+            True when this caller now holds the lease.
+        """
+        with self._lock:
+            current = self._storage.settings.get_all().get(LOCK_KEY) or {}
+            held_at = current.get("started_at") if isinstance(current, dict) else None
+            if held_at:
+                try:
+                    when = datetime.fromisoformat(str(held_at).replace("Z", "+00:00"))
+                except ValueError:
+                    when = None
+                if when is not None and datetime.now(UTC) - when < _LOCK_STALE:
+                    return False
+            self._storage.settings.put_many(
+                {LOCK_KEY: {"run_id": run_id, "started_at": started.isoformat()}},
+                "system",
+            )
+            return True
+
+    def _release_lock(self, run_id: str) -> None:
+        """Clear the schedule lease if it still belongs to ``run_id``."""
+        with self._lock:
+            current = self._storage.settings.get_all().get(LOCK_KEY) or {}
+            if isinstance(current, dict) and current.get("run_id") == run_id:
+                self._storage.settings.put_many({LOCK_KEY: {}}, "system")
 
     def _read_token(self, secret_key: str) -> str:
         """Read the Git token from the admin secret scope. The value is returned to the caller only.

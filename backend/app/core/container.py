@@ -229,6 +229,7 @@ class ServiceContainer:
         if migrate_storage:
             # Serving path only; the sync Job does not handle requests, so it records nothing.
             self.metrics.start()
+            self.recovery.start_scheduler()
         if mirror_in_background:
             threading.Thread(target=self._warm_caches, name="cache-warm", daemon=True).start()
 
@@ -258,7 +259,8 @@ class ServiceContainer:
         logger.info("UC mirror resync finished in %.1fs", time.perf_counter() - started)
 
     def shutdown(self) -> None:
-        """Flush request metrics, then release storage resources such as connection pools."""
+        """Stop background loops, flush request metrics, then release storage resources."""
+        self.recovery.stop_scheduler()
         self.metrics.stop()
         self.storage.close()
 

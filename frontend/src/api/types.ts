@@ -1158,6 +1158,20 @@ export interface RecoveryGitSettings {
   pathPrefix: string;
   username: string;
   tokenSecretKey: string;
+  /** When true, the app pushes on ``intervalHours`` (requires a configured repo). */
+  scheduleEnabled: boolean;
+  /** Hours between scheduled pushes (1–24; default 24 = nightly). */
+  intervalHours: number;
+  /** When the last successful scheduled push finished (read-only). */
+  lastScheduledSuccessAt?: string | null;
+  /** When the last scheduled attempt started (read-only). */
+  lastScheduledAttemptAt?: string | null;
+  /** Error from the last failed scheduled attempt, if any (read-only). */
+  lastScheduledError?: string | null;
+  /** Commit SHA from the last successful scheduled push (read-only). */
+  lastScheduledCommitSha?: string | null;
+  /** Whether that success wrote a new commit (read-only). */
+  lastScheduledCommitted?: boolean | null;
 }
 
 /** One YAML file a recovery push would commit. */

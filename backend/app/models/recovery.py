@@ -18,7 +18,7 @@ SECRET_KEY_PATTERN = r"^[A-Za-z0-9._\-]{0,128}$"
 
 
 class RecoveryGitSettings(ApiModel):
-    """Where recovery exports would be committed.
+    """Where recovery exports would be committed, plus the in-app push schedule.
 
     Attributes:
         repo_url: HTTPS clone URL of the Git repository; empty when not configured.
@@ -26,6 +26,13 @@ class RecoveryGitSettings(ApiModel):
         path_prefix: Directory inside the repository that holds the export files.
         username: Git user name used for authentication (not a secret).
         token_secret_key: Key in the admin secret scope holding the Git token.
+        schedule_enabled: When true, the app pushes on ``interval_hours`` (requires a configured repo).
+        interval_hours: Hours between scheduled pushes (1–24; default 24 = nightly).
+        last_scheduled_success_at: When the last successful scheduled push finished (read-only).
+        last_scheduled_attempt_at: When the last scheduled attempt started (read-only).
+        last_scheduled_error: Error from the last failed scheduled attempt, if any (read-only).
+        last_scheduled_commit_sha: Commit SHA from the last successful scheduled push (read-only).
+        last_scheduled_committed: Whether that success wrote a new commit (read-only).
     """
 
     repo_url: str = Field(default="", max_length=512)
@@ -33,6 +40,13 @@ class RecoveryGitSettings(ApiModel):
     path_prefix: str = Field(default="governance-export", pattern=GIT_PATH_PATTERN)
     username: str = Field(default="", max_length=256)
     token_secret_key: str = Field(default="git-token", pattern=SECRET_KEY_PATTERN)
+    schedule_enabled: bool = False
+    interval_hours: int = Field(default=24, ge=1, le=24)
+    last_scheduled_success_at: datetime | None = None
+    last_scheduled_attempt_at: datetime | None = None
+    last_scheduled_error: str | None = None
+    last_scheduled_commit_sha: str | None = None
+    last_scheduled_committed: bool | None = None
 
     @field_validator("repo_url")
     @classmethod
