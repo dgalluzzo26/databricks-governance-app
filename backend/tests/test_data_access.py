@@ -755,7 +755,6 @@ def test_save_settings_keeps_tuning_fields_the_request_omits() -> None:
             warehouse_autoscale=True,
             warehouse_max_clusters=6,
             warehouse_baseline_clusters=3,
-            disable_metadata_cache=True,
         ),
         ADMIN,
     )
@@ -767,21 +766,6 @@ def test_save_settings_keeps_tuning_fields_the_request_omits() -> None:
     assert stored.warehouse_autoscale is True
     assert stored.warehouse_max_clusters == 6
     assert stored.warehouse_baseline_clusters == 3
-    assert stored.disable_metadata_cache is True
-
-
-def test_save_settings_toggles_metadata_cache_disabled_flag() -> None:
-    from backend.app.clients.cache import TtlCache
-
-    cache = TtlCache(60)
-    cache.get_or_refresh("seed", lambda: "stale", refresh_after=60)
-    svc = _service(sql=_SqlFake({"ORDER BY catalog_name": []}), metadata_cache=cache)
-    assert cache.disabled is False
-    svc.save_settings(DataAccessSettings(disable_metadata_cache=True), ADMIN)
-    assert cache.disabled is True
-    assert cache.get_or_refresh("seed", lambda: "live", refresh_after=60) == "live"
-    svc.save_settings(DataAccessSettings(disable_metadata_cache=False), ADMIN)
-    assert cache.disabled is False
 
 
 def test_put_settings_without_tuning_fields_keeps_them(client: TestClient) -> None:

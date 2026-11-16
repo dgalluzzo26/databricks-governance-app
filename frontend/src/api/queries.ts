@@ -25,6 +25,7 @@ import type {
   UpsertMaskRuleRequest,
   UpsertPolicyExceptionRequest,
   UpsertRowFilterDimensionRequest,
+  AppSettings,
   DataAccessAnalytics,
   DataAccessSettings,
   GapKind,
@@ -77,6 +78,7 @@ export const queryKeys = {
   helpApiReference: ["help", "api-reference"] as const,
   policyExceptions: ["policy-exceptions"] as const,
   dataAccessSettings: ["data-access", "settings"] as const,
+  appSettings: ["app-settings"] as const,
   recoverySettings: ["recovery", "settings"] as const,
   dataAccessReadiness: ["data-access", "readiness"] as const,
   dataAccessRuns: (mode: "dry_run" | "apply", page: number, table: string) =>
@@ -163,6 +165,37 @@ export function useSaveDataAccessSettings() {
     mutationFn: (body: DataAccessSettings) => api.dataAccess.saveSettings(body),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: ["data-access"] });
+    },
+  });
+}
+
+/**
+ * Fetches app-wide runtime settings (`GET /app-settings`, admin only).
+ *
+ * @remarks Key: `queryKeys.appSettings`.
+ * @returns The query result for {@link AppSettings}.
+ */
+export function useAppSettings() {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.appSettings,
+    queryFn: ({ signal }) => api.appSettings.get(signal),
+  });
+}
+
+/**
+ * Saves app-wide runtime settings (`PUT /app-settings`).
+ *
+ * @returns A mutation taking {@link AppSettings}.
+ */
+export function useSaveAppSettings() {
+  const api = useApi();
+  const client = useQueryClient();
+  return useMutation({
+    meta: { busyMessage: "Saving app settings…" },
+    mutationFn: (body: AppSettings) => api.appSettings.save(body),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.appSettings });
     },
   });
 }

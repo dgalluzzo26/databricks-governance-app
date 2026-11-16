@@ -22,6 +22,7 @@ from backend.app.services.access_requests import AccessRequestService
 from backend.app.services.account_groups import AccountGroupResolver
 from backend.app.services.app_cost import AppCostService
 from backend.app.services.app_info import AppInfoService
+from backend.app.services.app_settings import AppSettingsService
 from backend.app.services.attribute_explorer import AttributeExplorerService
 from backend.app.services.data_access import DataAccessService
 from backend.app.services.governed_tags import GovernedTagService
@@ -56,6 +57,7 @@ class ServiceContainer:
         request_context: Resolves the caller's identity from request headers.
         identity: User / group lookups and admin-group membership.
         app_info: Deployment info and storage health.
+        app_settings: App-wide runtime switches (for example the metadata cache).
         policies: Read-only ABAC policy explorer.
         identity_attributes: Attribute definitions and assignments.
         access_requests: Access requests, approvers and renewals.
@@ -79,6 +81,7 @@ class ServiceContainer:
     request_context: RequestContextResolver
     identity: IdentityService
     app_info: AppInfoService
+    app_settings: AppSettingsService
     policies: PolicyService
     identity_attributes: IdentityAttributeService
     access_requests: AccessRequestService
@@ -154,9 +157,8 @@ class ServiceContainer:
             sync_job_id=config.data_access_sync_job_id,
             metadata_cache=metadata_cache,
         )
-        # Install the settings callback only; reading Lakebase waits until startup opens the pool.
-        if metadata_cache is not None:
-            metadata_cache.set_disabled_check(data_access.metadata_cache_disabled)
+        # Settings are read from Lakebase, so the switch is applied in startup, after the pool opens.
+        app_settings = AppSettingsService(storage, metadata_cache)
         app_cost = AppCostService(sql, workspace, config, data_access)
         attribute_explorer = AttributeExplorerService(
             storage, identity_attributes, access_requests, data_access, sql, row_filters
@@ -176,6 +178,7 @@ class ServiceContainer:
                 account_groups=AccountGroupResolver(workspace, identity_cache),
             ),
             app_info=AppInfoService(config, workspace, storage),
+            app_settings=app_settings,
             policies=PolicyService(workspace, sql, metadata_cache),
             identity_attributes=identity_attributes,
             access_requests=access_requests,
@@ -236,9 +239,9 @@ class ServiceContainer:
             logger.exception("Storage backend %s failed to initialize", self.storage.kind)
         # After the pool is open, honor the persisted demo / live-metadata cache setting.
         try:
-            self.data_access.apply_metadata_cache_preference()
+            self.app_settings.apply()
         except Exception:
-            logger.exception("Could not apply metadata cache preference from settings")
+            logger.exception("Could not apply app settings (metadata cache switch)")
         if mirror_uc and mirror_in_background:
             threading.Thread(target=self._mirror_to_uc, name="uc-mirror-resync", daemon=True).start()
         elif mirror_uc:

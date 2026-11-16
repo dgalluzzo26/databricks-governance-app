@@ -89,6 +89,7 @@ export const navigation: NavSection[] = [
       { label: "Performance", to: "/performance", icon: AnalyticsIcon, adminOnly: true },
       { label: "Recovery", to: "/recovery", icon: DataAccessIcon, adminOnly: true },
       { label: "App status", to: "/status", icon: StatusIcon, adminOnly: true },
+      { label: "App settings", to: "/app-settings", icon: StatusIcon, adminOnly: true },
     ],
   },
 ];

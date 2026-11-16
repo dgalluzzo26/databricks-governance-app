@@ -54,6 +54,7 @@ import type {
   PerformanceSummary,
   DataAccessReadiness,
   DataAccessRun,
+  AppSettings,
   DataAccessSettings,
   DataAccessSettingsView,
   DirectoryPrincipalList,
@@ -178,11 +179,14 @@ export const testDataAccessSettings: DataAccessSettingsView = {
     warehouseAutoscale: false,
     warehouseMaxClusters: 8,
     warehouseBaselineClusters: 4,
-    disableMetadataCache: false,
   },
   minIntervalMinutes: 5,
   applyAvailable: true,
   enrolledCatalogs: ["data_access_control", "dgalluzzo_sandbox_7474655957102538"],
+};
+
+export const testAppSettings: AppSettings = {
+  disableMetadataCache: false,
 };
 
 export const testDataAccessReadiness: DataAccessReadiness = {
@@ -1174,6 +1178,7 @@ export function fakeServices(
     rowFilterAttachments?: RowFilterAttachmentList | Error;
     maskRules?: MaskRuleList | Error;
     dataAccessSettings?: DataAccessSettingsView | Error;
+    appSettings?: AppSettings | Error;
     dataAccessReadiness?: DataAccessReadiness | Error;
     dataAccessRun?: DataAccessRun | null | Error;
     dataAccessAnalytics?: DataAccessAnalytics | Error;
@@ -1259,6 +1264,13 @@ export function fakeServices(
       pushExport: async () => testRecoveryPushResult,
       importFromGit: async () => testRecoveryImportPreview,
       recover: async () => testRecoveryApplyResult,
+    },
+    appSettings: {
+      get: () =>
+        overrides.appSettings instanceof Error
+          ? Promise.reject(overrides.appSettings)
+          : Promise.resolve(overrides.appSettings ?? testAppSettings),
+      save: async (body: AppSettings) => body,
     },
     dataAccess: {
       getSettings: () =>

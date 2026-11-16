@@ -254,44 +254,12 @@ class DataAccessService:
         settings = DataAccessSettings.model_validate({**stored, **incoming})
         self._storage.settings.put_many({_SETTINGS_KEY: settings.model_dump(mode="json")}, actor.user_name)
         self.sync_job_schedule(settings)
-        self.apply_metadata_cache_preference(settings)
         logger.info("Data-access settings updated by %s", actor.user_name)
         return DataAccessSettingsView(
             settings=settings,
             apply_available=True,
             enrolled_catalogs=self.list_enrolled_catalogs(body),
         )
-
-    def metadata_cache_disabled(self) -> bool:
-        """Return whether Data Access settings ask to bypass the UC metadata cache.
-
-        Returns False when storage is not ready yet (for example during container build).
-        """
-        try:
-            return self._settings().disable_metadata_cache
-        except Exception:  # noqa: BLE001 - cache check must never break a metadata read
-            logger.warning("Could not read disable_metadata_cache; keeping cache enabled", exc_info=True)
-            return False
-
-    def apply_metadata_cache_preference(self, settings: DataAccessSettings | None = None) -> None:
-        """Apply the shared UC metadata cache preference from data-access settings.
-
-        Sets the local bypass flag (and clears entries) on this instance, and installs a
-        settings callback so sibling app instances honor the same persisted value without a
-        restart. Call only after storage is initialized (Lakebase pool open).
-
-        Args:
-            settings: Settings to apply; defaults to the stored settings.
-        """
-        if self._metadata_cache is None:
-            return
-        cfg = settings or self._settings()
-        self._metadata_cache.set_disabled_check(self.metadata_cache_disabled)
-        self._metadata_cache.set_disabled(cfg.disable_metadata_cache)
-        if cfg.disable_metadata_cache:
-            logger.info("UC metadata cache disabled (demo / live-metadata mode)")
-        else:
-            logger.info("UC metadata cache enabled")
 
     def list_enrolled_catalogs(
         self, settings: DataAccessSettings | None = None, *, fresh: bool = False

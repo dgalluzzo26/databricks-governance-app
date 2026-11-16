@@ -27,6 +27,7 @@ import { PerformancePage } from "@/pages/performance/PerformancePage";
 import { MaskRulesPage } from "@/pages/maskRules/MaskRulesPage";
 import { RowFiltersPage } from "@/pages/rowFilters/RowFiltersPage";
 import { RecoveryPage } from "@/pages/recovery/RecoveryPage";
+import { AppSettingsPage } from "@/pages/appSettings/AppSettingsPage";
 
 /** Declarative route config mounted under {@link AppShell}. */
 export const routes: RouteObject[] = [
@@ -130,6 +131,14 @@ export const routes: RouteObject[] = [
         element: (
           <RequireAdmin>
             <AppStatusPage />
+          </RequireAdmin>
+        ),
+      },
+      {
+        path: "app-settings",
+        element: (
+          <RequireAdmin>
+            <AppSettingsPage />
           </RequireAdmin>
         ),
       },

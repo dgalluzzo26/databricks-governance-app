@@ -640,26 +640,6 @@ function SettingsCard(props: {
               <option value="warn">Unused (warn)</option>
             </select>
           </label>
-          <label className={styles.field}>
-            <span className={styles.label}>Metadata cache</span>
-            <select
-              className={styles.select}
-              value={form.disableMetadataCache ? "off" : "on"}
-              onChange={(e) =>
-                setForm({ ...form, disableMetadataCache: e.target.value === "off" })
-              }
-              aria-label="Metadata cache"
-              title="Disable for demos so Access Explorer picks up tag changes immediately"
-            >
-              <option value="on">Enabled (normal)</option>
-              <option value="off">Disabled (live / demo)</option>
-            </select>
-            <span className={styles.muted}>
-              When disabled, Access Explorer, Attribute Explorer, and policy lists always read
-              live Unity Catalog metadata. Use after changing tags outside the app; leave
-              enabled for normal use.
-            </span>
-          </label>
           <div className={styles.fieldGrow}>
             <span className={styles.label}>Enrolled catalogs</span>
             <p className={styles.muted}>

@@ -139,6 +139,7 @@ in process memory.
 | `PerformanceService` | `services/performance.py` | `apps.get`, `postgres.get_endpoint`, `warehouses.get` (Admin SP) for capacity; request metrics from storage |
 | `AppCostService` | `services/app_cost.py` | `system.billing.usage` and `system.billing.list_prices` (Admin SP, billing admin); `apps.get` for the app ID |
 | `AppInfoService` | `services/app_info.py` | Storage health, deployment info |
+| `AppSettingsService` | `services/app_settings.py` | App-wide runtime switches (`/api/app-settings`), currently the shared metadata-cache bypass; applied at startup and memoized per instance |
 
 All SQL goes through `SqlExecutor` (`clients/sql.py`): Statement Execution API on
 `DATABRICKS_WAREHOUSE_ID`, polling until done, then fetching every result chunk. Identifiers go
@@ -192,10 +193,11 @@ through `quote_identifier` and literals through `string_literal`; never interpol
   per-table analyze metadata (2 minutes). Analyze reads the table, its columns, and its own tags
   through the Unity Catalog REST APIs, so only the column-tag lookup uses the warehouse. Sync
   runs always read live inventory. After a policy change on one instance, other instances can show
-  the old policy list until their next refresh. Admins can set Data Access
-  ``disable_metadata_cache`` (demo / live-metadata mode) to bypass and clear the shared metadata
-  ``TtlCache`` so tag edits outside the app show up immediately; identity lookups keep their own
-  cache.
+  the old policy list until their next refresh. Admins can turn the cache off in **App settings**
+  (`GET/PUT /api/app-settings`, `AppSettingsService`, stored under its own `app_runtime` key). With
+  `disable_metadata_cache` on, the shared metadata `TtlCache` is bypassed and cleared so tag edits
+  outside the app show up immediately. The switch is memoized for 5 seconds per instance so cache
+  reads do not each query Lakebase; identity lookups keep their own cache.
 - **Parallel lookups.** `core/concurrency.run_parallel` runs independent warehouse queries for one
   request at once (Access Explorer analyze, the catalog/schema/table tag reads) while keeping
   their time attributed to that request.

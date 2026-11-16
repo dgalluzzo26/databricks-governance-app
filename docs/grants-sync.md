@@ -71,8 +71,6 @@ When the app first sees an enrolled catalog, it grants the Account Admin SP `MAN
 | `warehouse_autoscale` | false | Raise the SQL warehouse's `max_num_clusters` for the grants step, then leave the baseline |
 | `warehouse_max_clusters` | 8 (1–10) | Ceiling during the grants phase (leave headroom so UI users are not starved by the sync) |
 | `warehouse_baseline_clusters` | 4 (1–10) | Ceiling after the grants phase, and the cluster count used for grant concurrency |
-| `disable_metadata_cache` | false | When true, Access Explorer / Attribute Explorer / policy lists skip the in-process UC metadata cache (demo / live-metadata mode) |
-
 Saving settings replaces only the fields the request sends. Fields it leaves out keep their stored
 values, so a client that does not know a newer setting cannot reset it to the default.
 

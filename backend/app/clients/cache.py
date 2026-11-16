@@ -41,7 +41,10 @@ class TtlCache:
         return self._is_disabled()
 
     def set_disabled_check(self, check: Callable[[], bool] | None) -> None:
-        """Optional callback consulted on each read (for shared settings across app instances).
+        """Optional callback consulted on each read (for a setting shared across app instances).
+
+        The callback runs before the cache lock is taken, so it may do I/O. It should be cheap
+        (memoized) because it runs on every read.
 
         Args:
             check: Returns true to bypass the cache; None clears the callback.
@@ -50,10 +53,7 @@ class TtlCache:
             self._disabled_check = check
 
     def set_disabled(self, disabled: bool) -> None:
-        """Enable or disable caching; clearing any stored entries on either transition.
-
-        Used by the Data Access ``disable_metadata_cache`` demo setting so Access Explorer,
-        Attribute Explorer, and policy lists can read live Unity Catalog metadata.
+        """Enable or disable caching; clears stored entries on every call.
 
         Args:
             disabled: When true, :meth:`get_or_load` and :meth:`get_or_refresh` always load.
@@ -64,7 +64,7 @@ class TtlCache:
             self._swr.clear()
 
     def _is_disabled(self) -> bool:
-        """True when the local flag or the optional settings callback says to bypass."""
+        """True when the local flag or the optional check says to bypass the cache."""
         if self._disabled:
             return True
         check = self._disabled_check
@@ -72,8 +72,8 @@ class TtlCache:
             return False
         try:
             return bool(check())
-        except Exception:  # noqa: BLE001 - never fail a read because the check failed
-            logger.warning("Metadata cache disabled_check failed; keeping cache enabled", exc_info=True)
+        except Exception:  # noqa: BLE001 - a failed check must never fail a metadata read
+            logger.warning("Metadata cache disabled check failed; keeping cache enabled", exc_info=True)
             return False
 
     def get_or_load(self, key: Hashable, loader: Callable[[], T]) -> T:
@@ -81,7 +81,7 @@ class TtlCache:
 
         Concurrent callers missing the same key wait for a single load; other keys are not
         blocked while it runs. Exceptions from ``loader`` propagate and nothing is cached.
-        When the cache is :attr:`disabled`, ``loader`` always runs and nothing is stored.
+        When the cache is disabled, ``loader`` always runs and nothing is stored.
 
         Args:
             key: Cache key.
@@ -90,29 +90,19 @@ class TtlCache:
         Returns:
             The cached or freshly loaded value.
         """
-        with self._lock:
-            if self._is_disabled():
-                bypass = True
-            elif key in self._cache:
-                return self._cache[key]
-            else:
-                bypass = False
-                key_lock = self._key_locks.setdefault(key, threading.Lock())
-        if bypass:
+        if self._is_disabled():
             return loader()
+        with self._lock:
+            if key in self._cache:
+                return self._cache[key]
+            key_lock = self._key_locks.setdefault(key, threading.Lock())
         with key_lock:
             with self._lock:
-                if self._is_disabled():
-                    bypass = True
-                elif key in self._cache:
+                if key in self._cache:
                     return self._cache[key]
-                else:
-                    bypass = False
-            if bypass:
-                return loader()
             value = loader()
             with self._lock:
-                if not self._is_disabled():
+                if not self._disabled:
                     self._cache[key] = value
                 self._key_locks.pop(key, None)
             return value
@@ -123,8 +113,8 @@ class TtlCache:
         Stale-while-revalidate: only the first load blocks. After that, callers get the last
         value immediately and a single daemon thread reloads it. A failed refresh keeps the
         old value. Entries here are separate from :meth:`get_or_load` and never expire on
-        their own; :meth:`invalidate` drops them. When the cache is :attr:`disabled`,
-        ``loader`` always runs and nothing is stored.
+        their own; :meth:`invalidate` drops them. When the cache is disabled, ``loader``
+        always runs and nothing is stored.
 
         Args:
             key: Cache key.
@@ -134,37 +124,27 @@ class TtlCache:
         Returns:
             The cached (possibly stale) or freshly loaded value.
         """
-        with self._lock:
-            if self._is_disabled():
-                bypass = True
-            else:
-                bypass = False
-                entry = self._swr.get(key)
-                if entry is not None:
-                    value, loaded_at = entry
-                    if time.monotonic() - loaded_at >= refresh_after and key not in self._refreshing:
-                        self._refreshing.add(key)
-                        threading.Thread(
-                            target=self._refresh, args=(key, loader), name="cache-refresh", daemon=True
-                        ).start()
-                    return value
-                key_lock = self._key_locks.setdefault(("swr", key), threading.Lock())
-        if bypass:
+        if self._is_disabled():
             return loader()
+        with self._lock:
+            entry = self._swr.get(key)
+            if entry is not None:
+                value, loaded_at = entry
+                if time.monotonic() - loaded_at >= refresh_after and key not in self._refreshing:
+                    self._refreshing.add(key)
+                    threading.Thread(
+                        target=self._refresh, args=(key, loader), name="cache-refresh", daemon=True
+                    ).start()
+                return value
+            key_lock = self._key_locks.setdefault(("swr", key), threading.Lock())
         with key_lock:
             with self._lock:
-                if self._is_disabled():
-                    bypass = True
-                else:
-                    bypass = False
-                    entry = self._swr.get(key)
-                    if entry is not None:
-                        return entry[0]
-            if bypass:
-                return loader()
+                entry = self._swr.get(key)
+                if entry is not None:
+                    return entry[0]
             value = loader()
             with self._lock:
-                if not self._is_disabled():
+                if not self._disabled:
                     self._swr[key] = (value, time.monotonic())
                 self._key_locks.pop(("swr", key), None)
             return value

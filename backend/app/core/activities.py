@@ -29,6 +29,8 @@ class Activity:
 # (method, route template, friendly name, expected milliseconds)
 _CATALOG: tuple[tuple[str, str, str, float], ...] = (
     ("GET", "/api/app-info", "Load app info", 1500),
+    ("GET", "/api/app-settings", "Load app settings", 1500),
+    ("PUT", "/api/app-settings", "Save app settings", 3000),
     ("GET", "/api/me", "Load signed-in user", 1000),
     ("GET", "/api/directory/principals", "Search principals", 2000),
     ("GET", "/api/access-explorer/search", "Search tables (Access explorer)", 3000),

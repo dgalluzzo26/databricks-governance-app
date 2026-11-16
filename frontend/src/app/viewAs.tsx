@@ -154,6 +154,7 @@ export function isAdminOnlyPath(pathname: string): boolean {
     "/performance",
     "/recovery",
     "/status",
+    "/app-settings",
   ];
   return adminPrefixes.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
 }

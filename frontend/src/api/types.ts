@@ -931,9 +931,13 @@ export interface DataAccessSettings {
   warehouseMaxClusters: number;
   /** Warehouse max clusters after the grants phase. */
   warehouseBaselineClusters: number;
+}
+
+/** App-wide runtime settings (`GET/PUT /app-settings`, admin only). */
+export interface AppSettings {
   /**
-   * When true, Access Explorer / Attribute Explorer / policy lists skip the in-process
-   * UC metadata cache (demo / live-metadata mode).
+   * When true, shared Unity Catalog metadata reads (Access Explorer, Attribute Explorer, policy
+   * lists, enrolled catalogs) bypass the in-process cache. Intended for demos.
    */
   disableMetadataCache: boolean;
 }

@@ -34,6 +34,7 @@ import type {
   PerformanceCapacity,
   PerformanceSlowRequestPage,
   PerformanceSummary,
+  AppSettings,
   DataAccessSettings,
   DataAccessSettingsView,
   HelpDocList,
@@ -181,6 +182,32 @@ export class AppInfoApi {
    */
   get(signal?: AbortSignal): Promise<AppInfo> {
     return this.http.get<AppInfo>("/app-info", signal);
+  }
+}
+
+/** App-wide runtime settings (admin only). */
+export class AppSettingsApi {
+  /** @param http - Shared HTTP client. */
+  constructor(private readonly http: HttpClient) {}
+
+  /**
+   * `GET /app-settings` — app-wide runtime settings (admin only).
+   *
+   * @param signal - Optional abort signal.
+   * @returns The stored settings, or defaults.
+   */
+  get(signal?: AbortSignal): Promise<AppSettings> {
+    return this.http.get<AppSettings>("/app-settings", signal);
+  }
+
+  /**
+   * `PUT /app-settings` — save app-wide runtime settings (admin only).
+   *
+   * @param body - Settings to store. Fields left out keep their stored values.
+   * @returns The stored settings.
+   */
+  save(body: AppSettings): Promise<AppSettings> {
+    return this.http.put<AppSettings>("/app-settings", body);
   }
 }
 
@@ -1338,6 +1365,7 @@ export interface ApiServices {
   directory: DirectoryApi;
   appInfo: AppInfoApi;
   dataAccess: DataAccessApi;
+  appSettings: AppSettingsApi;
   policies: PoliciesApi;
   identityAttributes: IdentityAttributesApi;
   rowFilters: RowFiltersApi;
@@ -1362,6 +1390,7 @@ export function createApiServices(http: HttpClient = new HttpClient()): ApiServi
     directory: new DirectoryApi(http),
     appInfo: new AppInfoApi(http),
     dataAccess: new DataAccessApi(http),
+    appSettings: new AppSettingsApi(http),
     performance: new PerformanceApi(http),
     recovery: new RecoveryApi(http),
     policies: new PoliciesApi(http),
