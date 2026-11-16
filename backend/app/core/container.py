@@ -152,7 +152,7 @@ class ServiceContainer:
         )
         app_cost = AppCostService(sql, workspace, config, data_access)
         attribute_explorer = AttributeExplorerService(
-            storage, identity_attributes, access_requests, data_access
+            storage, identity_attributes, access_requests, data_access, sql, row_filters
         )
         return cls(
             config=config,

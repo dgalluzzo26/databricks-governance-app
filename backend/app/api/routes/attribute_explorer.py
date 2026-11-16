@@ -15,10 +15,11 @@ router = APIRouter(prefix="/attribute-explorer", tags=["attribute-explorer"])
 def analyze_attribute(
     body: AnalyzeAttributeRequest, user: User, container: Container
 ) -> AttributeExplorerResult:
-    """Inspect holders (and unlocked tables for data-access) for one attribute path.
+    """Inspect holders and affected resources for one attribute path.
 
     App admins may analyze any path. Category / data-access / dimension approvers may only
-    analyze paths they are authorized to decide.
+    analyze paths they are authorized to decide. Data access returns unlocked tables;
+    sensitivity returns masked columns; row filters return attached table columns.
 
     Args:
         body: Attribute key and value.
@@ -26,7 +27,7 @@ def analyze_attribute(
         container: Service container.
 
     Returns:
-        Holders, optional tables, and group metadata.
+        Holders, affected resources, and group metadata when applicable.
     """
     if not (user.is_admin or user.is_approver):
         raise ForbiddenError("Attribute Explorer is limited to admins and approvers")

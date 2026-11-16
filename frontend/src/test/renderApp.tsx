@@ -1326,8 +1326,46 @@ export function fakeServices(
                 expiresAt: null,
               },
             ],
-            tables: [],
+            tables: [
+              {
+                fullName: "sandbox.default.orders",
+                columnName: "state_code",
+                tagValue: body.attributeKey,
+                match: "exact" as const,
+                groupName: null,
+              },
+            ],
             note: "Row-filter dimension overview.",
+          };
+        }
+        if (body.attributeKey === "sensitivity") {
+          return {
+            attributeKey: body.attributeKey,
+            attributeValue: value,
+            kind: "sensitivity" as const,
+            groupName: null,
+            parentGroup: null,
+            holders: [
+              {
+                principalName: "ana.lopez@example.com",
+                principalType: "USER" as const,
+                attributeValue: value,
+                match: "exact" as const,
+                expiresAt: null,
+                assignmentId: "as-1",
+              },
+            ],
+            principals: [],
+            tables: [
+              {
+                fullName: "sandbox.default.customers",
+                columnName: "email",
+                tagValue: value.includes(".") ? value : `${value}.PII.Name`,
+                match: value.includes(".") ? ("exact" as const) : ("descendant" as const),
+                groupName: null,
+              },
+            ],
+            note: "Sensitivity unmasks matching columns.",
           };
         }
         return {

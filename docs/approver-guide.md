@@ -17,7 +17,7 @@ for you.
 | Page | What it is for |
 | --- | --- |
 | **Approvals** | Decide pending requests and renew expiring access |
-| **Attribute explorer** | See who holds a path, revoke access, and see which tables a data-access value unlocks |
+| **Attribute explorer** | See who holds a path, revoke access, and see which resources that path affects |
 | **Identity → Assignments** | Grant attribute values directly to users and groups (paths you can decide only) |
 | **Access explorer** / **Identity** | Explore tables and request access for yourself, same as any user |
 
@@ -135,14 +135,20 @@ Use **Attribute explorer** for reverse lookups, for example: "who already has
 | **ancestor** | Holds a broader path above it, which also covers this one |
 
 Click **Revoke** to remove an assignment that is no longer needed. It takes effect on the
-holder's next query. For data-access values, **Tables unlocked** also lists the reviewed tables
-that the value grants, each linked to Access explorer.
+holder's next query. The resources card below holders depends on the attribute kind:
+
+| Kind | Resources card |
+| --- | --- |
+| **Data access** | **Tables unlocked** — reviewed tables the path grants, linked to Access explorer |
+| **Sensitivity** | **Columns affected** — columns tagged with that sensitivity path (or a descendant) |
+| **Row filter** | **Tables filtered** — columns tagged `row_filter=<dimension>` |
 
 ### Row-filter dimensions
 
 Choose a row-filter attribute such as `state` (there is no value to pick) and click
 **Analyze**. **Principals** lists everyone holding any value for that dimension, with all of
-their values on one row. `*` means all rows.
+their values on one row. `*` means all rows. **Tables filtered** lists every table column
+tagged with that dimension.
 
 ![Every principal and their state values](../frontend/public/help-images/approver-row-filter-overview.png)
 

@@ -131,7 +131,7 @@ in process memory.
 | `PolicyExceptionService` | `services/policy_exceptions.py` | Directory lookups; triggers mask + row-filter pack regeneration |
 | `PolicyService` | `services/policies.py` | `policies.get_policy`, `information_schema` reads (read-only explorer) |
 | `AccessExplorerService` | `services/access_explorer.py` | `information_schema` columns / tags / catalogs / schemas / tables |
-| `AttributeExplorerService` | `services/attribute_explorer.py` | Storage + grants-sync tag inventory |
+| `AttributeExplorerService` | `services/attribute_explorer.py` | Storage + grants-sync tag inventory; sensitivity/row-filter column tags via Statement Execution / `RowFilterService` |
 | `DataAccessService` | `services/data_access.py` | `information_schema` tags and privileges, Account SCIM Groups and Users, `users.list` (fallback), `service_principals.list`, SQL `GRANT` / `REVOKE` (parallel, `grant_concurrency`) |
 | `WarehouseScaler` | `services/warehouse_scaling.py` | `warehouses.get` / `warehouses.edit` (Admin SP): raises `max_num_clusters` for the grants step, then restores it |
 | `RunProfiler` | `services/data_access_profile.py` | None (in-process timers and counters per sync run; thread-local, so worker threads report through the run thread) |

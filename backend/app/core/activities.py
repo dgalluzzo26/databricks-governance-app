@@ -36,7 +36,7 @@ _CATALOG: tuple[tuple[str, str, str, float], ...] = (
     ("GET", "/api/access-explorer/tree/schemas", "Browse schemas", 2000),
     ("GET", "/api/access-explorer/tree/tables", "Browse tables", 2000),
     ("POST", "/api/access-explorer/analyze", "Analyze table access", 5000),
-    ("POST", "/api/attribute-explorer/analyze", "Analyze attribute holders", 5000),
+    ("POST", "/api/attribute-explorer/analyze", "Analyze attribute holders and resources", 15000),
     ("GET", "/api/identity/governed-tags", "Load governed tags", 2000),
     ("GET", "/api/identity/definitions", "Load attribute definitions", 1500),
     ("PUT", "/api/identity/definitions", "Save attribute definition", 3000),

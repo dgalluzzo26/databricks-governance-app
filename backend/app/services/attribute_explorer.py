@@ -1,7 +1,10 @@
-"""Attribute Explorer: holders for a path and tables unlocked by data-access tags."""
+"""Attribute Explorer: holders for a path and resources that path affects."""
 
 from __future__ import annotations
 
+import logging
+
+from backend.app.clients.sql import SqlExecutor
 from backend.app.core.errors import ForbiddenError, InvalidRequestError, NotFoundError
 from backend.app.models.access_request import SENSITIVITY_ATTRIBUTE_KEY
 from backend.app.models.attribute_explorer import (
@@ -22,6 +25,11 @@ from backend.app.services.access_requests import AccessRequestService
 from backend.app.services.data_access import DataAccessService
 from backend.app.services.data_access_planner import group_name, parent_value
 from backend.app.services.identity_attributes import IdentityAttributeService
+from backend.app.services.row_filters import RowFilterService
+
+logger = logging.getLogger(__name__)
+
+_SENSITIVITY_TAG_LIMIT = 5000
 
 
 class AttributeExplorerService:
@@ -32,6 +40,8 @@ class AttributeExplorerService:
         identity: Attribute definitions / data-access resolution.
         access_requests: Approver authorization (``_can_decide_for``).
         data_access: Tag inventory and settings.
+        sql: Warehouse executor for sensitivity column-tag lookups.
+        row_filters: Attachment inventory for row-filter dimensions.
     """
 
     def __init__(
@@ -40,19 +50,24 @@ class AttributeExplorerService:
         identity: IdentityAttributeService,
         access_requests: AccessRequestService,
         data_access: DataAccessService,
+        sql: SqlExecutor,
+        row_filters: RowFilterService,
     ) -> None:
         self._storage = storage
         self._identity = identity
         self._access = access_requests
         self._data_access = data_access
+        self._sql = sql
+        self._row_filters = row_filters
 
     def analyze(
         self, body: AnalyzeAttributeRequest, actor: CurrentUser
     ) -> AttributeExplorerResult:
-        """Return holders (and tables for data_access) for one attribute path.
+        """Return holders and affected resources for one attribute path.
 
         Row-filter dimensions accept an empty ``attribute_value`` and return every
-        principal with the values they hold (one row per principal).
+        principal with the values they hold (one row per principal), plus every
+        table column tagged with that dimension.
 
         Raises:
             ForbiddenError: Caller is neither admin nor approver for this path.
@@ -78,16 +93,18 @@ class AttributeExplorerService:
             ):
                 raise ForbiddenError("You are not an approver for this attribute")
             principals = self._principals_overview(key)
+            tables = self._row_filter_resources(key)
             return AttributeExplorerResult(
                 attribute_key=key,
                 attribute_value="*",
                 kind=kind,
                 holders=[],
                 principals=principals,
-                tables=[],
+                tables=tables,
                 note=(
                     "Row-filter dimension: one row per principal with every value they hold. "
-                    "No dac_* table grant list."
+                    "Tables below are columns tagged row_filter="
+                    f"{key}."
                 ),
             )
 
@@ -119,11 +136,17 @@ class AttributeExplorerService:
             parent_val = parent_value(value, separator, known)
             parent = group_name(settings.group_prefix, parent_val) if parent_val else None
         elif kind == AttributeExplorerKind.SENSITIVITY:
+            tables = self._sensitivity_resources(value)
             note = (
-                "Sensitivity controls column masks via ABAC; it does not create dac_* table grants."
+                "Sensitivity unmasks columns whose sensitivity_category.sensitivity path "
+                "matches this value (or a descendant). It does not create dac_* table grants."
             )
         elif kind == AttributeExplorerKind.ROW_FILTER:
-            note = "Row-filter dimensions scope rows via ABAC; no dac_* table grant list."
+            tables = self._row_filter_resources(key)
+            note = (
+                "Row-filter dimensions scope rows via ABAC. Tables below are columns tagged "
+                f"row_filter={key}."
+            )
         else:
             note = "Holders only for this attribute kind."
 
@@ -271,3 +294,84 @@ class AttributeExplorerService:
             )
         tables.sort(key=lambda t: (t.match.value, t.full_name.lower()))
         return tables
+
+    def _sensitivity_resources(self, value: str) -> list[UnlockedTable]:
+        """Columns whose sensitivity path equals ``value`` or is a descendant of it."""
+        if not self._sql.configured:
+            return []
+        value_l = value.lower()
+        try:
+            rows = self._sql.query(
+                "SELECT catalog_name, schema_name, table_name, column_name, tag_name, tag_value "
+                "FROM system.information_schema.column_tags "
+                "WHERE lower(tag_name) IN ('sensitivity_category', 'sensitivity') "
+                f"LIMIT {_SENSITIVITY_TAG_LIMIT}"
+            )
+        except Exception as exc:  # noqa: BLE001 — inventory is best-effort for analyze
+            logger.warning("Could not load sensitivity column tags: %s", exc)
+            return []
+
+        by_column: dict[tuple[str, str, str, str], dict[str, str]] = {}
+        for row in rows:
+            catalog = str(row.get("catalog_name") or "").strip()
+            schema = str(row.get("schema_name") or "").strip()
+            table = str(row.get("table_name") or "").strip()
+            column = str(row.get("column_name") or "").strip()
+            tag_name = str(row.get("tag_name") or "").strip().lower()
+            tag_value = str(row.get("tag_value") or "").strip()
+            if not (catalog and schema and table and column and tag_name and tag_value):
+                continue
+            bucket = by_column.setdefault((catalog, schema, table, column), {})
+            bucket[tag_name] = tag_value
+
+        out: list[UnlockedTable] = []
+        for (catalog, schema, table, column), tags in by_column.items():
+            category = tags.get("sensitivity_category", "").strip()
+            sensitivity = tags.get("sensitivity", "").strip()
+            if not category or not sensitivity:
+                continue
+            path = f"{category}.{sensitivity}"
+            path_l = path.lower()
+            if path_l == value_l:
+                match = AttributeHolderMatch.EXACT
+            elif path_l.startswith(value_l + "."):
+                match = AttributeHolderMatch.DESCENDANT
+            else:
+                continue
+            out.append(
+                UnlockedTable(
+                    full_name=f"{catalog}.{schema}.{table}",
+                    column_name=column,
+                    tag_value=path,
+                    match=match,
+                )
+            )
+        out.sort(
+            key=lambda t: (
+                t.match.value,
+                t.full_name.lower(),
+                (t.column_name or "").lower(),
+            )
+        )
+        return out
+
+    def _row_filter_resources(self, dimension: str) -> list[UnlockedTable]:
+        """Table columns tagged ``row_filter=<dimension>``."""
+        wanted = dimension.strip().lower()
+        try:
+            attachments = self._row_filters.list_attachments().attachments
+        except Exception as exc:  # noqa: BLE001 — inventory is best-effort for analyze
+            logger.warning("Could not load row-filter attachments: %s", exc)
+            return []
+        out = [
+            UnlockedTable(
+                full_name=item.table_full_name,
+                column_name=item.column_name,
+                tag_value=item.dimension,
+                match=AttributeHolderMatch.EXACT,
+            )
+            for item in attachments
+            if item.dimension.strip().lower() == wanted
+        ]
+        out.sort(key=lambda t: (t.full_name.lower(), (t.column_name or "").lower()))
+        return out

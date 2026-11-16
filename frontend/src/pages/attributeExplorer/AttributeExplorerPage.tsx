@@ -1,8 +1,9 @@
 /**
- * @file Attribute Explorer — who holds a path and which tables data-access unlocks.
+ * @file Attribute Explorer — who holds a path and which resources that path affects.
  *
  * Admins see every attribute; path approvers only paths they can decide.
- * Row-filter dimensions show every principal with the values they hold (no value picker).
+ * Data access lists unlocked tables; sensitivity lists masked columns; row-filter
+ * dimensions list every principal (and the values they hold) plus attached columns.
  */
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
@@ -15,6 +16,7 @@ import {
 import { useEffectiveUser } from "@/app/viewAs";
 import type {
   AttributeDefinition,
+  AttributeExplorerKind,
   AttributeExplorerResult,
   AttributeHolder,
   AttributePrincipalSummary,
@@ -50,7 +52,7 @@ function definitionKind(
 }
 
 /**
- * Admin / approver reverse lookup: holders + unlocked tables for a path.
+ * Admin / approver reverse lookup: holders + affected resources for a path.
  */
 export function AttributeExplorerPage() {
   const { data: user } = useEffectiveUser();
@@ -111,8 +113,8 @@ export function AttributeExplorerPage() {
         title="Attribute explorer"
         description={
           user?.isAdmin
-            ? "See who holds an attribute path and which reviewed tables a data-access value unlocks. Row filters list every principal and the values they hold."
-            : "Inspect attribute paths you approve — holders and, for data access, unlocked tables. Row filters list principals and their values."
+            ? "See who holds an attribute path and which resources it affects — unlocked tables for data access, masked columns for sensitivity, and filtered columns for row filters."
+            : "Inspect attribute paths you approve — holders and the resources that path affects."
         }
       />
 
@@ -173,8 +175,8 @@ export function AttributeExplorerPage() {
         </div>
         {isRowFilterOverview && attributeKey && (
           <p className={styles.muted} style={{ marginTop: "var(--space-2)" }}>
-            Row filter: Analyze lists every principal and the values they hold for{" "}
-            <code>{attributeKey}</code>.
+            Row filter: Analyze lists every principal with values for{" "}
+            <code>{attributeKey}</code>, plus table columns tagged with that dimension.
           </p>
         )}
         <div className={styles.buttonRow} style={{ marginTop: "var(--space-3)" }}>
@@ -209,7 +211,7 @@ export function AttributeExplorerPage() {
 }
 
 /**
- * Analyze results: holders (with revoke) or row-filter principal overview, plus unlocked tables.
+ * Analyze results: holders (with revoke) or row-filter principal overview, plus affected resources.
  *
  * @param props.result - Latest analyze response.
  * @param props.onRevoked - Called after a holder assignment is revoked so the list can update.
@@ -226,6 +228,10 @@ function ResultPanel({
   const title = isRowOverview
     ? `${result.attributeKey} — all principals`
     : `${result.attributeKey} = ${result.attributeValue}`;
+  const showResources =
+    result.kind === "data_access" ||
+    result.kind === "sensitivity" ||
+    result.kind === "row_filter";
 
   return (
     <div className={styles.stack}>
@@ -261,10 +267,11 @@ function ResultPanel({
         />
       )}
 
-      {result.kind === "data_access" && (
-        <UnlockedTablesTable
+      {showResources && (
+        <AffectedResourcesTable
+          kind={result.kind}
           tables={result.tables}
-          resetKey={`${result.attributeKey}:${result.attributeValue}`}
+          resetKey={`${result.attributeKey}:${result.attributeValue}:${result.kind}`}
         />
       )}
     </div>
@@ -426,42 +433,76 @@ function PrincipalsTable({
 }
 
 /**
- * Reviewed tables unlocked by a data-access path.
+ * Resources affected by the looked-up path: unlocked tables, masked columns, or filtered columns.
  */
-function UnlockedTablesTable({ tables, resetKey }: { tables: UnlockedTable[]; resetKey: string }) {
-  const unlockedColumns: TableColumn<UnlockedTable>[] = [
+function AffectedResourcesTable({
+  kind,
+  tables,
+  resetKey,
+}: {
+  kind: AttributeExplorerKind;
+  tables: UnlockedTable[];
+  resetKey: string;
+}) {
+  const showColumn = kind === "sensitivity" || kind === "row_filter";
+  const title =
+    kind === "sensitivity"
+      ? "Columns affected"
+      : kind === "row_filter"
+        ? "Tables filtered"
+        : "Tables unlocked";
+  const empty =
+    kind === "sensitivity"
+      ? "No columns tagged with this sensitivity path (or a descendant)."
+      : kind === "row_filter"
+        ? "No table columns are tagged with this row-filter dimension."
+        : "No reviewed tables tagged with this path (or a descendant).";
+  const tagLabel =
+    kind === "sensitivity" ? "Sensitivity path" : kind === "row_filter" ? "Dimension" : "Tag value";
+
+  const columns: TableColumn<UnlockedTable>[] = [
     { key: "table", label: "Table", value: (item) => item.fullName },
-    { key: "tagValue", label: "Tag value", value: (item) => item.tagValue },
+    ...(showColumn
+      ? [{ key: "column", label: "Column", value: (item: UnlockedTable) => item.columnName ?? "" }]
+      : []),
+    { key: "tagValue", label: tagLabel, value: (item) => item.tagValue },
     { key: "match", label: "Match", value: (item) => item.match },
-    { key: "group", label: "Group", value: (item) => item.groupName ?? "" },
+    ...(kind === "data_access"
+      ? [{ key: "group", label: "Group", value: (item: UnlockedTable) => item.groupName ?? "" }]
+      : []),
   ];
-  const pager = useTableView(tables, unlockedColumns, { resetKey });
+  const pager = useTableView(tables, columns, { resetKey });
   return (
-    <Card title="Tables unlocked" actions={<Badge>{tables.length}</Badge>}>
+    <Card title={title} actions={<Badge>{tables.length}</Badge>}>
       {tables.length === 0 ? (
-        <div className={styles.empty}>
-          No reviewed tables tagged with this path (or a descendant).
-        </div>
+        <div className={styles.empty}>{empty}</div>
       ) : (
         <>
           <div className={styles.tableWrap}>
-            <table className={styles.table} aria-label="Tables unlocked">
+            <table className={styles.table} aria-label={title}>
               <DataTableHead view={pager} />
               <tbody>
                 {pager.rows.map((item) => (
-                  <tr key={item.fullName}>
+                  <tr key={`${item.fullName}:${item.columnName ?? ""}:${item.tagValue}`}>
                     <td>
                       <Link to={`/access-explorer?table=${encodeURIComponent(item.fullName)}`}>
                         <code>{item.fullName}</code>
                       </Link>
                     </td>
+                    {showColumn && (
+                      <td>
+                        <code>{item.columnName ?? "—"}</code>
+                      </td>
+                    )}
                     <td>
                       <code>{item.tagValue}</code>
                     </td>
                     <td>{item.match}</td>
-                    <td>
-                      <code>{item.groupName ?? "—"}</code>
-                    </td>
+                    {kind === "data_access" && (
+                      <td>
+                        <code>{item.groupName ?? "—"}</code>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>

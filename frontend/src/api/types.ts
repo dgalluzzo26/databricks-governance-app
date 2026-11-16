@@ -1056,11 +1056,14 @@ export interface AttributePrincipalSummary {
   expiresAt: string | null;
 }
 
+/** Resource affected by an attribute path (unlocked table, masked column, or filtered column). */
 export interface UnlockedTable {
   fullName: string;
   tagValue: string;
   match: AttributeHolderMatch;
   groupName: string | null;
+  /** Column carrying a sensitivity or row-filter tag, when applicable. */
+  columnName?: string | null;
 }
 
 export interface AttributeExplorerResult {

@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { fakeServices, renderApp, testUser } from "./renderApp";
 
 describe("Attribute explorer", () => {
-  it("analyzes a data-access path for admins", async () => {
+  it("analyzes a sensitivity path and lists affected columns", async () => {
     const user = userEvent.setup();
     renderApp("/attribute-explorer");
     expect(await screen.findByRole("heading", { name: "Attribute explorer" })).toBeInTheDocument();
@@ -15,6 +15,9 @@ describe("Attribute explorer", () => {
     await user.click(screen.getByRole("button", { name: "Analyze" }));
     expect(await screen.findByRole("table", { name: "Holders" })).toBeInTheDocument();
     expect(screen.getByText("ana.lopez@example.com")).toBeInTheDocument();
+    expect(await screen.findByRole("table", { name: "Columns affected" })).toBeInTheDocument();
+    expect(screen.getByText("sandbox.default.customers")).toBeInTheDocument();
+    expect(screen.getByText("email")).toBeInTheDocument();
   });
 
   it("revokes a holder assignment from the holders table", async () => {
@@ -35,7 +38,7 @@ describe("Attribute explorer", () => {
     expect(screen.queryByText("ana.lopez@example.com")).not.toBeInTheDocument();
   });
 
-  it("lists principals and values for a row-filter dimension without a value picker", async () => {
+  it("lists principals and filtered tables for a row-filter dimension", async () => {
     const user = userEvent.setup();
     renderApp("/attribute-explorer");
     expect(await screen.findByRole("heading", { name: "Attribute explorer" })).toBeInTheDocument();
@@ -48,6 +51,9 @@ describe("Attribute explorer", () => {
     expect(screen.getByText("CA")).toBeInTheDocument();
     expect(screen.getByText("NY")).toBeInTheDocument();
     expect(screen.getByText("finance-analysts")).toBeInTheDocument();
+    expect(await screen.findByRole("table", { name: "Tables filtered" })).toBeInTheDocument();
+    expect(screen.getByText("sandbox.default.orders")).toBeInTheDocument();
+    expect(screen.getByText("state_code")).toBeInTheDocument();
   });
 
   it("is available to category approvers", async () => {

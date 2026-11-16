@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from fastapi.testclient import TestClient
 
@@ -10,9 +11,29 @@ from backend.app.models.identity_attribute import (
     ValueSource,
 )
 from backend.app.models.principal import PrincipalKind
+from backend.app.models.row_filter import RowFilterAttachment, RowFilterAttachmentList
 from backend.app.services.data_access_planner import TagRow
 from backend.tests.conftest import headers_for
 from backend.tests.test_identity_attributes import _admin, _service
+
+
+class _FakeSql:
+    configured = True
+
+    def __init__(self, rows: list[dict[str, Any]] | None = None) -> None:
+        self.rows = rows or []
+
+    def query(self, statement: str, parameters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        assert "column_tags" in statement
+        return self.rows
+
+
+class _FakeRowFilters:
+    def __init__(self, attachments: list[RowFilterAttachment] | None = None) -> None:
+        self._attachments = attachments or []
+
+    def list_attachments(self) -> RowFilterAttachmentList:
+        return RowFilterAttachmentList(attachments=self._attachments, total=len(self._attachments))
 
 
 def _seed_data_access(container) -> None:  # noqa: ANN001
@@ -131,6 +152,20 @@ def _seed_row_filter(container) -> None:  # noqa: ANN001
 
 def test_attribute_explorer_row_filter_principals_overview(client: TestClient, container) -> None:
     _seed_row_filter(container)
+    container.attribute_explorer._row_filters = _FakeRowFilters(  # noqa: SLF001
+        [
+            RowFilterAttachment(
+                table_full_name="sandbox.default.orders",
+                column_name="state_code",
+                dimension="state",
+            ),
+            RowFilterAttachment(
+                table_full_name="sandbox.default.other",
+                column_name="region",
+                dimension="org",
+            ),
+        ]
+    )
     admin = headers_for("admin@example.com")
     body = client.post(
         "/api/attribute-explorer/analyze",
@@ -147,3 +182,104 @@ def test_attribute_explorer_row_filter_principals_overview(client: TestClient, c
     assert by_name["finance-analysts"]["values"] == ["TX"]
     assert by_name["ana@example.com"]["principalType"] == "USER"
     assert by_name["finance-analysts"]["principalType"] == "GROUP"
+    tables = payload["tables"]
+    assert len(tables) == 1
+    assert tables[0]["fullName"] == "sandbox.default.orders"
+    assert tables[0]["columnName"] == "state_code"
+    assert tables[0]["tagValue"] == "state"
+    assert tables[0]["match"] == "exact"
+
+
+def test_attribute_explorer_sensitivity_lists_matching_columns(
+    client: TestClient, container
+) -> None:
+    identity = _service(container)
+    actor = _admin()
+    identity.upsert_definition(
+        UpsertAttributeDefinitionRequest(
+            key="sensitivity",
+            description="Sensitivity",
+            governed_tag_keys=["sensitivity_category", "sensitivity"],
+        ),
+        actor,
+    )
+    identity.assign(
+        AssignAttributeRequest(
+            principal_name="ana@example.com",
+            principal_type=PrincipalKind.USER,
+            attribute_key="sensitivity",
+            attribute_value="public.PII.Name",
+            expires_at=datetime.now(UTC) + timedelta(days=30),
+        ),
+        actor,
+    )
+    container.attribute_explorer._sql = _FakeSql(  # noqa: SLF001
+        [
+            {
+                "catalog_name": "sandbox",
+                "schema_name": "default",
+                "table_name": "customers",
+                "column_name": "email",
+                "tag_name": "sensitivity_category",
+                "tag_value": "public",
+            },
+            {
+                "catalog_name": "sandbox",
+                "schema_name": "default",
+                "table_name": "customers",
+                "column_name": "email",
+                "tag_name": "sensitivity",
+                "tag_value": "PII.Name",
+            },
+            {
+                "catalog_name": "sandbox",
+                "schema_name": "default",
+                "table_name": "customers",
+                "column_name": "phone",
+                "tag_name": "sensitivity_category",
+                "tag_value": "public",
+            },
+            {
+                "catalog_name": "sandbox",
+                "schema_name": "default",
+                "table_name": "customers",
+                "column_name": "phone",
+                "tag_name": "sensitivity",
+                "tag_value": "PII.Phone",
+            },
+            {
+                "catalog_name": "sandbox",
+                "schema_name": "hr",
+                "table_name": "employees",
+                "column_name": "ssn",
+                "tag_name": "sensitivity_category",
+                "tag_value": "hr",
+            },
+            {
+                "catalog_name": "sandbox",
+                "schema_name": "hr",
+                "table_name": "employees",
+                "column_name": "ssn",
+                "tag_name": "sensitivity",
+                "tag_value": "PII.SSN",
+            },
+        ]
+    )
+    admin = headers_for("admin@example.com")
+    body = client.post(
+        "/api/attribute-explorer/analyze",
+        headers=admin,
+        json={"attributeKey": "sensitivity", "attributeValue": "public"},
+    )
+    assert body.status_code == 200
+    payload = body.json()
+    assert payload["kind"] == "sensitivity"
+    holders = {h["principalName"]: h["match"] for h in payload["holders"]}
+    assert holders["ana@example.com"] == "descendant"
+    by_column = {t["columnName"]: t for t in payload["tables"]}
+    assert set(by_column) == {"email", "phone"}
+    assert by_column["email"]["fullName"] == "sandbox.default.customers"
+    assert by_column["email"]["tagValue"] == "public.PII.Name"
+    assert by_column["email"]["match"] == "descendant"
+    assert by_column["phone"]["tagValue"] == "public.PII.Phone"
+    assert by_column["phone"]["match"] == "descendant"

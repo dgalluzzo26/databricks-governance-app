@@ -1,4 +1,4 @@
-"""Models for Attribute Explorer — who holds a path and which tables it unlocks."""
+"""Models for Attribute Explorer — who holds a path and which resources it affects."""
 
 from __future__ import annotations
 
@@ -15,8 +15,8 @@ class AttributeExplorerKind(StrEnum):
 
     Attributes:
         DATA_ACCESS: Tag-driven ``dac_*`` group grants on reviewed tables.
-        SENSITIVITY: Column-mask ABAC (holders only; no table grant list).
-        ROW_FILTER: Row-filter dimension (holders only).
+        SENSITIVITY: Column-mask ABAC (holders + columns tagged with the path).
+        ROW_FILTER: Row-filter dimension (principals + attached table columns).
         OTHER: Unknown / free-form attribute.
     """
 
@@ -85,19 +85,24 @@ class AttributePrincipalSummary(ApiModel):
 
 
 class UnlockedTable(ApiModel):
-    """A reviewed table unlocked by the queried data-access path.
+    """A resource affected by the queried attribute path.
+
+    For data access this is a reviewed table unlocked by ``dac_*`` grants. For
+    sensitivity and row filters it is a tagged column (``column_name`` set).
 
     Attributes:
         full_name: ``catalog.schema.table``.
-        tag_value: ``data_access_control`` value on the table.
-        match: Exact tag vs descendant tag unlocked via nesting.
-        group_name: Managed group that receives SELECT.
+        tag_value: Access tag, sensitivity path, or row-filter dimension on the resource.
+        match: Exact vs descendant relation to the queried path.
+        group_name: Managed ``dac_*`` group when kind is data access.
+        column_name: Column carrying the sensitivity or row-filter tag, when applicable.
     """
 
     full_name: str
     tag_value: str
     match: AttributeHolderMatch
     group_name: str | None = None
+    column_name: str | None = None
 
 
 class AttributeExplorerResult(ApiModel):
@@ -111,8 +116,8 @@ class AttributeExplorerResult(ApiModel):
         parent_group: Nested parent group, if any.
         holders: Principals with related assignments (path lookup).
         principals: Row-filter overview — one row per principal with value list.
-        tables: Reviewed tables unlocked (data_access only).
-        note: Extra context for non–data-access kinds.
+        tables: Affected resources (unlocked tables, masked columns, or filtered columns).
+        note: Extra context when useful.
     """
 
     attribute_key: str
