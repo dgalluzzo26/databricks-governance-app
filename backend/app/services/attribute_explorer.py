@@ -162,6 +162,32 @@ class AttributeExplorerService:
             note=note,
         )
 
+    def classify(
+        self, key: str, value_source: ValueSource, settings: DataAccessSettings | None = None
+    ) -> AttributeExplorerKind:
+        """Map an attribute key to explorer kind."""
+        resolved = settings if settings is not None else self._data_access._settings()  # noqa: SLF001
+        return self._classify(key, resolved, value_source)
+
+    def resources_for(
+        self, kind: AttributeExplorerKind, key: str, value: str
+    ) -> list[UnlockedTable]:
+        """Return affected tables/columns for one attribute path.
+
+        Args:
+            kind: Classified attribute kind.
+            key: Attribute key (row-filter dimension for ROW_FILTER).
+            value: Path or value (ignored for row-filter dimension attachment lookup).
+        """
+        if kind == AttributeExplorerKind.DATA_ACCESS:
+            settings = self._data_access._settings()  # noqa: SLF001
+            return self._tables(settings, value, settings.hierarchy_separator)
+        if kind == AttributeExplorerKind.SENSITIVITY:
+            return self._sensitivity_resources(value)
+        if kind == AttributeExplorerKind.ROW_FILTER:
+            return self._row_filter_resources(key)
+        return []
+
     def _classify(
         self, key: str, settings: DataAccessSettings, value_source: ValueSource
     ) -> AttributeExplorerKind:

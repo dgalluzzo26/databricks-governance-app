@@ -122,7 +122,7 @@ The **Mask rule** and **Handler** columns tell you how a value is masked. For ex
 
 ## Identity: your attributes and requests
 
-**Identity** has three tabs.
+**Identity** has four tabs for signed-in users.
 
 ### My attributes
 
@@ -130,6 +130,19 @@ Every attribute you hold, how you got it (**Via** your user or a group), and whe
 Attributes that come from a group stay in place as long as you are in that group.
 
 ![My attributes tab](../frontend/public/help-images/user-my-attributes.png)
+
+### My access
+
+A fuller picture of what you can use:
+
+- **My groups** — every workspace group you belong to, and how many attributes each group
+  contributes
+- **Effective attributes by source** — the same attributes as My attributes, grouped under
+  **Direct** or **Via group-name**
+- **Show resources** — expand a sensitivity, row-filter, or data-access row to load the
+  tables or columns that path affects (on demand)
+
+Use this tab when you want to see inheritance through groups, not only the flat list.
 
 ### Request access
 

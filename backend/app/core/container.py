@@ -28,6 +28,7 @@ from backend.app.services.identity import IdentityService
 from backend.app.services.identity_attributes import IdentityAttributeService
 from backend.app.services.identity_uc_sync import IdentityUcSync
 from backend.app.services.mask_rules import MaskRuleService
+from backend.app.services.my_access import MyAccessService
 from backend.app.services.performance import PerformanceService
 from backend.app.services.policies import PolicyService
 from backend.app.services.policy_exceptions import PolicyExceptionService
@@ -61,6 +62,7 @@ class ServiceContainer:
         mask_rules: Mask rules and their policy pack.
         access_explorer: Per-table access analysis.
         attribute_explorer: Attribute path holders and unlocked tables.
+        my_access: Signed-in user's groups, effective attributes, and resource drill-down.
         policy_exceptions: Principals exempted from the app-managed policies.
         data_access: Tag-driven group grant sync (settings, readiness, dry-run/apply).
         recovery: Recovery export preview and Git target settings.
@@ -83,6 +85,7 @@ class ServiceContainer:
     mask_rules: MaskRuleService
     access_explorer: AccessExplorerService
     attribute_explorer: AttributeExplorerService
+    my_access: MyAccessService
     policy_exceptions: PolicyExceptionService
     data_access: DataAccessService
     recovery: RecoveryService
@@ -154,6 +157,7 @@ class ServiceContainer:
         attribute_explorer = AttributeExplorerService(
             storage, identity_attributes, access_requests, data_access, sql, row_filters
         )
+        my_access = MyAccessService(identity_attributes, data_access, attribute_explorer)
         return cls(
             config=config,
             workspace=workspace,
@@ -180,6 +184,7 @@ class ServiceContainer:
                 workspace,
             ),
             attribute_explorer=attribute_explorer,
+            my_access=my_access,
             policy_exceptions=policy_exceptions,
             data_access=data_access,
             recovery=RecoveryService(config, storage, workspace),

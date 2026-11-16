@@ -56,6 +56,9 @@ import type {
   DecideAccessRequestBody,
   GovernedTagList,
   IdentityAttributeAssignment,
+  MyAccessResources,
+  MyAccessResourcesRequest,
+  MyAccessSnapshot,
   ApplyPolicyExceptionsResult,
   PolicyDetail,
   PolicyException,
@@ -576,6 +579,28 @@ export class IdentityAttributesApi {
    */
   myAssignments(signal?: AbortSignal): Promise<AttributeAssignmentList> {
     return this.http.get<AttributeAssignmentList>("/identity/assignments/me", signal);
+  }
+
+  /**
+   * `GET /identity/my-access` — groups and effective attributes for the signed-in user.
+   *
+   * @param signal - Optional abort signal.
+   * @returns Snapshot of groups, attributes, and summary counts.
+   * @throws {@link ApiError} On a non-2xx response.
+   */
+  myAccess(signal?: AbortSignal): Promise<MyAccessSnapshot> {
+    return this.http.get<MyAccessSnapshot>("/identity/my-access", signal);
+  }
+
+  /**
+   * `POST /identity/my-access/resources` — tables/columns for one held attribute.
+   *
+   * @param body - Attribute key and value the caller holds.
+   * @returns Affected resources for that path.
+   * @throws {@link ApiError} On a non-2xx response.
+   */
+  myAccessResources(body: MyAccessResourcesRequest): Promise<MyAccessResources> {
+    return this.http.post<MyAccessResources>("/identity/my-access/resources", body);
   }
 
   /**

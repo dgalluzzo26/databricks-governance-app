@@ -27,6 +27,11 @@ from backend.app.models.identity_attribute import (
     IdentityAttributeAssignment,
     UpsertAttributeDefinitionRequest,
 )
+from backend.app.models.my_access import (
+    MyAccessResources,
+    MyAccessResourcesRequest,
+    MyAccessSnapshot,
+)
 from backend.app.models.principal import PrincipalKind
 
 router = APIRouter(prefix="/identity", tags=["identity-attributes"])
@@ -190,6 +195,27 @@ def my_assignments(user: User, container: Container) -> AttributeAssignmentList:
         Assignments belonging to the caller (and their groups as applicable).
     """
     return container.identity_attributes.list_for_user(user)
+
+
+@router.get("/my-access", response_model=MyAccessSnapshot)
+def my_access(user: User, container: Container) -> MyAccessSnapshot:
+    """Groups the caller belongs to and every attribute they hold (direct or via group).
+
+    Any signed-in user. Data-access rows include sync status when available.
+    """
+    return container.my_access.snapshot(user)
+
+
+@router.post("/my-access/resources", response_model=MyAccessResources)
+def my_access_resources(
+    body: MyAccessResourcesRequest, user: User, container: Container
+) -> MyAccessResources:
+    """Tables/columns affected by one attribute the caller holds.
+
+    Any signed-in user. The key/value must appear in their effective attributes
+    (for row-filter dimensions, any held value for that key is enough).
+    """
+    return container.my_access.resources(body, user)
 
 
 @router.post("/assignments", response_model=IdentityAttributeAssignment)

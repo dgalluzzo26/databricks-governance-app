@@ -43,6 +43,8 @@ _CATALOG: tuple[tuple[str, str, str, float], ...] = (
     ("DELETE", "/api/identity/definitions/{key}", "Delete attribute definition", 3000),
     ("GET", "/api/identity/assignments", "List identity assignments", 2000),
     ("GET", "/api/identity/assignments/me", "My identity assignments", 1500),
+    ("GET", "/api/identity/my-access", "My access overview", 3000),
+    ("POST", "/api/identity/my-access/resources", "My access resources", 15000),
     ("POST", "/api/identity/assignments", "Assign identity attribute", 5000),
     ("POST", "/api/identity/assignments/{assignment_id}/revoke", "Revoke identity assignment", 5000),
     ("POST", "/api/identity/sync-uc", "Sync identity attributes to Unity Catalog", 60000),

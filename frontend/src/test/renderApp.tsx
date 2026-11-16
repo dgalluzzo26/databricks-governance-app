@@ -38,6 +38,9 @@ import type {
   UpsertPolicyExceptionRequest,
   UpsertRowFilterDimensionRequest,
   MaskHandlerValidateRequest,
+  MyAccessResources,
+  MyAccessResourcesRequest,
+  MyAccessSnapshot,
   TableAccessInsight,
   DataAccessAnalytics,
   DataAccessViewPage,
@@ -613,6 +616,58 @@ export const testMyAttributes: AttributeAssignmentList = {
   total: 1,
 };
 
+export const testMyAccess: MyAccessSnapshot = {
+  groups: [
+    { name: "admins", attributeCount: 0 },
+    { name: "users", attributeCount: 1 },
+  ],
+  attributes: [
+    {
+      assignmentId: "a1",
+      attributeKey: "sensitivity",
+      attributeValue: "finance.budget",
+      kind: "sensitivity",
+      principalType: "USER",
+      principalName: "ana.lopez@example.com",
+      expiresAt: "2026-12-31T23:59:00Z",
+      accessStatus: null,
+    },
+    {
+      assignmentId: "a-group",
+      attributeKey: "state",
+      attributeValue: "CA",
+      kind: "row_filter",
+      principalType: "GROUP",
+      principalName: "users",
+      expiresAt: null,
+      accessStatus: null,
+    },
+    {
+      assignmentId: "a-dac",
+      attributeKey: "data_access",
+      attributeValue: "finance",
+      kind: "data_access",
+      principalType: "USER",
+      principalName: "ana.lopez@example.com",
+      expiresAt: "2026-12-31T23:59:00Z",
+      accessStatus: {
+        assignmentId: "a-dac",
+        principalName: "ana.lopez@example.com",
+        value: "finance",
+        groupName: "dac_finance",
+        membership: "member",
+        structure: "ready",
+        detail: "Member of dac_finance; groups and grants are in place",
+      },
+    },
+  ],
+  groupCount: 2,
+  attributeCount: 3,
+  directAttributeCount: 2,
+  inheritedAttributeCount: 1,
+  dataAccessReadyCount: 1,
+};
+
 export const testCategoryApprovers: CategoryApproverList = {
   approvers: [
     {
@@ -1091,6 +1146,7 @@ export function fakeServices(
     definitions?: AttributeDefinitionList | Error;
     assignments?: AttributeAssignmentList | Error;
     myAttributes?: AttributeAssignmentList | Error;
+    myAccess?: MyAccessSnapshot | Error;
     governedTags?: GovernedTagList | Error;
     categoryApprovers?: CategoryApproverList | Error;
     myAccessRequests?: AccessRequestList | Error;
@@ -1121,6 +1177,7 @@ export function fakeServices(
   const definitions = overrides.definitions ?? testDefinitions;
   const assignments = overrides.assignments ?? testMyAttributes;
   const myAttributes = overrides.myAttributes ?? testMyAttributes;
+  const myAccess = overrides.myAccess ?? testMyAccess;
   const categoryApprovers = overrides.categoryApprovers ?? testCategoryApprovers;
   const myAccessRequests = overrides.myAccessRequests ?? testMyAccessRequests;
   const approvals = overrides.approvals ?? testApprovals;
@@ -1437,6 +1494,41 @@ export function fakeServices(
         assignments instanceof Error ? Promise.reject(assignments) : Promise.resolve(assignments),
       myAssignments: () =>
         myAttributes instanceof Error ? Promise.reject(myAttributes) : Promise.resolve(myAttributes),
+      myAccess: () => (myAccess instanceof Error ? Promise.reject(myAccess) : Promise.resolve(myAccess)),
+      myAccessResources: async (body: MyAccessResourcesRequest): Promise<MyAccessResources> => ({
+        attributeKey: body.attributeKey,
+        attributeValue: body.attributeValue,
+        kind: body.attributeKey === "state" ? "row_filter" : body.attributeKey === "data_access" ? "data_access" : "sensitivity",
+        tables:
+          body.attributeKey === "state"
+            ? [
+                {
+                  fullName: "sandbox.default.orders",
+                  columnName: "state_code",
+                  tagValue: "state",
+                  match: "exact",
+                  groupName: null,
+                },
+              ]
+            : body.attributeKey === "data_access"
+              ? [
+                  {
+                    fullName: "sandbox.finance.budget",
+                    tagValue: body.attributeValue,
+                    match: "exact",
+                    groupName: "dac_finance",
+                  },
+                ]
+              : [
+                  {
+                    fullName: "sandbox.default.customers",
+                    columnName: "email",
+                    tagValue: body.attributeValue,
+                    match: "exact",
+                    groupName: null,
+                  },
+                ],
+      }),
       assign: async (body: AssignAttributeRequest) =>
         ({
           assignmentId: "new",

@@ -1078,6 +1078,49 @@ export interface AttributeExplorerResult {
   note: string | null;
 }
 
+/** One of the caller's groups on Identity → My access. */
+export interface MyAccessGroup {
+  name: string;
+  attributeCount: number;
+}
+
+/** One effective attribute on Identity → My access. */
+export interface MyAccessAttribute {
+  assignmentId: string;
+  attributeKey: string;
+  attributeValue: string;
+  kind: AttributeExplorerKind;
+  principalType: PrincipalKind;
+  principalName: string;
+  expiresAt: string | null;
+  accessStatus?: AccessStatus | null;
+}
+
+/** Personal access overview (`GET /identity/my-access`). */
+export interface MyAccessSnapshot {
+  groups: MyAccessGroup[];
+  attributes: MyAccessAttribute[];
+  groupCount: number;
+  attributeCount: number;
+  directAttributeCount: number;
+  inheritedAttributeCount: number;
+  dataAccessReadyCount: number;
+}
+
+/** Request body for `POST /identity/my-access/resources`. */
+export interface MyAccessResourcesRequest {
+  attributeKey: string;
+  attributeValue: string;
+}
+
+/** Resources unlocked/filtered by one held attribute. */
+export interface MyAccessResources {
+  attributeKey: string;
+  attributeValue: string;
+  kind: AttributeExplorerKind;
+  tables: UnlockedTable[];
+}
+
 /** Who may see a help guide (Help UI filters by effective role / View as). */
 export type HelpAudience = "user" | "approver" | "admin";
 

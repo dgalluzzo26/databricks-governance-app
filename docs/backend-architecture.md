@@ -151,7 +151,7 @@ through `quote_identifier` and literals through `string_literal`; never interpol
 | --- | --- | --- | --- |
 | Access explorer | `/api/access-explorer` | `AccessExplorerService` | Masking & row filters |
 | Attribute explorer | `/api/attribute-explorer` | `AttributeExplorerService` | Masking & row filters |
-| Identity, Approvals | `/api/identity` | `IdentityAttributeService`, `AccessRequestService` | Masking & row filters |
+| Identity, Approvals | `/api/identity` | `IdentityAttributeService`, `AccessRequestService`, `MyAccessService` | Masking & row filters |
 | Policies | `/api/policies` | `PolicyService` | |
 | Exceptions | `/api/policy-exceptions` | `PolicyExceptionService` | Masking & row filters |
 | Row filters | `/api/row-filters` | `RowFilterService` | Masking & row filters |

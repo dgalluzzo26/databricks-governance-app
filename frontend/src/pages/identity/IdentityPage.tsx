@@ -3,9 +3,9 @@
  * management of category approvers, attribute assignments, and attribute definitions.
  *
  * Approvals live on `/approvals`. The active tab is stored in the `?tab=` search parameter.
- * Every signed-in user sees "My attributes", "Request access", and "My requests". "Assignments"
- * is shown to app admins and path approvers (approvers only grant paths they can decide).
- * "Approvers" and "Definitions" are shown only to app admins. Legacy `?tab=approvals`
+ * Every signed-in user sees "My attributes", "My access", "Request access", and "My requests".
+ * "Assignments" is shown to app admins and path approvers (approvers only grant paths they can
+ * decide). "Approvers" and "Definitions" are shown only to app admins. Legacy `?tab=approvals`
  * redirects to `/approvals`. This gating is a UI convenience only; the backend enforces
  * authorization on every endpoint.
  */
@@ -24,7 +24,9 @@ import {
   useDeleteCategoryApprover,
   useGovernedTags,
   useGrantableAttributes,
+  useMyAccess,
   useMyAccessRequests,
+  useMyAccessResources,
   useMyAccessStatus,
   useMyAttributes,
   useRevokeAttribute,
@@ -36,11 +38,14 @@ import { useEffectiveUser } from "@/app/viewAs";
 import type {
   AccessRequest,
   AttributeDefinition,
+  AttributeExplorerKind,
   BulkAssignResult,
   CategoryApprover,
   GovernedTagSummary,
   IdentityAttributeAssignment,
+  MyAccessAttribute,
   PrincipalKind,
+  UnlockedTable,
   ValueSource,
 } from "@/api/types";
 import { AccessStatusBadge } from "@/components/AccessStatusBadge";
@@ -61,6 +66,7 @@ import styles from "./IdentityPage.module.css";
  */
 type IdentityTab =
   | "mine"
+  | "my-access"
   | "request"
   | "my-requests"
   | "approvers"
@@ -81,7 +87,7 @@ const PRINCIPAL_TYPES: PrincipalKind[] = ["USER", "GROUP", "SERVICE_PRINCIPAL"];
 /** Principal kinds that can be configured as category approvers (service principals are excluded). */
 const APPROVER_TYPES: PrincipalKind[] = ["USER", "GROUP"];
 /** Tabs available to every signed-in user. */
-const USER_TABS: IdentityTab[] = ["mine", "request", "my-requests"];
+const USER_TABS: IdentityTab[] = ["mine", "my-access", "request", "my-requests"];
 /** Tabs available to app admins and path approvers. */
 const ASSIGNER_TABS: IdentityTab[] = ["assignments"];
 /** Tabs available only to app admins. */
@@ -165,6 +171,15 @@ export function IdentityPage() {
         <button
           type="button"
           role="tab"
+          aria-selected={tab === "my-access"}
+          className={`${styles.tab}${tab === "my-access" ? ` ${styles.tabActive}` : ""}`}
+          onClick={() => setTab("my-access")}
+        >
+          My access
+        </button>
+        <button
+          type="button"
+          role="tab"
           aria-selected={tab === "request"}
           className={`${styles.tab}${tab === "request" ? ` ${styles.tabActive}` : ""}`}
           onClick={() => setTab("request")}
@@ -216,6 +231,7 @@ export function IdentityPage() {
       </div>
 
       {tab === "mine" && <MyAttributesPanel />}
+      {tab === "my-access" && <MyAccessPanel />}
       {tab === "request" && <RequestAccessPanel />}
       {tab === "my-requests" && <MyRequestsPanel />}
       {tab === "approvers" && user?.isAdmin && <CategoryApproversPanel />}
@@ -248,6 +264,281 @@ function MyAttributesPanel() {
         <MyAttributesTable assignments={data.assignments} />
       )}
     </Card>
+  );
+}
+
+/**
+ * "My access" tab: groups the user belongs to, attributes by Via (direct / group), and
+ * expandable rows that load affected tables or columns on demand.
+ */
+function MyAccessPanel() {
+  const { data, isPending, error } = useMyAccess();
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  if (isPending) return <Spinner label="Loading your access" />;
+  if (error) return <ErrorAlert error={error} title="Could not load your access" />;
+  if (!data) return null;
+
+  const direct = data.attributes.filter((item) => item.principalType === "USER");
+  const byGroup = new Map<string, MyAccessAttribute[]>();
+  for (const item of data.attributes) {
+    if (item.principalType !== "GROUP") continue;
+    const list = byGroup.get(item.principalName) ?? [];
+    list.push(item);
+    byGroup.set(item.principalName, list);
+  }
+
+  return (
+    <div className={styles.stack}>
+      <Card title="Summary">
+        <div className={styles.buttonRow} style={{ flexWrap: "wrap", gap: "var(--space-3)" }}>
+          <Badge>{data.groupCount} groups</Badge>
+          <Badge>{data.attributeCount} attributes</Badge>
+          <Badge tone="info">{data.directAttributeCount} direct</Badge>
+          <Badge tone="info">{data.inheritedAttributeCount} via groups</Badge>
+          <Badge tone="success">{data.dataAccessReadyCount} data access ready</Badge>
+        </div>
+      </Card>
+
+      <Card title="My groups" actions={<Badge>{data.groups.length}</Badge>}>
+        {data.groups.length === 0 ? (
+          <div className={styles.empty}>You are not in any workspace groups.</div>
+        ) : (
+          <div className={styles.tableWrap}>
+            <table className={styles.table} aria-label="My groups">
+              <thead>
+                <tr>
+                  <th>Group</th>
+                  <th>Attributes from this group</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.groups.map((group) => (
+                  <tr key={group.name}>
+                    <td>
+                      <code>{group.name}</code>
+                    </td>
+                    <td>
+                      <Badge>{group.attributeCount}</Badge>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      <Card title="Effective attributes by source" actions={<Badge>{data.attributeCount}</Badge>}>
+        {data.attributeCount === 0 ? (
+          <div className={styles.empty}>No active attributes are assigned to you or your groups.</div>
+        ) : (
+          <div className={styles.stack}>
+            {direct.length > 0 && (
+              <MyAccessAttributeSection
+                title="Direct"
+                rows={direct}
+                expandedId={expandedId}
+                onToggle={setExpandedId}
+              />
+            )}
+            {[...byGroup.entries()].map(([groupName, rows]) => (
+              <MyAccessAttributeSection
+                key={groupName}
+                title={`Via ${groupName}`}
+                rows={rows}
+                expandedId={expandedId}
+                onToggle={setExpandedId}
+              />
+            ))}
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+/**
+ * One Via section (Direct or a group) of expandable attribute rows.
+ */
+function MyAccessAttributeSection({
+  title,
+  rows,
+  expandedId,
+  onToggle,
+}: {
+  title: string;
+  rows: MyAccessAttribute[];
+  expandedId: string | null;
+  onToggle: (id: string | null) => void;
+}) {
+  return (
+    <div className={styles.stack}>
+      <h3 className={styles.label}>{title}</h3>
+      <div className={styles.tableWrap}>
+        <table className={styles.table} aria-label={title}>
+          <thead>
+            <tr>
+              <th>Attribute</th>
+              <th>Value</th>
+              <th>Kind</th>
+              <th>Expires</th>
+              <th>Data access</th>
+              <th>Resources</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((item) => {
+              const open = expandedId === item.assignmentId;
+              return (
+                <MyAccessAttributeRow
+                  key={item.assignmentId}
+                  item={item}
+                  open={open}
+                  onToggle={() => onToggle(open ? null : item.assignmentId)}
+                />
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * One attribute row that can expand to load affected tables/columns.
+ */
+function MyAccessAttributeRow({
+  item,
+  open,
+  onToggle,
+}: {
+  item: MyAccessAttribute;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const resources = useMyAccessResources(
+    open ? item.attributeKey : null,
+    open ? item.attributeValue : null,
+  );
+  const canExpand = item.kind === "data_access" || item.kind === "sensitivity" || item.kind === "row_filter";
+
+  return (
+    <>
+      <tr>
+        <td>
+          <code>{item.attributeKey}</code>
+        </td>
+        <td>
+          <Badge tone="info">{item.attributeValue}</Badge>
+        </td>
+        <td>
+          <Badge>{item.kind.replaceAll("_", " ")}</Badge>
+        </td>
+        <td className={styles.muted}>{formatWhen(item.expiresAt)}</td>
+        <td>
+          <AccessStatusBadge status={item.accessStatus ?? undefined} />
+        </td>
+        <td>
+          {canExpand ? (
+            <button type="button" className={styles.button} onClick={onToggle} aria-expanded={open}>
+              {open ? "Hide" : "Show"} resources
+            </button>
+          ) : (
+            <span className={styles.muted}>—</span>
+          )}
+        </td>
+      </tr>
+      {open && (
+        <tr>
+          <td colSpan={6}>
+            {resources.isPending && <Spinner label="Loading resources" />}
+            {resources.error && (
+              <ErrorAlert error={resources.error} title="Could not load resources" />
+            )}
+            {resources.data && (
+              <MyAccessResourcesTable kind={resources.data.kind} tables={resources.data.tables} />
+            )}
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+/**
+ * Inline table of resources for an expanded My access attribute.
+ */
+function MyAccessResourcesTable({
+  kind,
+  tables,
+}: {
+  kind: AttributeExplorerKind;
+  tables: UnlockedTable[];
+}) {
+  const showColumn = kind === "sensitivity" || kind === "row_filter";
+  const title =
+    kind === "sensitivity"
+      ? "Columns affected"
+      : kind === "row_filter"
+        ? "Tables filtered"
+        : "Tables unlocked";
+  const empty =
+    kind === "sensitivity"
+      ? "No columns tagged with this sensitivity path (or a descendant)."
+      : kind === "row_filter"
+        ? "No table columns are tagged with this row-filter dimension."
+        : "No reviewed tables tagged with this path (or a descendant).";
+
+  if (tables.length === 0) {
+    return <div className={styles.empty}>{empty}</div>;
+  }
+
+  return (
+    <div className={styles.stack}>
+      <div className={styles.label}>
+        {title} <Badge>{tables.length}</Badge>
+      </div>
+      <div className={styles.tableWrap}>
+        <table className={styles.table} aria-label={title}>
+          <thead>
+            <tr>
+              <th>Table</th>
+              {showColumn && <th>Column</th>}
+              <th>{kind === "sensitivity" ? "Sensitivity path" : kind === "row_filter" ? "Dimension" : "Tag value"}</th>
+              <th>Match</th>
+              {kind === "data_access" && <th>Group</th>}
+            </tr>
+          </thead>
+          <tbody>
+            {tables.map((item) => (
+              <tr key={`${item.fullName}:${item.columnName ?? ""}:${item.tagValue}`}>
+                <td>
+                  <Link to={`/access-explorer?table=${encodeURIComponent(item.fullName)}`}>
+                    <code>{item.fullName}</code>
+                  </Link>
+                </td>
+                {showColumn && (
+                  <td>
+                    <code>{item.columnName ?? "—"}</code>
+                  </td>
+                )}
+                <td>
+                  <code>{item.tagValue}</code>
+                </td>
+                <td>{item.match}</td>
+                {kind === "data_access" && (
+                  <td>
+                    <code>{item.groupName ?? "—"}</code>
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 

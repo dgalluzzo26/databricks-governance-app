@@ -60,6 +60,9 @@ export const queryKeys = {
   grantableAttributes: ["identity-grantable-attributes"] as const,
   attributeAssignments: (params: AssignmentListParams) => ["identity-assignments", params] as const,
   myAttributes: ["identity-assignments", "me"] as const,
+  myAccess: ["identity-my-access"] as const,
+  myAccessResources: (key: string, value: string) =>
+    ["identity-my-access", "resources", key, value] as const,
   categoryApprovers: ["category-approvers"] as const,
   myAccessRequests: ["access-requests", "mine"] as const,
   approvals: ["approvals"] as const,
@@ -612,6 +615,40 @@ export function useMyAttributes() {
     queryKey: queryKeys.myAttributes,
     queryFn: ({ signal }) => api.identityAttributes.myAssignments(signal),
     staleTime: 15_000,
+  });
+}
+
+/**
+ * Fetches the signed-in user's groups and effective attributes (`GET /identity/my-access`).
+ *
+ * @remarks Key: `queryKeys.myAccess`. Stale after 15 seconds.
+ */
+export function useMyAccess() {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.myAccess,
+    queryFn: ({ signal }) => api.identityAttributes.myAccess(signal),
+    staleTime: 15_000,
+  });
+}
+
+/**
+ * Lazily loads tables/columns for one held attribute (`POST /identity/my-access/resources`).
+ *
+ * @param key - Attribute key when expanded; null disables the query.
+ * @param value - Attribute value when expanded.
+ */
+export function useMyAccessResources(key: string | null, value: string | null) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.myAccessResources(key ?? "", value ?? ""),
+    queryFn: () =>
+      api.identityAttributes.myAccessResources({
+        attributeKey: key ?? "",
+        attributeValue: value ?? "",
+      }),
+    enabled: Boolean(key && value),
+    staleTime: 60_000,
   });
 }
 
