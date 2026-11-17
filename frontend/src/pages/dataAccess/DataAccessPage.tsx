@@ -524,8 +524,15 @@ function SettingsCard(props: {
             <input
               className={styles.input}
               value={form.accessTagKey}
-              onChange={(e) => setForm({ ...form, accessTagKey: e.target.value })}
+              readOnly
+              aria-readonly="true"
+              title="Set by the Identity data-access definition"
             />
+            <span className={styles.muted}>
+              From the{" "}
+              <Link to="/identity?tab=definitions">Identity data-access definition</Link>. Not
+              editable here.
+            </span>
           </label>
           <label className={styles.field}>
             <span className={styles.label}>Review tag</span>
