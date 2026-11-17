@@ -114,3 +114,24 @@ def test_no_names_makes_no_calls() -> None:
     scim = _FakeScim([], [])
     assert gm.expand_group_members(_Client(scim), ["", "  "]) == {}
     assert scim.calls == []
+
+
+def test_pages_when_total_results_is_a_string() -> None:
+    users = [_user("u1", "ana@example.com"), _user("u2", "bo@example.com")]
+    groups = [
+        {"id": "g1", "displayName": "finance", "members": [
+            {"value": "u1", "display": "Ana", "$ref": "Users/u1"},
+        ]},
+        {"id": "g2", "displayName": "ops", "members": [
+            {"value": "u2", "display": "Bo", "$ref": "Users/u2"},
+        ]},
+    ]
+
+    class _StringTotal(_FakeScim):
+        def do(self, method: str, path: str, query: dict[str, Any] | None = None) -> Any:
+            payload = super().do(method, path, query)
+            payload["totalResults"] = str(payload["totalResults"])
+            return payload
+
+    result = gm.expand_group_members(_Client(_StringTotal(groups, users, page=1)), ["ops"])
+    assert result == {"ops": {"bo@example.com"}}

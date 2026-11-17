@@ -18,7 +18,8 @@ logger = logging.getLogger(__name__)
 
 ACCOUNT_SCIM_GROUPS = "/api/2.0/account/scim/v2/Groups"
 ACCOUNT_SCIM_USERS = "/api/2.0/account/scim/v2/Users"
-PAGE_SIZE = 100
+# Match DataAccessService Account SCIM listings: one large page, warn if truncated.
+PAGE_SIZE = 10000
 
 
 class ScimApi(Protocol):
@@ -36,9 +37,10 @@ class ScimClient(Protocol):
 
 
 def list_scim(client: ScimClient, path: str, attributes: str) -> list[dict[str, Any]]:
-    """Read every resource from a paged SCIM listing."""
+    """Read Account SCIM resources, paging until exhausted (count capped per request)."""
     resources: list[dict[str, Any]] = []
     start = 1
+    total = 0
     while True:
         payload = client.api_client.do(
             "GET",
@@ -49,10 +51,24 @@ def list_scim(client: ScimClient, path: str, attributes: str) -> list[dict[str, 
             break
         page = [r for r in (payload.get("Resources") or []) if isinstance(r, dict)]
         resources.extend(page)
-        total = payload.get("totalResults")
+        try:
+            total = int(payload.get("totalResults") or 0)
+        except (TypeError, ValueError):
+            total = 0
         start += len(page)
-        if not page or not isinstance(total, int) or start > total:
+        if not page:
             break
+        if total and start > total:
+            break
+        if not total and len(page) < PAGE_SIZE:
+            break
+    if total and len(resources) < total:
+        logger.warning(
+            "Account SCIM %s returned %s of %s resources; later pages may be incomplete",
+            path,
+            len(resources),
+            total,
+        )
     return resources
 
 
