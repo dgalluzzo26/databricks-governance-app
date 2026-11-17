@@ -43,6 +43,9 @@ resources:
           # Job that owns the data-access schedule; Run now triggers it and waits.
           - name: DATA_ACCESS_SYNC_JOB_ID
             value_from: data-access-sync-job
+          # Daily usage rollup; Refresh on the Usage analytics page triggers it.
+          - name: USAGE_ROLLUP_JOB_ID
+            value_from: usage-rollup-job
       resources:
         - name: sql-warehouse
           sql_warehouse:
@@ -66,4 +69,8 @@ resources:
         - name: data-access-sync-job
           job:
             id: ${resources.jobs.data_access_sync.id}
+            permission: CAN_MANAGE
+        - name: usage-rollup-job
+          job:
+            id: ${resources.jobs.usage_rollup.id}
             permission: CAN_MANAGE

@@ -220,6 +220,7 @@ through `quote_identifier` and literals through `string_literal`; never interpol
 | Mask registry mirror | `ServiceContainer.startup` | App start when rules exist |
 | Grants sync scheduler | `DataAccessService.start_scheduler` | Every `interval_minutes` when `schedule_enabled` |
 | Grants sync Job | Lakeflow Job `data-governance-app-data-access-sync` (`backend/jobs/run_data_access_sync.py`) | Schedule and manual runs; the Job preflights Lakebase and the Admin SP, then runs the sync with `mirror_uc=False` |
+| Usage rollup Job | Lakeflow Job `data-governance-app-usage-rollup` (`backend/jobs/run_usage_rollup.py`) | Daily 06:00 UTC (+ manual); Account Admin SP rolls lineage for enrolled catalogs into `{app_catalog}.usage` (see `docs/usage-analytics.md`) |
 | Recovery Git schedule | `RecoveryService.start_scheduler` | Every `interval_hours` (1–24) when `schedule_enabled`; shared settings lease across app instances |
 | Immediate group membership | `DataAccessService.on_assignment_event` (Identity listener) | Each data-access approval, assign, or revoke |
 | Outstanding work and tag snapshot | `DataAccessService._record_state` | End of every sync run |

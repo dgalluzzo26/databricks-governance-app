@@ -4,6 +4,7 @@ from provisioning.steps.app_storage import DeltaStorageStep
 from provisioning.steps.base import ProvisioningStep
 from provisioning.steps.catalogs import CatalogsStep
 from provisioning.steps.masking_functions import MaskingFunctionsStep
+from provisioning.steps.usage_analytics import UsageAnalyticsStep
 
 ALL_STEPS: list[type[ProvisioningStep]] = [
     CatalogsStep,
@@ -11,6 +12,7 @@ ALL_STEPS: list[type[ProvisioningStep]] = [
     MaskingFunctionsStep,
     GrantAppPermissionsStep,
     GrantAdminSpPermissionsStep,
+    UsageAnalyticsStep,
 ]
 
 __all__ = ["ALL_STEPS", "ProvisioningStep"]

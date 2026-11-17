@@ -1,0 +1,62 @@
+# Daily usage rollup: lineage → ``{app_catalog}.usage`` summary tables.
+# Schedule + Refresh (Phase 2) both go through this job (max_concurrent_runs: 1).
+resources:
+  jobs:
+    usage_rollup:
+      name: ${var.app_name}-usage-rollup
+      description: >
+        Rolls Unity Catalog table/column lineage for enrollment-tagged catalogs into
+        small summary tables under the app catalog's usage schema (who read what,
+        sensitive-column clear vs masked, access snapshot).
+      max_concurrent_runs: 1
+      queue:
+        enabled: true
+      timeout_seconds: 7200
+      # Same Account Admin SP as the grants sync: needs SELECT on system.access /
+      # system.query and ownership of the usage schema.
+      run_as:
+        service_principal_name: ${var.sync_job_run_as_sp}
+      schedule:
+        # 06:00 UTC daily (lineage for the prior day has usually landed by then).
+        quartz_cron_expression: "0 0 6 * * ?"
+        timezone_id: UTC
+        pause_status: UNPAUSED
+      parameters:
+        - name: trigger
+          default: schedule
+        - name: actor
+          default: scheduler
+        - name: run_id
+          default: ""
+        - name: backfill_days
+          default: "90"
+        - name: lookback_days
+          default: "3"
+      tasks:
+        - task_key: rollup
+          environment_key: default
+          max_retries: 1
+          min_retry_interval_millis: 120000
+          spark_python_task:
+            python_file: ../backend/jobs/run_usage_rollup.py
+            parameters:
+              - "--trigger={{job.parameters.trigger}}"
+              - "--actor={{job.parameters.actor}}"
+              - "--run_id={{job.parameters.run_id}}"
+              - "--backfill-days={{job.parameters.backfill_days}}"
+              - "--lookback-days={{job.parameters.lookback_days}}"
+              - "--warehouse-id=${resources.sql_warehouses.app_warehouse.id}"
+              - "--app-catalog=${var.app_catalog}"
+              - "--app-schema=${var.app_schema}"
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "4"
+            dependencies:
+              - databricks-sdk==0.163.0
+              - pydantic==2.14.3
+              - pydantic-settings==2.16.2
+              - psycopg[binary]==3.3.8
+              - psycopg-pool==3.3.3
+              - cachetools==7.2.8
+              - PyYAML==6.0.3
