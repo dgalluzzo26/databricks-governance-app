@@ -414,7 +414,7 @@ class UsageAnalyticsService:
     def _load_top_tables(
         self, days: int, limit: int = 10, search: str | None = None
     ) -> list[UsageTableSummary]:
-        params: dict[str, Any] = {"days": days, "limit": limit}
+        params: dict[str, Any] = {"days": days}
         search_clause = ""
         if search:
             params["search"] = f"%{search.lower()}%"
@@ -433,7 +433,7 @@ class UsageAnalyticsService:
               {search_clause}
             GROUP BY u.table_full_name, u.catalog_name
             ORDER BY reads DESC
-            LIMIT :limit
+            LIMIT {int(limit)}
             """,
             params,
         )
@@ -453,7 +453,7 @@ class UsageAnalyticsService:
     def _load_top_users(
         self, days: int, limit: int = 10, search: str | None = None
     ) -> list[UsageUserSummary]:
-        params: dict[str, Any] = {"days": days, "limit": limit}
+        params: dict[str, Any] = {"days": days}
         search_clause = ""
         if search:
             params["search"] = f"%{search.lower()}%"
@@ -465,12 +465,12 @@ class UsageAnalyticsService:
                    sum(reads) AS reads,
                    count(distinct table_full_name) AS distinct_tables,
                    max(last_read_at) AS last_read_at
-            FROM {self._tables.fqn('user_table_usage_daily')}
+            FROM {self._tables.fqn('user_table_usage_daily')} u
             WHERE event_date >= date_sub(current_date(), :days)
               {search_clause}
             GROUP BY user_name
             ORDER BY reads DESC
-            LIMIT :limit
+            LIMIT {int(limit)}
             """,
             params,
         )
