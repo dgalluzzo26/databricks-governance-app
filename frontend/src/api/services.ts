@@ -35,6 +35,11 @@ import type {
   PerformanceSlowRequestPage,
   PerformanceSummary,
   AppSettings,
+  UsageOverview,
+  UsageTableList,
+  UsageUserList,
+  UsageTableDetail,
+  UsageRefreshResponse,
   DataAccessSettings,
   DataAccessSettingsView,
   HelpDocList,
@@ -1360,11 +1365,45 @@ export class PerformanceApi {
   }
 }
 
+export class UsageAnalyticsApi {
+  constructor(private readonly http: HttpClient) {}
+
+  overview(days: number = 30, signal?: AbortSignal): Promise<UsageOverview> {
+    return this.http.get<UsageOverview>(`/usage-analytics/overview?days=${days}`, signal);
+  }
+
+  tables(days: number = 30, q?: string, limit: number = 50, signal?: AbortSignal): Promise<UsageTableList> {
+    const params = new URLSearchParams({ days: String(days), limit: String(limit) });
+    if (q) params.set("q", q);
+    return this.http.get<UsageTableList>(`/usage-analytics/tables?${params.toString()}`, signal);
+  }
+
+  users(days: number = 30, q?: string, limit: number = 50, signal?: AbortSignal): Promise<UsageUserList> {
+    const params = new URLSearchParams({ days: String(days), limit: String(limit) });
+    if (q) params.set("q", q);
+    return this.http.get<UsageUserList>(`/usage-analytics/users?${params.toString()}`, signal);
+  }
+
+  tableDetail(tableFullName: string, days: number = 30, signal?: AbortSignal): Promise<UsageTableDetail> {
+    const params = new URLSearchParams({ table_full_name: tableFullName, days: String(days) });
+    return this.http.get<UsageTableDetail>(`/usage-analytics/table-detail?${params.toString()}`, signal);
+  }
+
+  refresh(): Promise<UsageRefreshResponse> {
+    return this.http.post<UsageRefreshResponse>("/usage-analytics/refresh", {});
+  }
+
+  exportUrl(kind: "tables" | "users" | "sensitive", days: number = 30): string {
+    return `/api/usage-analytics/export?kind=${kind}&days=${days}`;
+  }
+}
+
 export interface ApiServices {
   identity: IdentityApi;
   directory: DirectoryApi;
   appInfo: AppInfoApi;
   dataAccess: DataAccessApi;
+  usageAnalytics: UsageAnalyticsApi;
   appSettings: AppSettingsApi;
   policies: PoliciesApi;
   identityAttributes: IdentityAttributesApi;
@@ -1390,6 +1429,7 @@ export function createApiServices(http: HttpClient = new HttpClient()): ApiServi
     directory: new DirectoryApi(http),
     appInfo: new AppInfoApi(http),
     dataAccess: new DataAccessApi(http),
+    usageAnalytics: new UsageAnalyticsApi(http),
     appSettings: new AppSettingsApi(http),
     performance: new PerformanceApi(http),
     recovery: new RecoveryApi(http),

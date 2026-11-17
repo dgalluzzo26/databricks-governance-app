@@ -1678,3 +1678,130 @@ export interface TableQueryParams {
   /** Case-insensitive "contains" text per column key. */
   filters?: Record<string, string>;
 }
+
+/** Headline usage metrics over a time window (`GET /usage-analytics/overview`). */
+export interface UsageKpis {
+  totalTableReads: number;
+  activeUsers: number;
+  tablesAccessed: number;
+  sensitiveColumnReads: number;
+  clearReads: number;
+  maskedReads: number;
+  exemptReads: number;
+}
+
+/** Metadata from the latest usage rollup run. */
+export interface UsageLastRun {
+  runId: string;
+  status: string;
+  finishedAt: string | null;
+  dataAsOf: string | null;
+  windowStart: string | null;
+  windowEnd: string | null;
+  readEvents: number;
+  catalogs: string[];
+}
+
+/** One day of usage metrics for trend charts. */
+export interface UsageDailyPoint {
+  date: string;
+  reads: number;
+  distinctUsers: number;
+  clearReads: number;
+  maskedReads: number;
+}
+
+/** Aggregated usage for one table in an enrolled catalog. */
+export interface UsageTableSummary {
+  tableFullName: string;
+  catalogName: string;
+  schemaName: string;
+  tableName: string;
+  reads: number;
+  distinctUsers: number;
+  lastReadAt: string | null;
+}
+
+/** Aggregated usage for one user across enrolled tables. */
+export interface UsageUserSummary {
+  userName: string;
+  reads: number;
+  distinctTables: number;
+  lastReadAt: string | null;
+}
+
+/** Aggregated reads for one sensitivity path, with access mode breakdown. */
+export interface UsageSensitiveSummary {
+  sensitivityPath: string;
+  reads: number;
+  clearReads: number;
+  maskedReads: number;
+  exemptReads: number;
+  distinctUsers: number;
+  distinctTables: number;
+}
+
+/** Full overview payload for the Usage analytics tab (`GET /usage-analytics/overview`). */
+export interface UsageOverview {
+  available: boolean;
+  detail: string | null;
+  days: number;
+  generatedAt: string;
+  kpis: UsageKpis;
+  lastRun: UsageLastRun | null;
+  dailyTrends: UsageDailyPoint[];
+  topTables: UsageTableSummary[];
+  topUsers: UsageUserSummary[];
+  sensitiveBreakdown: UsageSensitiveSummary[];
+}
+
+export interface UsageTableList {
+  tables: UsageTableSummary[];
+  total: number;
+}
+
+export interface UsageUserList {
+  users: UsageUserSummary[];
+  total: number;
+}
+
+export interface UsageColumnSummary {
+  columnName: string;
+  sensitivityPath: string | null;
+  accessMode: string;
+  reads: number;
+  distinctUsers: number;
+  lastReadAt: string | null;
+}
+
+export interface UsageUserTableSummary {
+  userName: string;
+  reads: number;
+  lastReadAt: string | null;
+}
+
+export interface UsageRecentReadEvent {
+  eventTime: string;
+  userName: string;
+  entityType: string | null;
+  directAccess: boolean;
+}
+
+export interface UsageTableDetail {
+  tableFullName: string;
+  days: number;
+  reads: number;
+  distinctUsers: number;
+  lastReadAt: string | null;
+  users: UsageUserTableSummary[];
+  columns: UsageColumnSummary[];
+  recentReads: UsageRecentReadEvent[];
+}
+
+export interface UsageRefreshResponse {
+  started: boolean;
+  message: string;
+  jobId: string | null;
+  runId: string | null;
+}
+

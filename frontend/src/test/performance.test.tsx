@@ -121,7 +121,7 @@ describe("Performance page", () => {
 
 describe("Data access analytics paged tables", () => {
   it("renders run history rows and the pager total", async () => {
-    renderApp("/data-access/analytics");
+    renderApp("/data-access/analytics?tab=sync");
     const runs = await screen.findByRole("table", { name: "Sync run history" });
     expect(within(runs).getByText("Live")).toBeInTheDocument();
     expect(within(runs).getByText("+4 / −1")).toBeInTheDocument();
@@ -130,7 +130,7 @@ describe("Data access analytics paged tables", () => {
   });
 
   it("renders planned grant changes", async () => {
-    renderApp("/data-access/analytics");
+    renderApp("/data-access/analytics?tab=sync");
     const grants = await screen.findByRole("table", { name: "Planned grant changes" });
     expect(within(grants).getByText("main.sales.orders")).toBeInTheDocument();
     expect(within(grants).getByText("dac_finance_readers")).toBeInTheDocument();
@@ -141,7 +141,7 @@ describe("Data access analytics paged tables", () => {
     const user = userEvent.setup();
     const services = fakeServices();
     const runs = vi.spyOn(services.dataAccess, "analyticsRuns");
-    renderApp("/data-access/analytics", services);
+    renderApp("/data-access/analytics?tab=sync", services);
     await screen.findByRole("table", { name: "Sync run history" });
     await user.click(screen.getAllByRole("button", { name: "Next" })[0]!);
     await waitFor(() => expect(runs).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2 }), expect.anything()));
@@ -152,7 +152,7 @@ describe("Data access analytics paged tables", () => {
     const user = userEvent.setup();
     const services = fakeServices();
     const grants = vi.spyOn(services.dataAccess, "analyticsGrants");
-    renderApp("/data-access/analytics", services);
+    renderApp("/data-access/analytics?tab=sync", services);
     await screen.findByRole("table", { name: "Planned grant changes" });
     await user.selectOptions(screen.getByLabelText("Change"), "revoke");
     await waitFor(() =>
@@ -162,7 +162,7 @@ describe("Data access analytics paged tables", () => {
 
   it("explains when the SQL views are not available on this storage backend", async () => {
     renderApp(
-      "/data-access/analytics",
+      "/data-access/analytics?tab=sync",
       fakeServices({
         dataAccessRuns: {
           ...testDataAccessRunsPage,
@@ -186,7 +186,7 @@ describe("Data access analytics paged tables", () => {
 
   it("shows empty and error states for the paged tables", async () => {
     renderApp(
-      "/data-access/analytics",
+      "/data-access/analytics?tab=sync",
       fakeServices({
         dataAccessRuns: { ...testDataAccessRunsPage, rows: [], total: 0 },
         dataAccessGrants: new Error("grants exploded"),

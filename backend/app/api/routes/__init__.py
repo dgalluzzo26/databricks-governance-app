@@ -23,6 +23,7 @@ from backend.app.api.routes import (
     policy_exceptions,
     recovery,
     row_filters,
+    usage_analytics,
 )
 from backend.app.api.routes import (
     help as help_routes,
@@ -45,6 +46,7 @@ ROUTERS: tuple[APIRouter, ...] = (
     access_explorer.router,
     attribute_explorer.router,
     data_access.router,
+    usage_analytics.router,
     recovery.router,
     performance.router,
 )

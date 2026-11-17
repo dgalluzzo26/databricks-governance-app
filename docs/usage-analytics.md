@@ -1,9 +1,9 @@
-# Usage analytics (Phase 1)
+# Usage analytics (Phases 1 & 2)
 
-Daily rollup of Unity Catalog lineage into small summary tables so the app can answer
-**who has access and how access is used** without scanning `system.access` on every page load.
+Daily rollup of Unity Catalog lineage into small summary tables and an admin Usage dashboard
+to answer **who has access and how access is used** without scanning `system.access` on every page load.
 
-Phases 2–4 (Usage dashboard, access reports, Genie Ask) read only these tables.
+Phases 3–4 (Access vs usage reports, Genie Ask) build directly on these tables and endpoints.
 
 ## What runs
 
@@ -64,6 +64,20 @@ Local scratch (CLI identity, not the Admin SP):
   --profile <PROFILE> --warehouse-id <ID> --usage-schema usage_scratch
 ```
 
-## App wiring (for Phase 2)
+## Dashboard & API (Phase 2)
 
-The app receives `USAGE_ROLLUP_JOB_ID` and `CAN_MANAGE` on the job so an admin Refresh button can start a run without a new permission model.
+The **Data access analytics** page (`/data-access/analytics`) has two tabs:
+- **Data usage** (`?tab=usage`): Headline KPIs (table reads, active users, tables accessed, sensitive reads, clear vs masked), daily trend charts, sensitive column usage breakdown, top tables accessed (with click-to-inspect table drilldown), top users, on-demand "Refresh usage" trigger, and CSV exports.
+- **Sync health** (`?tab=sync`): Sync run outcomes, planned grant and membership diffs, run duration, fingerprints, and paged run/grant history.
+
+### Endpoints (`/api/usage-analytics/*`, Admin only)
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/overview?days=30` | Overview KPIs, daily trends, top tables/users, sensitive column breakdown, and last rollup status. |
+| `GET` | `/tables?days=30&q=...&limit=50` | Filtered list of tables accessed with read counts and distinct users. |
+| `GET` | `/users?days=30&q=...&limit=50` | Filtered list of users with read counts and distinct tables accessed. |
+| `GET` | `/table-detail?table_full_name=...&days=30` | Single-table drilldown: readers, column access modes, and recent read statements. |
+| `POST` | `/refresh` | Triggers the Lakeflow Job (`USAGE_ROLLUP_JOB_ID`) via the Databricks Jobs API. |
+| `GET` | `/export?kind=tables|users|sensitive&days=30` | Downloads CSV export. |
+

@@ -48,6 +48,7 @@ import type {
   GapItemPage,
   PendingSummary,
   TagChangePage,
+  UsageOverview,
   AppCostReport,
   PerformanceCapacity,
   PerformanceSlowRequestPage,
@@ -187,6 +188,71 @@ export const testDataAccessSettings: DataAccessSettingsView = {
 
 export const testAppSettings: AppSettings = {
   disableMetadataCache: false,
+};
+
+export const testUsageOverview: UsageOverview = {
+  available: true,
+  detail: null,
+  days: 30,
+  generatedAt: "2026-11-17T06:00:00Z",
+  kpis: {
+    totalTableReads: 467,
+    activeUsers: 12,
+    tablesAccessed: 8,
+    sensitiveColumnReads: 80,
+    clearReads: 10,
+    maskedReads: 65,
+    exemptReads: 5,
+  },
+  lastRun: {
+    runId: "run-test-1",
+    status: "success",
+    finishedAt: "2026-11-17T06:04:00Z",
+    dataAsOf: "2026-11-16T22:00:00Z",
+    windowStart: "2026-08-19",
+    windowEnd: "2026-11-17",
+    readEvents: 467,
+    catalogs: ["data_access_control"],
+  },
+  dailyTrends: [
+    {
+      date: "2026-11-16",
+      reads: 100,
+      distinctUsers: 10,
+      clearReads: 8,
+      maskedReads: 45,
+    },
+  ],
+  topTables: [
+    {
+      tableFullName: "data_access_control.people.employees_pending_hires",
+      catalogName: "data_access_control",
+      schemaName: "people",
+      tableName: "employees_pending_hires",
+      reads: 120,
+      distinctUsers: 8,
+      lastReadAt: "2026-11-16T22:00:00Z",
+    },
+  ],
+  topUsers: [
+    {
+      userName: "david.galluzzo@databricks.com",
+      reads: 120,
+      distinctTables: 5,
+      lastReadAt: "2026-11-16T22:00:00Z",
+    },
+  ],
+  sensitiveBreakdown: [
+    {
+      sensitivityPath: "finance.budget.PII.Name",
+      reads: 80,
+      clearReads: 10,
+      maskedReads: 65,
+      exemptReads: 5,
+      distinctUsers: 4,
+      distinctTables: 2,
+    },
+  ],
 };
 
 export const testDataAccessReadiness: DataAccessReadiness = {
@@ -1271,6 +1337,40 @@ export function fakeServices(
           ? Promise.reject(overrides.appSettings)
           : Promise.resolve(overrides.appSettings ?? testAppSettings),
       save: async (body: AppSettings) => body,
+    },
+    usageAnalytics: {
+      overview: async () => testUsageOverview,
+      tables: async () => ({ tables: testUsageOverview.topTables, total: testUsageOverview.topTables.length }),
+      users: async () => ({ users: testUsageOverview.topUsers, total: testUsageOverview.topUsers.length }),
+      tableDetail: async (tableFullName: string, days: number = 30) => ({
+        tableFullName,
+        days,
+        reads: 120,
+        distinctUsers: 8,
+        lastReadAt: "2026-11-16T22:00:00Z",
+        users: [{ userName: "david.galluzzo@databricks.com", reads: 120, lastReadAt: "2026-11-16T22:00:00Z" }],
+        columns: [
+          {
+            columnName: "first_name",
+            sensitivityPath: "finance.budget.PII.Name",
+            accessMode: "masked",
+            reads: 80,
+            distinctUsers: 4,
+            lastReadAt: "2026-11-16T22:00:00Z",
+          },
+        ],
+        recentReads: [
+          {
+            eventTime: "2026-11-16T22:00:00Z",
+            userName: "david.galluzzo@databricks.com",
+            entityType: "DBSQL_QUERY",
+            directAccess: true,
+          },
+        ],
+      }),
+      refresh: async () => ({ started: true, message: "Usage rollup job started", jobId: "123", runId: "456" }),
+      exportUrl: (kind: "tables" | "users" | "sensitive", days: number = 30) =>
+        `/api/usage-analytics/export?kind=${kind}&days=${days}`,
     },
     dataAccess: {
       getSettings: () =>

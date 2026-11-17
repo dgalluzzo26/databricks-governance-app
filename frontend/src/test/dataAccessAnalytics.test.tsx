@@ -102,7 +102,7 @@ describe("buildChartRows", () => {
 
 describe("Data access analytics page", () => {
   it("renders KPIs, charts, fingerprints, and recent failures", async () => {
-    renderApp("/data-access/analytics");
+    renderApp("/data-access/analytics?tab=sync");
     expect(
       await screen.findByRole("heading", { name: "Data access analytics" }),
     ).toBeInTheDocument();
@@ -127,7 +127,7 @@ describe("Data access analytics page", () => {
     const analytics = vi.spyOn(services.dataAccess, "analytics");
     const { default: userEvent } = await import("@testing-library/user-event");
     const user = userEvent.setup();
-    renderApp("/data-access/analytics", services);
+    renderApp("/data-access/analytics?tab=sync", services);
     await screen.findByRole("heading", { name: "Data access analytics" });
     await user.selectOptions(screen.getByLabelText("Window"), "7");
     expect(analytics).toHaveBeenLastCalledWith(7, expect.anything());
@@ -136,7 +136,7 @@ describe("Data access analytics page", () => {
   it("filters charts by mode", async () => {
     const { default: userEvent } = await import("@testing-library/user-event");
     const user = userEvent.setup();
-    renderApp("/data-access/analytics");
+    renderApp("/data-access/analytics?tab=sync");
     await screen.findByRole("heading", { name: "Data access analytics" });
     await user.selectOptions(screen.getByLabelText("Mode"), "apply");
     expect(screen.getByText("Run outcomes per day")).toBeInTheDocument();
@@ -144,7 +144,7 @@ describe("Data access analytics page", () => {
 
   it("shows an empty state when there are no runs", async () => {
     renderApp(
-      "/data-access/analytics",
+      "/data-access/analytics?tab=sync",
       fakeServices({
         dataAccessAnalytics: {
           ...testDataAccessAnalytics,
@@ -167,7 +167,7 @@ describe("Data access analytics page", () => {
 
   it("shows empty tables when there are failures or fingerprints to list", async () => {
     renderApp(
-      "/data-access/analytics",
+      "/data-access/analytics?tab=sync",
       fakeServices({
         dataAccessAnalytics: { ...testDataAccessAnalytics, failures: [], fingerprints: [] },
       }),
@@ -178,7 +178,7 @@ describe("Data access analytics page", () => {
 
   it("shows an error when analytics fail to load", async () => {
     renderApp(
-      "/data-access/analytics",
+      "/data-access/analytics?tab=sync",
       fakeServices({ dataAccessAnalytics: new Error("analytics down") }),
     );
     expect(await screen.findByText("Could not load analytics")).toBeInTheDocument();

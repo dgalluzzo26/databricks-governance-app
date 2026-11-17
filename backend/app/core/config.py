@@ -165,6 +165,7 @@ class AppConfig(BaseSettings):
     dev_user_email: str | None = Field(None, alias="DEV_USER_EMAIL")
     frontend_dist: Path = Field(REPO_ROOT / "frontend" / "dist", alias="FRONTEND_DIST")
     data_access_sync_job_id: str | None = Field(None, alias="DATA_ACCESS_SYNC_JOB_ID")
+    usage_rollup_job_id: str | None = Field(None, alias="USAGE_ROLLUP_JOB_ID")
 
     @property
     def admin_sp_configured(self) -> bool:

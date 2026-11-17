@@ -91,6 +91,13 @@ export const queryKeys = {
     ["data-access", "analytics", "runs", mode, page, pageSize, table] as const,
   dataAccessAnalyticsGrants: (mode: string, change: string, page: number, pageSize: number, table: string) =>
     ["data-access", "analytics", "grants", mode, change, page, pageSize, table] as const,
+  usageOverview: (days: number) => ["usage-analytics", "overview", days] as const,
+  usageTables: (days: number, q?: string, limit?: number) =>
+    ["usage-analytics", "tables", days, q ?? "", limit ?? 50] as const,
+  usageUsers: (days: number, q?: string, limit?: number) =>
+    ["usage-analytics", "users", days, q ?? "", limit ?? 50] as const,
+  usageTableDetail: (table: string, days: number) =>
+    ["usage-analytics", "table-detail", table, days] as const,
   dataAccessPending: ["data-access", "pending"] as const,
   dataAccessPendingItems: (kind: string, status: string, q: string, page: number, pageSize: number, table: string) =>
     ["data-access", "pending", "items", kind, status, q, page, pageSize, table] as const,
@@ -263,6 +270,69 @@ export function useDataAccessAnalytics(days: number) {
   return useQuery({
     queryKey: queryKeys.dataAccessAnalytics(days),
     queryFn: ({ signal }) => api.dataAccess.analytics(days, signal),
+  });
+}
+
+/**
+ * Fetches usage overview for enrolled catalogs (`GET /usage-analytics/overview`).
+ *
+ * @param days - Window length in days.
+ */
+export function useUsageOverview(days: number) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.usageOverview(days),
+    queryFn: ({ signal }) => api.usageAnalytics.overview(days, signal),
+  });
+}
+
+/**
+ * Lists enrolled tables with usage stats (`GET /usage-analytics/tables`).
+ */
+export function useUsageTables(days: number, q?: string, limit?: number) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.usageTables(days, q, limit),
+    queryFn: ({ signal }) => api.usageAnalytics.tables(days, q, limit, signal),
+  });
+}
+
+/**
+ * Lists users who accessed enrolled tables (`GET /usage-analytics/users`).
+ */
+export function useUsageUsers(days: number, q?: string, limit?: number) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.usageUsers(days, q, limit),
+    queryFn: ({ signal }) => api.usageAnalytics.users(days, q, limit, signal),
+  });
+}
+
+/**
+ * Fetches drilldown details for a single table (`GET /usage-analytics/table-detail`).
+ */
+export function useUsageTableDetail(tableFullName: string | null, days: number) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.usageTableDetail(tableFullName ?? "", days),
+    queryFn: ({ signal }) =>
+      tableFullName ? api.usageAnalytics.tableDetail(tableFullName, days, signal) : Promise.reject(new Error("No table selected")),
+    enabled: Boolean(tableFullName),
+  });
+}
+
+/**
+ * Triggers an on-demand usage rollup job run (`POST /usage-analytics/refresh`).
+ */
+export function useRefreshUsageRollup() {
+  const api = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.usageAnalytics.refresh(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["usage-analytics"] });
+    },
+    meta: { busyMessage: "Starting usage rollup…" },
   });
 }
 

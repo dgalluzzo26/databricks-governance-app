@@ -6,7 +6,7 @@
  * Recharts renders the time series; tables list recent failures and desired-state fingerprints.
  */
 import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   Bar,
   BarChart,
@@ -24,6 +24,7 @@ import type { DataAccessAnalytics, DataAccessAnalyticsDay } from "@/api/types";
 import { Alert, Card, ErrorAlert, PageHeader, Spinner } from "@/components/ui";
 import identityStyles from "../identity/IdentityPage.module.css";
 import { GrantChangesTable, RunHistoryTable } from "./DataAccessViewTables";
+import { DataAccessUsageSection } from "./DataAccessUsageSection";
 import styles from "./DataAccessAnalyticsPage.module.css";
 import { useTableView, type TableColumn } from "@/hooks/useTableView";
 import { DataTableHead } from "@/components/ui/DataTableHead";
@@ -279,10 +280,9 @@ function FingerprintTable({ data }: { data: DataAccessAnalytics }) {
   );
 }
 
-/**
- * Admin dashboard: window and mode filters, KPIs, charts, and recent failures.
- */
-export function DataAccessAnalyticsPage() {
+export type AnalyticsTab = "usage" | "sync";
+
+function SyncHealthSection() {
   const [days, setDays] = useState<number>(30);
   const [mode, setMode] = useState<ModeFilter>("all");
   const query = useDataAccessAnalytics(days);
@@ -290,17 +290,7 @@ export function DataAccessAnalyticsPage() {
   const rows = useMemo(() => (data ? buildChartRows(data.daily, mode) : []), [data, mode]);
 
   return (
-    <div className={styles.page}>
-      <PageHeader
-        title="Data access analytics"
-        description="Sync health, planned changes, and desired-state stability from stored run history."
-        actions={
-          <Link to="/data-access" className={styles.backLink}>
-            Back to Data access
-          </Link>
-        }
-      />
-
+    <div className={styles.tableStack}>
       <div className={identityStyles.toolbar}>
         <div className={identityStyles.field}>
           <label className={identityStyles.label} htmlFor="analytics-window">
@@ -410,6 +400,54 @@ export function DataAccessAnalyticsPage() {
         </p>
         <GrantChangesTable />
       </Card>
+    </div>
+  );
+}
+
+/**
+ * Admin dashboard: Data usage (Phase 2) and Sync health analytics tabs.
+ */
+export function DataAccessAnalyticsPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const rawTab = searchParams.get("tab") as AnalyticsTab | null;
+  const tab: AnalyticsTab = rawTab === "sync" ? "sync" : "usage";
+  const setTab = (next: AnalyticsTab) => setSearchParams({ tab: next }, { replace: true });
+
+  return (
+    <div className={styles.page}>
+      <PageHeader
+        title="Data access analytics"
+        description="Data usage, sensitive column reads, and sync health across enrolled catalogs."
+        actions={
+          <Link to="/data-access" className={styles.backLink}>
+            Back to Data access
+          </Link>
+        }
+      />
+
+      <div className={identityStyles.tabs} role="tablist" aria-label="Analytics views">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "usage"}
+          className={`${identityStyles.tab}${tab === "usage" ? ` ${identityStyles.tabActive}` : ""}`}
+          onClick={() => setTab("usage")}
+        >
+          Data usage
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "sync"}
+          className={`${identityStyles.tab}${tab === "sync" ? ` ${identityStyles.tabActive}` : ""}`}
+          onClick={() => setTab("sync")}
+        >
+          Sync health
+        </button>
+      </div>
+
+      {tab === "usage" && <DataAccessUsageSection />}
+      {tab === "sync" && <SyncHealthSection />}
     </div>
   );
 }

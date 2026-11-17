@@ -37,6 +37,7 @@ from backend.app.services.policy_exceptions import PolicyExceptionService
 from backend.app.services.recovery import RecoveryService
 from backend.app.services.request_context import RequestContextResolver
 from backend.app.services.row_filters import RowFilterService
+from backend.app.services.usage_analytics import UsageAnalyticsService
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +96,7 @@ class ServiceContainer:
     recovery: RecoveryService
     performance: PerformanceService
     app_cost: AppCostService
+    usage_analytics: UsageAnalyticsService
     metrics: MetricsRecorder
     identity_uc_sync: IdentityUcSync | None = None
 
@@ -164,6 +166,7 @@ class ServiceContainer:
             storage, identity_attributes, access_requests, data_access, sql, row_filters
         )
         my_access = MyAccessService(identity_attributes, data_access, attribute_explorer)
+        usage_analytics = UsageAnalyticsService(sql, workspace, config, cache=metadata_cache)
         return cls(
             config=config,
             workspace=workspace,
@@ -203,6 +206,7 @@ class ServiceContainer:
             recovery=RecoveryService(config, storage, workspace),
             performance=PerformanceService(storage, workspace, config),
             app_cost=app_cost,
+            usage_analytics=usage_analytics,
             metrics=MetricsRecorder(
                 sink=storage.performance.record_many,
                 pruner=storage.performance.prune,
