@@ -24,6 +24,7 @@ import type { DataAccessAnalytics, DataAccessAnalyticsDay } from "@/api/types";
 import { Alert, Card, ErrorAlert, PageHeader, Spinner } from "@/components/ui";
 import identityStyles from "../identity/IdentityPage.module.css";
 import { GrantChangesTable, RunHistoryTable } from "./DataAccessViewTables";
+import { DataAccessAccessSection } from "./DataAccessAccessSection";
 import { DataAccessUsageSection } from "./DataAccessUsageSection";
 import styles from "./DataAccessAnalyticsPage.module.css";
 import { useTableView, type TableColumn } from "@/hooks/useTableView";
@@ -280,7 +281,7 @@ function FingerprintTable({ data }: { data: DataAccessAnalytics }) {
   );
 }
 
-export type AnalyticsTab = "usage" | "sync";
+export type AnalyticsTab = "usage" | "access" | "sync";
 
 function SyncHealthSection() {
   const [days, setDays] = useState<number>(30);
@@ -405,19 +406,20 @@ function SyncHealthSection() {
 }
 
 /**
- * Admin dashboard: Data usage (Phase 2) and Sync health analytics tabs.
+ * Admin dashboard: Data usage, Access reports, and Sync health analytics tabs.
  */
 export function DataAccessAnalyticsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const rawTab = searchParams.get("tab") as AnalyticsTab | null;
-  const tab: AnalyticsTab = rawTab === "sync" ? "sync" : "usage";
+  const tab: AnalyticsTab =
+    rawTab === "sync" ? "sync" : rawTab === "access" ? "access" : "usage";
   const setTab = (next: AnalyticsTab) => setSearchParams({ tab: next }, { replace: true });
 
   return (
     <div className={styles.page}>
       <PageHeader
         title="Data access analytics"
-        description="Data usage, sensitive column reads, and sync health across enrolled catalogs."
+        description="Data usage, who holds access, and sync health across enrolled catalogs."
         actions={
           <Link to="/data-access" className={styles.backLink}>
             Back to Data access
@@ -438,6 +440,15 @@ export function DataAccessAnalyticsPage() {
         <button
           type="button"
           role="tab"
+          aria-selected={tab === "access"}
+          className={`${identityStyles.tab}${tab === "access" ? ` ${identityStyles.tabActive}` : ""}`}
+          onClick={() => setTab("access")}
+        >
+          Access reports
+        </button>
+        <button
+          type="button"
+          role="tab"
           aria-selected={tab === "sync"}
           className={`${identityStyles.tab}${tab === "sync" ? ` ${identityStyles.tabActive}` : ""}`}
           onClick={() => setTab("sync")}
@@ -447,6 +458,7 @@ export function DataAccessAnalyticsPage() {
       </div>
 
       {tab === "usage" && <DataAccessUsageSection />}
+      {tab === "access" && <DataAccessAccessSection />}
       {tab === "sync" && <SyncHealthSection />}
     </div>
   );

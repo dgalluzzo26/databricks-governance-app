@@ -40,6 +40,10 @@ import type {
   UsageUserList,
   UsageTableDetail,
   UsageRefreshResponse,
+  AccessTableList,
+  AccessTableDetail,
+  AccessUnusedList,
+  AccessNoAccessList,
   DataAccessSettings,
   DataAccessSettingsView,
   HelpDocList,
@@ -1395,6 +1399,31 @@ export class UsageAnalyticsApi {
 
   exportUrl(kind: "tables" | "users" | "sensitive", days: number = 30): string {
     return `/api/usage-analytics/export?kind=${kind}&days=${days}`;
+  }
+
+  accessTables(days: number = 30, q?: string, limit: number = 50, signal?: AbortSignal): Promise<AccessTableList> {
+    const params = new URLSearchParams({ days: String(days), limit: String(limit) });
+    if (q) params.set("q", q);
+    return this.http.get<AccessTableList>(`/usage-analytics/access/tables?${params.toString()}`, signal);
+  }
+
+  accessTableDetail(tableFullName: string, days: number = 30, signal?: AbortSignal): Promise<AccessTableDetail> {
+    const params = new URLSearchParams({ table_full_name: tableFullName, days: String(days) });
+    return this.http.get<AccessTableDetail>(`/usage-analytics/access/table-detail?${params.toString()}`, signal);
+  }
+
+  accessUnused(days: number = 30, limit: number = 200, signal?: AbortSignal): Promise<AccessUnusedList> {
+    const params = new URLSearchParams({ days: String(days), limit: String(limit) });
+    return this.http.get<AccessUnusedList>(`/usage-analytics/access/unused?${params.toString()}`, signal);
+  }
+
+  accessNoAccess(days: number = 30, limit: number = 200, signal?: AbortSignal): Promise<AccessNoAccessList> {
+    const params = new URLSearchParams({ days: String(days), limit: String(limit) });
+    return this.http.get<AccessNoAccessList>(`/usage-analytics/access/no-access?${params.toString()}`, signal);
+  }
+
+  accessExportUrl(kind: "tables" | "holders" | "unused" | "no-access", days: number = 30): string {
+    return `/api/usage-analytics/access/export?kind=${kind}&days=${days}`;
   }
 }
 

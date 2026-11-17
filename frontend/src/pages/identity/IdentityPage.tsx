@@ -469,6 +469,10 @@ function MyAccessAttributeRow({
 
 /**
  * Inline table of resources for an expanded My access attribute.
+ *
+ * @remarks
+ * Paginated and filterable: a data-access grant can unlock hundreds of tables, so the list is
+ * shown a page at a time with per-column filters and sorting.
  */
 function MyAccessResourcesTable({
   kind,
@@ -490,6 +494,24 @@ function MyAccessResourcesTable({
       : kind === "row_filter"
         ? "No table columns are tagged with this row-filter dimension."
         : "No reviewed tables tagged with this path (or a descendant).";
+  const tagLabel =
+    kind === "sensitivity" ? "Sensitivity path" : kind === "row_filter" ? "Dimension" : "Tag value";
+
+  const columns = useMemo<TableColumn<UnlockedTable>[]>(
+    () => [
+      { key: "table", label: "Table", value: (item) => item.fullName },
+      ...(showColumn
+        ? [{ key: "column", label: "Column", value: (item: UnlockedTable) => item.columnName ?? "" }]
+        : []),
+      { key: "tag", label: tagLabel, value: (item) => item.tagValue },
+      { key: "match", label: "Match", value: (item) => item.match },
+      ...(kind === "data_access"
+        ? [{ key: "group", label: "Group", value: (item: UnlockedTable) => item.groupName ?? "" }]
+        : []),
+    ],
+    [kind, showColumn, tagLabel],
+  );
+  const pager = useTableView(tables, columns, { defaultPageSize: 10 });
 
   if (tables.length === 0) {
     return <div className={styles.empty}>{empty}</div>;
@@ -502,17 +524,9 @@ function MyAccessResourcesTable({
       </div>
       <div className={styles.tableWrap}>
         <table className={styles.table} aria-label={title}>
-          <thead>
-            <tr>
-              <th>Table</th>
-              {showColumn && <th>Column</th>}
-              <th>{kind === "sensitivity" ? "Sensitivity path" : kind === "row_filter" ? "Dimension" : "Tag value"}</th>
-              <th>Match</th>
-              {kind === "data_access" && <th>Group</th>}
-            </tr>
-          </thead>
+          <DataTableHead view={pager} />
           <tbody>
-            {tables.map((item) => (
+            {pager.rows.map((item) => (
               <tr key={`${item.fullName}:${item.columnName ?? ""}:${item.tagValue}`}>
                 <td>
                   <Link to={`/access-explorer?table=${encodeURIComponent(item.fullName)}`}>
@@ -538,6 +552,13 @@ function MyAccessResourcesTable({
           </tbody>
         </table>
       </div>
+      <TablePager
+        total={pager.total}
+        page={pager.page}
+        pageSize={pager.pageSize}
+        onPageChange={pager.setPage}
+        onPageSizeChange={pager.setPageSize}
+      />
     </div>
   );
 }

@@ -13,6 +13,7 @@ from backend.app.services.usage_rollup import (
     EVENT_RETENTION_DAYS,
     UsageRollup,
     UsageTables,
+    access_holder_sql,
     access_snapshot_sql,
     aggregate_sql,
     catalog_filter,
@@ -94,6 +95,9 @@ def test_table_ddl_covers_expected_tables() -> None:
         "user_group_membership",
         "mask_exempt_principals",
         "access_snapshot",
+        "group_member_snapshot",
+        "governed_table_snapshot",
+        "table_access_snapshot",
     ):
         assert name in ddl
     assert "`data_governance_app`.`usage`.`read_events`" in ddl
@@ -120,6 +124,18 @@ def test_aggregate_and_access_sql_mention_sensitivity() -> None:
     snap = "\n".join(access_snapshot_sql(tables))
     assert "identity_attributes" in snap
     assert "current_date()" in snap
+
+
+def test_access_holder_sql_matches_hierarchical_tag_values() -> None:
+    tables = UsageTables(catalog="app", identity_table="`app`.`app`.`identity_attributes`")
+    sql = "\n".join(
+        access_holder_sql(tables, ["data_access_control"], ["data_access"], "data_access_control")
+    )
+    assert "governed_table_snapshot" in sql
+    assert "table_access_snapshot" in sql
+    assert "group_member_snapshot" in sql
+    assert "startswith" in sql
+    assert "attribute_value <> '*'" in sql
 
 
 def test_retention_sql_uses_configured_windows() -> None:
@@ -197,9 +213,7 @@ def test_usage_rollup_records_failure() -> None:
     )
     assert result.status == "failed"
     assert result.error and "warehouse down" in result.error
-    assert any(
-        params and params.get("status") == "failed" for _, params in sql.executed if params
-    )
+    assert any(params and params.get("status") == "failed" for _, params in sql.executed if params)
 
 
 def test_job_parse_args_defaults() -> None:
@@ -230,9 +244,7 @@ def test_account_group_resolver_fetches_by_id(monkeypatch: pytest.MonkeyPatch) -
                 del method
                 calls.append((path, query or {}))
                 if path.endswith("/Users") and "filter" in (query or {}):
-                    return {
-                        "Resources": [{"id": "u1", "userName": "ana@example.com"}]
-                    }
+                    return {"Resources": [{"id": "u1", "userName": "ana@example.com"}]}
                 if path.endswith("/Users/u1"):
                     return {
                         "id": "u1",

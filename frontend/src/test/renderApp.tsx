@@ -49,6 +49,10 @@ import type {
   PendingSummary,
   TagChangePage,
   UsageOverview,
+  AccessTableList,
+  AccessTableDetail,
+  AccessUnusedList,
+  AccessNoAccessList,
   AppCostReport,
   PerformanceCapacity,
   PerformanceSlowRequestPage,
@@ -251,6 +255,80 @@ export const testUsageOverview: UsageOverview = {
       exemptReads: 5,
       distinctUsers: 4,
       distinctTables: 2,
+    },
+  ],
+};
+
+
+export const testAccessTableList: AccessTableList = {
+  asOf: "2026-11-17",
+  days: 30,
+  total: 1,
+  tables: [
+    {
+      tableFullName: "data_access_control.finance.budget",
+      catalogName: "data_access_control",
+      schemaName: "finance",
+      tableName: "budget",
+      tagValue: "finance.budget",
+      holders: 3,
+      holdersWithReads: 1,
+      unusedHolders: 2,
+      readersWithoutAccess: 1,
+      reads: 40,
+      lastReadAt: "2026-11-16T10:00:00Z",
+    },
+  ],
+};
+
+export const testAccessTableDetail: AccessTableDetail = {
+  tableFullName: "data_access_control.finance.budget",
+  tagValue: "finance.budget",
+  days: 30,
+  asOf: "2026-11-17",
+  holders: [
+    {
+      userName: "ana@example.com",
+      grants: [{ viaType: "GROUP", viaPrincipal: "finance_readers", heldValue: "finance" }],
+      reads: 40,
+      lastReadAt: "2026-11-16T10:00:00Z",
+      used: true,
+    },
+    {
+      userName: "bo@example.com",
+      grants: [{ viaType: "USER", viaPrincipal: "bo@example.com", heldValue: "finance.budget" }],
+      reads: 0,
+      lastReadAt: null,
+      used: false,
+    },
+  ],
+  readersWithoutAccess: [
+    { userName: "eve@example.com", reads: 7, lastReadAt: "2026-11-15T09:00:00Z" },
+  ],
+};
+
+export const testAccessUnused: AccessUnusedList = {
+  days: 30,
+  total: 1,
+  items: [
+    {
+      tableFullName: "data_access_control.finance.budget",
+      tagValue: "finance.budget",
+      userName: "bo@example.com",
+      grants: [{ viaType: "USER", viaPrincipal: "bo@example.com", heldValue: "finance.budget" }],
+    },
+  ],
+};
+
+export const testAccessNoAccess: AccessNoAccessList = {
+  days: 30,
+  total: 1,
+  items: [
+    {
+      tableFullName: "data_access_control.finance.budget",
+      userName: "eve@example.com",
+      reads: 7,
+      lastReadAt: "2026-11-15T09:00:00Z",
     },
   ],
 };
@@ -1371,6 +1449,16 @@ export function fakeServices(
       refresh: async () => ({ started: true, message: "Usage rollup job started", jobId: "123", runId: "456" }),
       exportUrl: (kind: "tables" | "users" | "sensitive", days: number = 30) =>
         `/api/usage-analytics/export?kind=${kind}&days=${days}`,
+      accessTables: async () => testAccessTableList,
+      accessTableDetail: async (tableFullName: string, days: number = 30) => ({
+        ...testAccessTableDetail,
+        tableFullName,
+        days,
+      }),
+      accessUnused: async () => testAccessUnused,
+      accessNoAccess: async () => testAccessNoAccess,
+      accessExportUrl: (kind: "tables" | "holders" | "unused" | "no-access", days: number = 30) =>
+        `/api/usage-analytics/access/export?kind=${kind}&days=${days}`,
     },
     dataAccess: {
       getSettings: () =>

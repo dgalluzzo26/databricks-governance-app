@@ -1805,3 +1805,82 @@ export interface UsageRefreshResponse {
   runId: string | null;
 }
 
+
+/** One grant behind a holder: a direct USER assignment or a GROUP the user belongs to. */
+export interface AccessGrant {
+  viaType: string;
+  viaPrincipal: string;
+  heldValue: string;
+}
+
+/** One user who holds access to a governed table, with reads in the window. */
+export interface AccessHolder {
+  userName: string;
+  grants: AccessGrant[];
+  reads: number;
+  lastReadAt: string | null;
+  used: boolean;
+}
+
+/** Access vs usage for one governed table. */
+export interface AccessTableSummary {
+  tableFullName: string;
+  catalogName: string;
+  schemaName: string;
+  tableName: string;
+  tagValue: string;
+  holders: number;
+  holdersWithReads: number;
+  unusedHolders: number;
+  readersWithoutAccess: number;
+  reads: number;
+  lastReadAt: string | null;
+}
+
+/** Governed tables with access and usage counts. */
+export interface AccessTableList {
+  asOf: string | null;
+  days: number;
+  tables: AccessTableSummary[];
+  total: number;
+}
+
+/** Holders and reader gaps for one governed table. */
+export interface AccessTableDetail {
+  tableFullName: string;
+  tagValue: string;
+  days: number;
+  asOf: string | null;
+  holders: AccessHolder[];
+  readersWithoutAccess: UsageUserTableSummary[];
+}
+
+/** A holder with no reads in the window on one governed table. */
+export interface AccessUnusedItem {
+  tableFullName: string;
+  tagValue: string;
+  userName: string;
+  grants: AccessGrant[];
+}
+
+/** Holders with unused access. */
+export interface AccessUnusedList {
+  days: number;
+  total: number;
+  items: AccessUnusedItem[];
+}
+
+/** A user with reads on a governed table who holds no assigned grant there. */
+export interface AccessNoAccessItem {
+  tableFullName: string;
+  userName: string;
+  reads: number;
+  lastReadAt: string | null;
+}
+
+/** Reads without assigned access. */
+export interface AccessNoAccessList {
+  days: number;
+  total: number;
+  items: AccessNoAccessItem[];
+}

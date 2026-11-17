@@ -98,6 +98,14 @@ export const queryKeys = {
     ["usage-analytics", "users", days, q ?? "", limit ?? 50] as const,
   usageTableDetail: (table: string, days: number) =>
     ["usage-analytics", "table-detail", table, days] as const,
+  accessTables: (days: number, q?: string, limit?: number) =>
+    ["usage-analytics", "access", "tables", days, q ?? "", limit ?? 50] as const,
+  accessTableDetail: (table: string, days: number) =>
+    ["usage-analytics", "access", "table-detail", table, days] as const,
+  accessUnused: (days: number, limit?: number) =>
+    ["usage-analytics", "access", "unused", days, limit ?? 200] as const,
+  accessNoAccess: (days: number, limit?: number) =>
+    ["usage-analytics", "access", "no-access", days, limit ?? 200] as const,
   dataAccessPending: ["data-access", "pending"] as const,
   dataAccessPendingItems: (kind: string, status: string, q: string, page: number, pageSize: number, table: string) =>
     ["data-access", "pending", "items", kind, status, q, page, pageSize, table] as const,
@@ -318,6 +326,55 @@ export function useUsageTableDetail(tableFullName: string | null, days: number) 
     queryFn: ({ signal }) =>
       tableFullName ? api.usageAnalytics.tableDetail(tableFullName, days, signal) : Promise.reject(new Error("No table selected")),
     enabled: Boolean(tableFullName),
+  });
+}
+
+
+/**
+ * Lists governed tables with holder vs usage counts (`GET /usage-analytics/access/tables`).
+ */
+export function useAccessTables(days: number, q?: string, limit?: number) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.accessTables(days, q, limit),
+    queryFn: ({ signal }) => api.usageAnalytics.accessTables(days, q, limit, signal),
+  });
+}
+
+/**
+ * Holders and reader gaps for one governed table (`GET /usage-analytics/access/table-detail`).
+ */
+export function useAccessTableDetail(tableFullName: string | null, days: number) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.accessTableDetail(tableFullName ?? "", days),
+    queryFn: ({ signal }) =>
+      tableFullName
+        ? api.usageAnalytics.accessTableDetail(tableFullName, days, signal)
+        : Promise.reject(new Error("No table selected")),
+    enabled: Boolean(tableFullName),
+  });
+}
+
+/**
+ * Holders with zero reads in the window (`GET /usage-analytics/access/unused`).
+ */
+export function useAccessUnused(days: number, limit?: number) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.accessUnused(days, limit),
+    queryFn: ({ signal }) => api.usageAnalytics.accessUnused(days, limit, signal),
+  });
+}
+
+/**
+ * Readers with no assigned grant (`GET /usage-analytics/access/no-access`).
+ */
+export function useAccessNoAccess(days: number, limit?: number) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.accessNoAccess(days, limit),
+    queryFn: ({ signal }) => api.usageAnalytics.accessNoAccess(days, limit, signal),
   });
 }
 

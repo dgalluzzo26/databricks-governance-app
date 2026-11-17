@@ -12,6 +12,7 @@ mask UDF, evaluated against assignments and group memberships at rollup time.
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from collections.abc import Callable, Iterable
@@ -30,7 +31,9 @@ DEFAULT_BACKFILL_DAYS = 90
 DEFAULT_LOOKBACK_DAYS = 3
 EVENT_RETENTION_DAYS = 90
 SUMMARY_RETENTION_DAYS = 400
+DEFAULT_ACCESS_TAG_KEY = "data_access_control"
 _INSERT_BATCH = 200
+_GROUP_INSERT_BATCH = 1000
 
 # One "read" is one statement (query, notebook command, or job step) touching the object.
 _READ_KEY = "coalesce(statement_id, record_id)"
@@ -49,15 +52,21 @@ class Sql(Protocol):
 
 
 GroupResolver = Callable[[str], list[str]]
+GroupMembersExpander = Callable[[list[str]], dict[str, set[str]]]
 
 
 @dataclass(frozen=True)
 class UsageTables:
-    """Fully qualified names of the usage schema and the identity mirror it joins."""
+    """Fully qualified names of the usage schema and the identity mirror it joins.
+
+    ``definitions_table`` is the identity attribute definitions table; it maps each attribute key
+    to the governed tag keys it controls (so the rollup can find the ``data_access`` attribute).
+    """
 
     catalog: str
     identity_table: str
     schema: str = USAGE_SCHEMA
+    definitions_table: str = ""
 
     def fqn(self, table: str) -> str:
         """Backtick-quoted ``catalog.schema.table`` for a usage table."""
@@ -76,6 +85,7 @@ class RollupResult:
     read_events: int = 0
     column_read_events: int = 0
     users_resolved: int = 0
+    access_groups: int = 0
     data_as_of: str | None = None
     error: str | None = None
 
@@ -129,6 +139,17 @@ COMMENT 'Column reads per user per day; access_mode is clear, masked, exempt, or
   via_principal_type STRING, via_principal_name STRING, expires_at TIMESTAMP
 ) CLUSTER BY (snapshot_date)
 COMMENT 'Attributes each user held on the snapshot date, directly or through a group'""",
+        f"""CREATE TABLE IF NOT EXISTS {t("group_member_snapshot")} (
+  snapshot_date DATE, group_name STRING, user_name STRING
+) COMMENT 'Users inside each group that holds a data-access attribute (nesting expanded)'""",
+        f"""CREATE TABLE IF NOT EXISTS {t("governed_table_snapshot")} (
+  snapshot_date DATE, table_full_name STRING, catalog_name STRING, schema_name STRING,
+  table_name STRING, tag_value STRING
+) COMMENT 'Enrolled tables carrying a data_access_control tag, with the tag value (path)'""",
+        f"""CREATE TABLE IF NOT EXISTS {t("table_access_snapshot")} (
+  snapshot_date DATE, table_full_name STRING, user_name STRING, via_type STRING,
+  via_principal STRING, held_value STRING
+) COMMENT 'Who holds access to each governed table, directly or through a group (current)'""",
     ]
 
 
@@ -302,6 +323,58 @@ WHERE {_active_assignments()}""",
     ]
 
 
+def access_holder_sql(
+    tables: UsageTables, catalogs: list[str], attribute_keys: list[str], access_tag_key: str
+) -> list[str]:
+    """Rebuild the governed-table and current table-holder snapshots.
+
+    A holder is a USER or GROUP assignment whose value covers the table's ``data_access_control``
+    tag value: equal to it, or a dotted prefix of it (``finance`` covers ``finance.budget``).
+    Wildcard (``*``) assignments are excluded because they do not name a single path.
+    Group holders expand to the members captured in ``group_member_snapshot``.
+    """
+    t = tables.fqn
+    identity = tables.identity_table
+    keys = ", ".join(string_literal(k) for k in attribute_keys) or "''"
+    return [
+        f"DELETE FROM {t('governed_table_snapshot')}",
+        f"""INSERT INTO {t("governed_table_snapshot")}
+  (table_full_name, catalog_name, schema_name, table_name, tag_value, snapshot_date)
+SELECT lower(concat_ws('.', catalog_name, schema_name, table_name)), max(catalog_name), max(schema_name),
+  max(table_name), lower(max(tag_value)), current_date()
+FROM system.information_schema.table_tags
+WHERE tag_name = {string_literal(access_tag_key)}
+  AND tag_value IS NOT NULL
+  AND {catalog_filter("catalog_name", catalogs)}
+GROUP BY lower(concat_ws('.', catalog_name, schema_name, table_name))""",
+        f"DELETE FROM {t('table_access_snapshot')}",
+        f"""INSERT INTO {t("table_access_snapshot")}
+  (table_full_name, user_name, via_type, via_principal, held_value, snapshot_date)
+WITH access AS (
+  SELECT upper(a.principal_type) AS principal_type, lower(a.principal_name) AS principal,
+    lower(a.attribute_value) AS held
+  FROM {identity} a
+  WHERE a.attribute_key IN ({keys})
+    AND a.attribute_value <> '*'
+    AND {_active_assignments()}
+),
+holders AS (
+  SELECT 'USER' AS via_type, a.principal AS via_principal, a.held, a.principal AS user_name
+  FROM access a
+  WHERE a.principal_type = 'USER'
+  UNION ALL
+  SELECT 'GROUP', a.principal, a.held, lower(m.user_name)
+  FROM access a
+  JOIN {t("group_member_snapshot")} m ON lower(m.group_name) = a.principal
+  WHERE a.principal_type = 'GROUP'
+)
+SELECT DISTINCT g.table_full_name, h.user_name, h.via_type, h.via_principal, h.held, current_date()
+FROM {t("governed_table_snapshot")} g
+JOIN holders h
+  ON g.tag_value = h.held OR startswith(g.tag_value, concat(h.held, '.'))""",
+    ]
+
+
 def retention_sql(tables: UsageTables) -> list[str]:
     """Drop raw events after 90 days and summaries after ~13 months."""
     t = tables.fqn
@@ -321,9 +394,7 @@ def retention_sql(tables: UsageTables) -> list[str]:
     ]
 
 
-def plan_window(
-    today: date, last_window_end: date | None, *, backfill_days: int, lookback_days: int
-) -> date:
+def plan_window(today: date, last_window_end: date | None, *, backfill_days: int, lookback_days: int) -> date:
     """Return the first event date to (re)process.
 
     First run backfills ``backfill_days``; later runs restart ``lookback_days`` before the
@@ -366,12 +437,16 @@ class UsageRollup:
         resolve_groups: GroupResolver,
         *,
         group_concurrency: int = 8,
+        expand_group_members: GroupMembersExpander | None = None,
+        access_tag_key: str = DEFAULT_ACCESS_TAG_KEY,
     ) -> None:
         self._sql = sql
         self._tables = tables
         self._enrollment_tag = enrollment_tag
         self._resolve_groups = resolve_groups
         self._group_concurrency = group_concurrency
+        self._expand_group_members = expand_group_members
+        self._access_tag_key = access_tag_key
 
     def run(
         self,
@@ -432,6 +507,11 @@ class UsageRollup:
             self._sql.execute(statement, params)
         for statement in access_snapshot_sql(self._tables):
             self._sql.execute(statement)
+        if self._expand_group_members is not None:
+            keys = self._access_attribute_keys()
+            result.access_groups = self._refresh_group_members(keys, today)
+            for statement in access_holder_sql(self._tables, catalogs, keys, self._access_tag_key):
+                self._sql.execute(statement)
         for statement in retention_sql(self._tables):
             self._sql.execute(statement)
 
@@ -486,6 +566,48 @@ WHERE upper(a.principal_type) = 'USER' AND {_active_assignments()}"""
             self._sql.execute(f"INSERT INTO {target} VALUES {values}")
         logger.info("Resolved groups for %s users (%s memberships)", len(users), len(rows))
         return len(users)
+
+    def _access_attribute_keys(self) -> list[str]:
+        """Attribute keys whose governed tag keys include the access tag (``data_access``)."""
+        if not self._tables.definitions_table:
+            return ["data_access"]
+        rows = self._sql.query(
+            f"SELECT attribute_key, governed_tag_keys FROM {self._tables.definitions_table}"
+        )
+        keys: set[str] = set()
+        for row in rows:
+            raw = str(row.get("governed_tag_keys") or "")
+            try:
+                tags = json.loads(raw) if raw else []
+            except ValueError:
+                tags = [raw]
+            if self._access_tag_key in [str(tag) for tag in tags]:
+                keys.add(str(row.get("attribute_key") or ""))
+        return sorted(key for key in keys if key)
+
+    def _refresh_group_members(self, attribute_keys: list[str], today: date) -> int:
+        """Replace ``group_member_snapshot`` with the members of every group holding access."""
+        if not attribute_keys or self._expand_group_members is None:
+            return 0
+        keys = ", ".join(string_literal(k) for k in attribute_keys)
+        rows = self._sql.query(
+            f"""SELECT DISTINCT a.principal_name FROM {self._tables.identity_table} a
+WHERE upper(a.principal_type) = 'GROUP' AND a.attribute_key IN ({keys}) AND {_active_assignments()}"""
+        )
+        names = sorted({str(r.get("principal_name") or "").strip() for r in rows} - {""})
+        members = self._expand_group_members(names) if names else {}
+        target = self._tables.fqn("group_member_snapshot")
+        self._sql.execute(f"DELETE FROM {target}")
+        pairs = [(group, user) for group, users in members.items() for user in sorted(users)]
+        snapshot = string_literal(today.isoformat())
+        for offset in range(0, len(pairs), _GROUP_INSERT_BATCH):
+            batch = pairs[offset : offset + _GROUP_INSERT_BATCH]
+            values = ", ".join(
+                f"(DATE {snapshot}, {string_literal(group)}, {string_literal(user)})" for group, user in batch
+            )
+            self._sql.execute(f"INSERT INTO {target} VALUES {values}")
+        logger.info("Expanded %s access groups into %s memberships", len(names), len(pairs))
+        return len(names)
 
     def _record_start(self, result: RollupResult, trigger: str, actor: str, started: datetime) -> None:
         self._sql.execute(

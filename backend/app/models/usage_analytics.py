@@ -154,3 +154,91 @@ class UsageRefreshResponse(ApiModel):
     message: str
     job_id: str | None = None
     run_id: str | None = None
+
+
+class AccessGrant(ApiModel):
+    """One grant behind a holder: a direct USER assignment or a GROUP the user belongs to."""
+
+    via_type: str
+    via_principal: str
+    held_value: str
+
+
+class AccessHolder(ApiModel):
+    """One user who holds access to a governed table, with reads in the window."""
+
+    user_name: str
+    grants: list[AccessGrant] = Field(default_factory=list)
+    reads: int = 0
+    last_read_at: str | None = None
+    used: bool = False
+
+
+class AccessTableSummary(ApiModel):
+    """Access vs usage for one governed table."""
+
+    table_full_name: str
+    catalog_name: str
+    schema_name: str
+    table_name: str
+    tag_value: str
+    holders: int = 0
+    holders_with_reads: int = 0
+    unused_holders: int = 0
+    readers_without_access: int = 0
+    reads: int = 0
+    last_read_at: str | None = None
+
+
+class AccessTableList(ApiModel):
+    """Governed tables with access and usage counts."""
+
+    as_of: str | None = None
+    days: int = 30
+    tables: list[AccessTableSummary] = Field(default_factory=list)
+    total: int = 0
+
+
+class AccessTableDetail(ApiModel):
+    """Holders and reader gaps for one governed table."""
+
+    table_full_name: str
+    tag_value: str = ""
+    days: int = 30
+    as_of: str | None = None
+    holders: list[AccessHolder] = Field(default_factory=list)
+    readers_without_access: list[UsageUserTableSummary] = Field(default_factory=list)
+
+
+class AccessUnusedItem(ApiModel):
+    """A holder with no reads in the window on one governed table."""
+
+    table_full_name: str
+    tag_value: str = ""
+    user_name: str
+    grants: list[AccessGrant] = Field(default_factory=list)
+
+
+class AccessUnusedList(ApiModel):
+    """Holders with unused access."""
+
+    days: int = 30
+    total: int = 0
+    items: list[AccessUnusedItem] = Field(default_factory=list)
+
+
+class AccessNoAccessItem(ApiModel):
+    """A user with reads on a governed table who holds no assigned grant there."""
+
+    table_full_name: str
+    user_name: str
+    reads: int = 0
+    last_read_at: str | None = None
+
+
+class AccessNoAccessList(ApiModel):
+    """Reads without assigned access."""
+
+    days: int = 30
+    total: int = 0
+    items: list[AccessNoAccessItem] = Field(default_factory=list)

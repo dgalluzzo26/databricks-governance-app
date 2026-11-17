@@ -37,7 +37,9 @@ from backend.app.services.catalog_enrollment import (  # noqa: E402
     DEFAULT_ENROLLMENT_TAG_KEY,
     DEFAULT_ENROLLMENT_TAG_VALUE,
 )
+from backend.app.services.group_membership import expand_group_members  # noqa: E402
 from backend.app.services.usage_rollup import (  # noqa: E402
+    DEFAULT_ACCESS_TAG_KEY,
     DEFAULT_BACKFILL_DAYS,
     DEFAULT_LOOKBACK_DAYS,
     USAGE_SCHEMA,
@@ -59,6 +61,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--usage-schema", default=USAGE_SCHEMA)
     parser.add_argument("--enrollment-tag-key", default=DEFAULT_ENROLLMENT_TAG_KEY)
     parser.add_argument("--enrollment-tag-value", default=DEFAULT_ENROLLMENT_TAG_VALUE)
+    parser.add_argument("--access-tag-key", default=DEFAULT_ACCESS_TAG_KEY)
     parser.add_argument("--trigger", default="schedule")
     parser.add_argument("--actor", default="scheduler")
     parser.add_argument("--run_id", default="")
@@ -111,13 +114,12 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     client = WorkspaceClient(profile=args.profile) if args.profile else WorkspaceClient()
     sql = SqlExecutor(lambda: client, args.warehouse_id, wait_timeout_seconds=50, max_wait_seconds=1800)
+    app_schema = f"{quote_identifier(args.app_catalog)}.{quote_identifier(args.app_schema)}"
     tables = UsageTables(
         catalog=args.app_catalog,
         schema=args.usage_schema,
-        identity_table=(
-            f"{quote_identifier(args.app_catalog)}.{quote_identifier(args.app_schema)}."
-            "`identity_attributes`"
-        ),
+        identity_table=f"{app_schema}.`identity_attributes`",
+        definitions_table=f"{app_schema}.`identity_attribute_definitions`",
     )
     sql.execute(
         f"CREATE SCHEMA IF NOT EXISTS {quote_identifier(args.app_catalog)}."
@@ -128,6 +130,8 @@ def main(argv: list[str] | None = None) -> int:
         tables,
         (args.enrollment_tag_key, args.enrollment_tag_value),
         account_group_resolver(client),
+        expand_group_members=lambda names: expand_group_members(client, names),
+        access_tag_key=args.access_tag_key,
     )
     result = rollup.run(
         trigger=args.trigger,

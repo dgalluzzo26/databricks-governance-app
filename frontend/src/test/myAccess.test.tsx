@@ -1,6 +1,7 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import type { MyAccessResources } from "@/api/types";
 import { fakeServices, renderApp } from "./renderApp";
 
 describe("Identity My access", () => {
@@ -33,5 +34,36 @@ describe("Identity My access", () => {
       await screen.findByRole("table", { name: /Columns affected|Tables filtered|Tables unlocked/ }),
     ).toBeInTheDocument();
   });
-});
 
+  it("pages a long list of unlocked tables instead of rendering every row", async () => {
+    const user = userEvent.setup();
+    const services = fakeServices();
+    const tables = Array.from({ length: 25 }, (_, i) => ({
+      fullName: `data_access_control.finance.t${String(i).padStart(3, "0")}`,
+      columnName: null,
+      tagValue: "finance",
+      match: "descendant" as const,
+      groupName: "dac_finance",
+    }));
+    const payload: MyAccessResources = {
+      attributeKey: "data_access",
+      attributeValue: "finance",
+      kind: "data_access",
+      tables,
+    };
+    vi.spyOn(services.identityAttributes, "myAccessResources").mockResolvedValue(payload);
+    renderApp("/identity?tab=my-access", services);
+
+    await user.click((await screen.findAllByRole("button", { name: "Show resources" }))[0]!);
+    const table = await screen.findByRole("table", { name: "Tables unlocked" });
+    expect(within(table).getByText("data_access_control.finance.t000")).toBeInTheDocument();
+    expect(within(table).queryByText("data_access_control.finance.t010")).not.toBeInTheDocument();
+    expect(screen.getByText("1–10 of 25")).toBeInTheDocument();
+
+    const pagerNext = screen.getAllByRole("button", { name: "Next" });
+    await user.click(pagerNext[pagerNext.length - 1]!);
+    expect(screen.getByText("11–20 of 25")).toBeInTheDocument();
+    expect(within(table).getByText("data_access_control.finance.t010")).toBeInTheDocument();
+    expect(within(table).queryByText("data_access_control.finance.t000")).not.toBeInTheDocument();
+  });
+});
