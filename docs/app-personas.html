@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Data Governance App: Who uses it</title>
+<style>
+  @page { size: letter landscape; margin: 0.4in; }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: #1f2328;
+    background: #ffffff;
+    line-height: 1.45;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .page {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 20px 28px;
+  }
+
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 0 0 6px; }
+  h3 { font-size: 15px; margin: 0 0 10px; }
+  p { margin: 0; }
+
+  .subtitle { color: #57606a; font-size: 15px; }
+
+  header.top { display: flex; justify-content: space-between; align-items: flex-end; gap: 24px; margin-bottom: 14px; }
+  .stats {
+    display: flex;
+    gap: 32px;
+    margin: 0 0 4px;
+    flex-shrink: 0;
+  }
+  .stat .value { font-size: 24px; font-weight: 600; }
+  .stat .label { color: #57606a; font-size: 13px; }
+  .stat.info .value { color: #0969da; }
+  .stat.success .value { color: #1a7f37; }
+
+  .personas {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
+
+  .card {
+    border: 1px solid #d0d7de;
+    border-radius: 10px;
+    padding: 10px 14px;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .card-head h2 { margin: 0; }
+
+  .pill {
+    display: inline-block;
+    font-size: 10.5px;
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: #eaeef2;
+    color: #24292f;
+    white-space: nowrap;
+  }
+  .pill.info { background: #ddf4ff; color: #0550ae; }
+  .pill.success { background: #dafbe1; color: #116329; }
+  .pill.step { background: #f6f8fa; border: 1px solid #d0d7de; }
+  .pill.step.first { background: #ddf4ff; border-color: #54aeff; color: #0550ae; }
+
+  .who { color: #57606a; margin-bottom: 6px; font-size: 12.5px; }
+  hr { border: none; border-top: 1px solid #eaeef2; margin: 6px 0; }
+  .does { margin: 0; padding-left: 18px; font-size: 12.5px; }
+  .does li { margin-bottom: 2px; }
+
+  .section { margin-top: 8px; break-inside: avoid; page-break-inside: avoid; }
+
+  .flow {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+  .arrow { color: #8c959f; }
+
+  .callout {
+    margin-top: 8px;
+    border-left: 4px solid #54aeff;
+    background: #f6faff;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 14px;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+  }
+  th, td {
+    border: 1px solid #d0d7de;
+    padding: 2px 8px;
+    text-align: left;
+  }
+  th { background: #f6f8fa; font-weight: 600; }
+  td.c, th.c { text-align: center; }
+  tbody tr:nth-child(even) td { background: #fbfcfd; }
+
+  .source { color: #8c959f; font-size: 10px; margin-top: 4px; }
+
+  .shots {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  figure { margin: 0; break-inside: avoid; page-break-inside: avoid; }
+  figure img {
+    width: 100%;
+    border: 1px solid #d0d7de;
+    border-radius: 6px;
+    display: block;
+  }
+  figcaption { color: #57606a; font-size: 12.5px; margin-top: 6px; }
+
+  .page-break { break-before: page; page-break-before: always; }
+
+  @media print {
+    .page { padding: 0; max-width: none; }
+    .section, .card, figure { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="top">
+    <div>
+      <h1>Who uses the Data Governance app</h1>
+      <p class="subtitle">
+        Three personas share one app. Each sees only the pages their role allows, and the same
+        request flow ties them together.
+      </p>
+    </div>
+  <div class="stats">
+    <div class="stat">
+      <div class="value">4</div>
+      <div class="label">Sidebar entries for users</div>
+    </div>
+    <div class="stat info">
+      <div class="value">6</div>
+      <div class="label">For approvers</div>
+    </div>
+    <div class="stat success">
+      <div class="value">16</div>
+      <div class="label">For admins</div>
+    </div>
+  </div>
+  </header>
+
+  <div class="personas">
+    <article class="card">
+      <div class="card-head">
+        <h2>User</h2>
+        <span class="pill">4 sidebar entries</span>
+      </div>
+      <p class="who">Anyone signed in. Works out what a table needs and asks for it.</p>
+      <hr>
+      <ul class="does">
+        <li>See which columns are masked and which row filter applies on a table</li>
+        <li>Request data-access, sensitivity, or row-filter attributes, with a justification</li>
+        <li>Track own requests, attributes, and groups under Identity</li>
+        <li>Open Help</li>
+      </ul>
+    </article>
+
+    <article class="card">
+      <div class="card-head">
+        <h2>Approver</h2>
+        <span class="pill info">6 sidebar entries</span>
+      </div>
+      <p class="who">Assigned by an admin to a sensitivity category, a data-access path, or a row-filter dimension.</p>
+      <hr>
+      <ul class="does">
+        <li>Decide new requests and renewals routed to them in Approvals</li>
+        <li>See who holds a path in Attribute explorer and revoke access</li>
+        <li>Grant values directly on the paths they own, under Identity, Assignments</li>
+        <li>Everything a user can do</li>
+      </ul>
+    </article>
+
+    <article class="card">
+      <div class="card-head">
+        <h2>Admin</h2>
+        <span class="pill success">16 sidebar entries</span>
+      </div>
+      <p class="who">Members of the configured admin group. Owns configuration and the sync.</p>
+      <hr>
+      <ul class="does">
+        <li>Define attributes, approvers, and their routing</li>
+        <li>Manage policies, exceptions, mask rules, and row-filter packs</li>
+        <li>Run and review the data-access grants sync</li>
+        <li>Read usage, access reports, and sync health in Data access analytics</li>
+        <li>Set app settings, check status, and run performance and recovery</li>
+      </ul>
+    </article>
+  </div>
+
+  <section class="section">
+    <h2>How a request moves</h2>
+    <div class="flow">
+      <span class="pill step first">User requests</span>
+      <span class="arrow">&rarr;</span>
+      <span class="pill step">Routed to most specific approver</span>
+      <span class="arrow">&rarr;</span>
+      <span class="pill step">Admin if none matches</span>
+      <span class="arrow">&rarr;</span>
+      <span class="pill step">Approved with expiry</span>
+      <span class="arrow">&rarr;</span>
+      <span class="pill step">Enforced as UC group, grant, mask, or row filter</span>
+    </div>
+    <div class="callout">
+      <strong>Routing rule.</strong> The most specific match wins. If <code>finance.budget</code>
+      has its own approver, its requests go there rather than to <code>finance</code>.
+    </div>
+  </section>
+
+  <section class="section">
+    <h2>Page access by persona</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Area</th>
+          <th class="c">User</th>
+          <th class="c">Approver</th>
+          <th class="c">Admin</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>Home, Access explorer, Help</td><td class="c">Yes</td><td class="c">Yes</td><td class="c">Yes</td></tr>
+        <tr><td>Identity: my attributes, my access, requests</td><td class="c">Yes</td><td class="c">Yes</td><td class="c">Yes</td></tr>
+        <tr><td>Identity: Assignments</td><td class="c">No</td><td class="c">Own paths</td><td class="c">Yes</td></tr>
+        <tr><td>Identity: Definitions and Approvers</td><td class="c">No</td><td class="c">No</td><td class="c">Yes</td></tr>
+        <tr><td>Attribute explorer</td><td class="c">No</td><td class="c">Yes</td><td class="c">Yes</td></tr>
+        <tr><td>Approvals</td><td class="c">No</td><td class="c">Routed to them</td><td class="c">Fallback for unmatched</td></tr>
+        <tr><td>Policies, exceptions, row filters, mask rules</td><td class="c">No</td><td class="c">No</td><td class="c">Yes</td></tr>
+        <tr><td>Data access (grants sync)</td><td class="c">No</td><td class="c">No</td><td class="c">Yes</td></tr>
+        <tr><td>Data access analytics</td><td class="c">No</td><td class="c">No</td><td class="c">Yes</td></tr>
+        <tr><td>Performance, recovery, app status and settings</td><td class="c">No</td><td class="c">No</td><td class="c">Yes</td></tr>
+      </tbody>
+    </table>
+    <!-- Source: frontend/src/app/navigation.ts and IdentityPage.tsx -->
+  </section>
+
+
+</div>
+</body>
+</html>
