@@ -127,6 +127,10 @@ _CATALOG: tuple[tuple[str, str, str, float], ...] = (
     ("GET", "/api/performance/summary", "Load performance summary", 5000),
     ("GET", "/api/performance/slow-requests", "Load slow requests", 3000),
     ("GET", "/api/performance/capacity", "Read app, Lakebase and warehouse sizing", 15000),
+    ("GET", "/api/performance/requests", "Load request history", 5000),
+    ("GET", "/api/performance/tasks", "Load task history", 3000),
+    ("GET", "/api/activity", "Load my activity", 1500),
+    ("GET", "/api/activity/tasks/{task_id}", "Open my task", 1000),
 )
 
 _BY_ROUTE: dict[tuple[str, str], Activity] = {

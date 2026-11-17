@@ -7,6 +7,7 @@ workflow data, mask rules, and policy exceptions are persisted. Concrete backend
 
 from __future__ import annotations
 
+import threading
 from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Any
@@ -22,6 +23,7 @@ from backend.app.models.identity_attribute import (
 from backend.app.models.mask_rule import MaskRuleDefinition
 from backend.app.models.performance import RequestMetric
 from backend.app.models.policy_exception import PolicyException
+from backend.app.models.task import TaskRecord, TaskStatus
 from backend.app.repositories.data_access_state import (
     DataAccessStateRepository,
     InMemoryDataAccessStateRepository,
@@ -499,6 +501,28 @@ class PerformanceRepository(ABC):
             Rows deleted.
         """
 
+    def list_for_user(
+        self, user_name: str, since: datetime, *, failed_only: bool = False, limit: int = 50
+    ) -> list[RequestMetric]:
+        """Return one user's metrics at or after ``since``, newest first.
+
+        Args:
+            user_name: Caller (case-insensitive).
+            since: Inclusive lower bound.
+            failed_only: When True, only requests with status 400 or above.
+            limit: Most rows to return.
+
+        Returns:
+            Matching metrics.
+        """
+        wanted = user_name.lower()
+        rows = [
+            m
+            for m in self.list_since(since)
+            if (m.user_name or "").lower() == wanted and (not failed_only or m.status_code >= 400)
+        ]
+        return sorted(rows, key=lambda m: m.recorded_at, reverse=True)[: max(1, limit)]
+
 
 class InMemoryPerformanceRepository(PerformanceRepository):
     """Process-local metrics store for backends without a metrics table (memory, Delta)."""
@@ -520,6 +544,123 @@ class InMemoryPerformanceRepository(PerformanceRepository):
         removed = len(self._rows) - len(kept)
         self._rows = kept
         return removed
+
+
+class TaskRepository(ABC):
+    """Store for tracked multi-step tasks (activity panel and admin task history)."""
+
+    @abstractmethod
+    def save(self, task: TaskRecord) -> None:
+        """Insert or replace a task by ``task_id``.
+
+        Args:
+            task: Full task record including its steps.
+        """
+
+    @abstractmethod
+    def get(self, task_id: str) -> TaskRecord | None:
+        """Return one task, or None when it does not exist.
+
+        Args:
+            task_id: Task identifier.
+
+        Returns:
+            The task, or None.
+        """
+
+    @abstractmethod
+    def list_since(self, since: datetime, *, actor: str | None = None) -> list[TaskRecord]:
+        """Return tasks started at or after ``since``, newest first.
+
+        Args:
+            since: Inclusive lower bound on ``started_at``.
+            actor: When set, only tasks started by this user (case-insensitive).
+
+        Returns:
+            Matching tasks.
+        """
+
+    @abstractmethod
+    def mark_stale(self, before: datetime, at: datetime) -> int:
+        """Fail running tasks whose last update is older than ``before``.
+
+        Args:
+            before: Heartbeat cutoff.
+            at: Finish time to record.
+
+        Returns:
+            Tasks marked failed.
+        """
+
+    @abstractmethod
+    def prune(self, before: datetime) -> int:
+        """Delete tasks started before ``before``.
+
+        Args:
+            before: Exclusive upper bound.
+
+        Returns:
+            Tasks deleted.
+        """
+
+
+STALE_TASK_MESSAGE = "The task stopped reporting progress (the app may have restarted)."
+
+
+class InMemoryTaskRepository(TaskRepository):
+    """Process-local task store for backends without a tasks table (memory, Delta)."""
+
+    def __init__(self) -> None:
+        self._rows: dict[str, TaskRecord] = {}
+        self._lock = threading.Lock()
+
+    def save(self, task: TaskRecord) -> None:
+        """Store a copy of ``task``."""
+        with self._lock:
+            self._rows[task.task_id] = task.model_copy(deep=True)
+
+    def get(self, task_id: str) -> TaskRecord | None:
+        """Return a copy of one task, or None."""
+        with self._lock:
+            found = self._rows.get(task_id)
+            return found.model_copy(deep=True) if found else None
+
+    def list_since(self, since: datetime, *, actor: str | None = None) -> list[TaskRecord]:
+        """Return copies of matching tasks, newest first."""
+        wanted = actor.lower() if actor else None
+        with self._lock:
+            rows = [
+                t.model_copy(deep=True)
+                for t in self._rows.values()
+                if t.started_at >= since and (wanted is None or t.actor.lower() == wanted)
+            ]
+        return sorted(rows, key=lambda t: t.started_at, reverse=True)
+
+    def mark_stale(self, before: datetime, at: datetime) -> int:
+        """Fail running tasks not updated since ``before``."""
+        count = 0
+        with self._lock:
+            for task_id, task in self._rows.items():
+                if task.status == TaskStatus.RUNNING and task.updated_at < before:
+                    self._rows[task_id] = task.model_copy(
+                        update={
+                            "status": TaskStatus.FAILED,
+                            "finished_at": at,
+                            "updated_at": at,
+                            "error_code": "stale",
+                            "error_message": STALE_TASK_MESSAGE,
+                        }
+                    )
+                    count += 1
+        return count
+
+    def prune(self, before: datetime) -> int:
+        """Drop tasks started before ``before``."""
+        with self._lock:
+            gone = [task_id for task_id, task in self._rows.items() if task.started_at < before]
+            for task_id in gone:
+                del self._rows[task_id]
+        return len(gone)
 
 
 class DataAccessViewsReader(ABC):
@@ -648,6 +789,19 @@ class StorageProvider(ABC):
         if repo is None:
             repo = InMemoryPerformanceRepository()
             self._performance_fallback = repo
+        return repo
+
+    @property
+    def tasks(self) -> TaskRepository:
+        """Tracked-task repository; process-local unless a backend persists it.
+
+        Returns:
+            Repository used by the task service.
+        """
+        repo = getattr(self, "_tasks_fallback", None)
+        if repo is None:
+            repo = InMemoryTaskRepository()
+            self._tasks_fallback = repo
         return repo
 
     @property

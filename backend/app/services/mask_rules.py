@@ -53,6 +53,7 @@ from backend.app.services.mask_handler_sql import (
     sanitize_expression,
     substitute_v,
 )
+from backend.app.services.tasks import step, step_detail
 
 logger = logging.getLogger(__name__)
 
@@ -211,8 +212,10 @@ class MaskRuleService:
             updated_by=actor.user_name,
             updated_at=now,
         )
-        saved = self._storage.mask_rules.upsert_rule(rule)
-        self._governed_tags.ensure_values(self.tag_key, [saved.rule_key])
+        with step("Save rule to the registry"):
+            saved = self._storage.mask_rules.upsert_rule(rule)
+        with step("Add rule to mask_rule tag values"):
+            self._governed_tags.ensure_values(self.tag_key, [saved.rule_key])
         self.sync_to_uc()
         self.regenerate_apply_mask_rule()
         self._audit(
@@ -288,7 +291,8 @@ class MaskRuleService:
             self._storage.mask_rules.put_config(
                 JOINABLE_SALT_KEY, secrets.token_hex(32), actor.user_name
             )
-        self._governed_tags.ensure_values(self.tag_key, [key for key, *_ in DEFAULT_RULES])
+        with step("Add defaults to mask_rule tag values"):
+            self._governed_tags.ensure_values(self.tag_key, [key for key, *_ in DEFAULT_RULES])
         self.sync_to_uc()
         self.regenerate_apply_mask_rule()
         self._audit("mask_rule.seeded", actor.user_name, {"count": len(DEFAULT_RULES)})
@@ -462,6 +466,7 @@ class MaskRuleService:
             sample_inputs=[str(s) for s in samples][:10],
         )
 
+    @step("Sync mask registry to Unity Catalog")
     def sync_to_uc(self) -> dict[str, int]:
         """Replace the UC registry tables from Lakebase (or memory).
 
@@ -479,7 +484,8 @@ class MaskRuleService:
         rules = self._storage.mask_rules.list_rules()
         salt = self._storage.mask_rules.get_config(JOINABLE_SALT_KEY)
         self._mirror_sql.execute(f"DELETE FROM {self.definitions_table}")
-        for rule in rules:
+        for done, rule in enumerate(rules, start=1):
+            step_detail(f"{done} of {len(rules)} rules")
             validated_sql = (
                 f"CAST({string_literal(rule.validated_at.isoformat())} AS TIMESTAMP)"
                 if rule.validated_at
@@ -522,6 +528,7 @@ class MaskRuleService:
         logger.info("Synced %s mask rules to UC %s", len(rules), self.definitions_table)
         return {"rules": len(rules), "salt_configured": 1 if salt else 0}
 
+    @step("Regenerate apply_mask_rule UDFs")
     def regenerate_apply_mask_rule(self) -> None:
         """Recreate the ``_resolve_mask_handler`` and ``apply_mask_rule`` UDFs from the registry.
 
@@ -548,6 +555,7 @@ class MaskRuleService:
         self._sql.execute(apply_sql)
         logger.info("Regenerated %s from %s rules", self.apply_function_name, len(rules))
 
+    @step("Check pack status")
     def pack_status(self) -> MaskRulePackStatus:
         """Report whether the registry, tag values, policy, and UDFs are in sync.
 
@@ -629,9 +637,10 @@ class MaskRuleService:
             self.seed_defaults(actor)
         else:
             self.ensure_salt(actor, rotate=False)
-            self._governed_tags.ensure_values(
-                self.tag_key, [r.rule_key for r in self._storage.mask_rules.list_rules()]
-            )
+            with step("Sync mask_rule tag values"):
+                self._governed_tags.ensure_values(
+                    self.tag_key, [r.rule_key for r in self._storage.mask_rules.list_rules()]
+                )
             self.sync_to_uc()
             self.regenerate_apply_mask_rule()
         self._ensure_auth_functions()
@@ -686,6 +695,7 @@ class MaskRuleService:
             )
         return enrollment_when_clause(enrollment_key, enrollment_value), except_clause
 
+    @step("Recreate column mask policy")
     def _recreate_variant_policy(self) -> None:
         """Recreate the metastore column-mask policy for non-geo sensitivity-tagged columns.
 
@@ -733,6 +743,7 @@ class MaskRuleService:
             self._config.app_catalog, self._config.app_schema, "identity_attributes"
         )
 
+    @step("Create auth helper functions")
     def _ensure_auth_functions(self) -> None:
         """Create or replace ``has_sensitivity`` and ``mask_variant`` from the app builders.
 
@@ -752,6 +763,7 @@ class MaskRuleService:
             )
         )
 
+    @step("Create geo mask functions")
     def _ensure_geo_functions(self) -> None:
         """Create or replace the ``mask_geometry_4326`` / ``mask_geography_4326`` UDFs.
 
@@ -765,6 +777,7 @@ class MaskRuleService:
                 )
             )
 
+    @step("Recreate geo mask policies")
     def _recreate_geo_policies(self) -> None:
         """Recreate the geometry and geography metastore column-mask policies.
 

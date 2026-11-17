@@ -43,6 +43,7 @@ from backend.app.models.user import CurrentUser
 from backend.app.repositories.base import StorageProvider
 from backend.app.services.governed_tags import GovernedTagService
 from backend.app.services.identity_attributes import IdentityAttributeService
+from backend.app.services.tasks import step, task_summary
 
 logger = logging.getLogger(__name__)
 
@@ -271,17 +272,19 @@ class RowFilterService:
             raise InvalidRequestError(
                 f"Attribute '{request.key}' already exists as a governed-tag definition"
             )
-        definition = self._identity.upsert_definition(
-            UpsertAttributeDefinitionRequest(
-                key=request.key,
-                description=request.description,
-                value_source=request.value_source,
-                allowed_values=request.allowed_values,
-                value_sql=request.value_sql,
-            ),
-            actor,
-        )
-        self._governed_tags.ensure_values(self.tag_key, [definition.key])
+        with step("Save dimension definition"):
+            definition = self._identity.upsert_definition(
+                UpsertAttributeDefinitionRequest(
+                    key=request.key,
+                    description=request.description,
+                    value_source=request.value_source,
+                    allowed_values=request.allowed_values,
+                    value_sql=request.value_sql,
+                ),
+                actor,
+            )
+        with step("Add dimension to tag values"):
+            self._governed_tags.ensure_values(self.tag_key, [definition.key])
         self.ensure_pack(actor)
         return self._to_dimension(definition, self._attachment_counts().get(definition.key, 0))
 
@@ -306,7 +309,8 @@ class RowFilterService:
             raise InvalidRequestError(
                 f"Detach '{dim.key}' from {attached} column(s) before deleting the dimension"
             )
-        self._identity.delete_definition(dim.key, actor)
+        with step("Delete dimension definition"):
+            self._identity.delete_definition(dim.key, actor)
         self.ensure_pack(actor)
 
     def preview_seed(self, value_sql: str) -> SeedPreview:
@@ -341,11 +345,14 @@ class RowFilterService:
             NotConfiguredError: If no SQL warehouse is configured.
         """
         dim = self._require_dimension(key)
-        refreshed = self._identity.refresh_definition(dim.key, actor)
+        with step("Run seed query and store values"):
+            refreshed = self._identity.refresh_definition(dim.key, actor)
+        task_summary(f"{len(refreshed.allowed_values)} values")
         return self._to_dimension(refreshed, self._attachment_counts().get(dim.key, 0))
 
     # -- policy pack --------------------------------------------------------------------
 
+    @step("Check pack status")
     def pack_status(self) -> RowFilterPackStatus:
         """Report whether tag values and the metastore policy match the dimensions.
 
@@ -410,16 +417,20 @@ class RowFilterService:
         dims = [d.key for d in self._dimension_definitions()]
         policy_name = self._config.row_filter_policy_name
         if dims:
-            self._governed_tags.ensure_values(self.tag_key, dims)
-            self._sql.execute(build_function_sql(self.function_name, self.mirror_table))
+            with step("Sync row-filter tag values"):
+                self._governed_tags.ensure_values(self.tag_key, dims)
+            with step("Recreate has_row_access UDF"):
+                self._sql.execute(build_function_sql(self.function_name, self.mirror_table))
             self._create_row_filter_policy(policy_name, dims)
         else:
-            self._sql.execute(f"DROP POLICY IF EXISTS {policy_name} ON METASTORE")
+            with step("Drop row-filter policy"):
+                self._sql.execute(f"DROP POLICY IF EXISTS {policy_name} ON METASTORE")
         if self._metadata_cache is not None:
             self._metadata_cache.invalidate(("abac-policy-definitions",))
         self._audit("row_filter.pack_ensured", actor.user_name, {"dimensions": dims})
         return self.pack_status()
 
+    @step("Recreate row-filter policy")
     def _create_row_filter_policy(self, policy_name: str, dims: list[str]) -> None:
         """Create or replace the metastore row-filter policy after tag values exist.
 
@@ -521,17 +532,20 @@ class RowFilterService:
         column = request.column_name.strip()
         quote_identifier(column)
         dims = [d.key for d in self._dimension_definitions()]
-        for row in self._attachment_rows(dims, table=(catalog, schema, table)):
+        with step("Check existing row filters on the table"):
+            rows = self._attachment_rows(dims, table=(catalog, schema, table))
+        for row in rows:
             if str(row["column_name"]).lower() == column.lower():
                 continue
             raise InvalidRequestError(
                 f"Table already has row filter dimension '{row['tag_value']}' on column "
                 f"'{row['column_name']}'. Only one dimension per table is supported."
             )
-        self._sql.execute(
-            f"ALTER TABLE {_fqn(catalog, schema, table)} ALTER COLUMN {quote_identifier(column)} "
-            f"SET TAGS ({string_literal(self.tag_key)} = {string_literal(dim.key)})"
-        )
+        with step("Tag the column in Unity Catalog"):
+            self._sql.execute(
+                f"ALTER TABLE {_fqn(catalog, schema, table)} ALTER COLUMN {quote_identifier(column)} "
+                f"SET TAGS ({string_literal(self.tag_key)} = {string_literal(dim.key)})"
+            )
         attachment = RowFilterAttachment(
             table_full_name=f"{catalog}.{schema}.{table}", column_name=column, dimension=dim.key
         )
@@ -555,10 +569,11 @@ class RowFilterService:
         """
         catalog, schema, table = split_table_name(table_full_name)
         column = column_name.strip()
-        self._sql.execute(
-            f"ALTER TABLE {_fqn(catalog, schema, table)} ALTER COLUMN {quote_identifier(column)} "
-            f"UNSET TAGS ({string_literal(self.tag_key)})"
-        )
+        with step("Untag the column in Unity Catalog"):
+            self._sql.execute(
+                f"ALTER TABLE {_fqn(catalog, schema, table)} ALTER COLUMN {quote_identifier(column)} "
+                f"UNSET TAGS ({string_literal(self.tag_key)})"
+            )
         self._audit(
             "row_filter.detached",
             actor.user_name,

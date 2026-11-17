@@ -48,6 +48,7 @@ from backend.app.models.recovery import (
 from backend.app.models.user import CurrentUser
 from backend.app.repositories.base import StorageProvider
 from backend.app.services.mask_rules import JOINABLE_SALT_KEY
+from backend.app.services.tasks import step, task_summary
 
 logger = logging.getLogger(__name__)
 
@@ -227,22 +228,28 @@ class RecoveryService:
         token = self._read_token(git.token_secret_key)
         message = f"Recovery export {generated_at:%Y-%m-%d %H:%M:%S} UTC by {actor.user_name}"
         try:
-            outcome = self._publisher.push_files(
-                repo_url=git.repo_url,
-                branch=git.branch,
-                path_prefix=git.path_prefix,
-                files={f.path: f.content for f in files},
-                username=git.username or "governance-app",
-                token=token,
-                author_name=git.username or "governance-app",
-                author_email=getattr(actor, "email", None) or actor.user_name,
-                message=message,
-            )
+            with step(f"Commit {len(files)} files and push to {git.branch}"):
+                outcome = self._publisher.push_files(
+                    repo_url=git.repo_url,
+                    branch=git.branch,
+                    path_prefix=git.path_prefix,
+                    files={f.path: f.content for f in files},
+                    username=git.username or "governance-app",
+                    token=token,
+                    author_name=git.username or "governance-app",
+                    author_email=getattr(actor, "email", None) or actor.user_name,
+                    message=message,
+                )
         except GitPublishError as exc:
             logger.warning("Recovery push to %s@%s failed: %s", git.repo_url, git.branch, exc)
             raise UpstreamError(str(exc)) from exc
 
         pushed_at = datetime.now(UTC)
+        task_summary(
+            f"Pushed {outcome.commit_sha[:8]}"
+            if outcome.committed and outcome.commit_sha
+            else "No changes to push"
+        )
         self._storage.audit.record(
             AuditEvent(
                 event_id=str(uuid.uuid4()),
@@ -452,6 +459,7 @@ class RecoveryService:
             raise InvalidRequestError("Save a path in the repository before importing.")
         return git
 
+    @step("Pull snapshot from Git")
     def _pull(self, git: RecoveryGitSettings) -> PullOutcome:
         token = self._read_token(git.token_secret_key)
         try:
@@ -466,6 +474,7 @@ class RecoveryService:
             logger.warning("Recovery pull from %s@%s failed: %s", git.repo_url, git.branch, exc)
             raise UpstreamError(str(exc)) from exc
 
+    @step("Check current app state")
     def _occupancy(self) -> RecoveryOccupancy:
         definitions = len(self._storage.identity_attributes.list_definitions())
         assignments = len(
@@ -505,6 +514,7 @@ class RecoveryService:
             summary=", ".join(parts) if parts else "empty",
         )
 
+    @step("Validate snapshot files")
     def _parse_snapshot(
         self, raw_files: dict[str, str]
     ) -> tuple[list[RecoveryFile], list[str], RecoveryManifestSummary, dict[str, Any]]:
@@ -555,6 +565,7 @@ class RecoveryService:
             )
         return files, warnings, manifest, parsed
 
+    @step("Write snapshot to app storage")
     def _apply_snapshot(self, parsed: dict[str, Any]) -> RecoveryApplyCounts:
         counts = RecoveryApplyCounts()
         try:
@@ -687,6 +698,7 @@ class RecoveryService:
             if isinstance(current, dict) and current.get("run_id") == run_id:
                 self._storage.settings.put_many({LOCK_KEY: {}}, "system")
 
+    @step("Read Git token secret")
     def _read_token(self, secret_key: str) -> str:
         """Read the Git token from the admin secret scope. The value is returned to the caller only.
 
@@ -707,6 +719,7 @@ class RecoveryService:
             raise InvalidRequestError(f"The Git token under key '{secret_key}' in scope '{scope}' is empty.")
         return token
 
+    @step("Collect governance state")
     def _collect(
         self, generated_at: datetime, actor: CurrentUser, git: RecoveryGitSettings
     ) -> tuple[list[RecoveryFile], list[str]]:

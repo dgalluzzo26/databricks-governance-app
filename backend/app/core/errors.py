@@ -1,7 +1,8 @@
 """Application error hierarchy and FastAPI handlers that map it to JSON responses.
 
-Every error is rendered as ``{"error": {"code", "message", "details"}}`` with the HTTP status
-of the error class.
+Every error is rendered as ``{"error": {"code", "message", "details", "requestId"}}`` with the
+HTTP status of the error class. The code and message are also attached to the request metric so
+the activity panel and the admin request history can show why a request failed.
 """
 
 from __future__ import annotations
@@ -11,6 +12,9 @@ from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+
+from backend.app.core.perf import note_error
+from backend.app.core.request_id import current_request_id
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +91,23 @@ class UpstreamError(AppError):
     code = "upstream_error"
 
 
+class WarehouseUnavailableError(UpstreamError):
+    """The SQL warehouse is not running or not healthy; maps to HTTP 503 ``warehouse_unavailable``.
+
+    ``details`` carries ``warehouseId``, ``state`` and ``health`` so the UI can say why.
+    """
+
+    status_code = 503
+    code = "warehouse_unavailable"
+
+
+class StatementTimeoutError(UpstreamError):
+    """A SQL statement ran past the app's wait limit on a running warehouse; HTTP 504 ``timeout``."""
+
+    status_code = 504
+    code = "timeout"
+
+
 class NotConfiguredError(AppError):
     """A required resource is not configured; maps to HTTP 503 ``not_configured``.
 
@@ -107,9 +128,13 @@ def _body(code: str, message: str, details: dict[str, Any] | None = None) -> dic
         details: Optional extra context; defaults to an empty dict.
 
     Returns:
-        The ``{"error": {...}}`` response body.
+        The ``{"error": {...}}`` response body; ``requestId`` is included inside a request.
     """
-    return {"error": {"code": code, "message": message, "details": details or {}}}
+    body: dict[str, Any] = {"code": code, "message": message, "details": details or {}}
+    request_id = current_request_id()
+    if request_id:
+        body["requestId"] = request_id
+    return {"error": body}
 
 
 def register_exception_handlers(app: FastAPI) -> None:
@@ -117,7 +142,8 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     ``AppError`` subclasses keep their status, code, message and details (5xx are logged at
     WARNING). Any other exception becomes a generic 500 ``internal_error`` without leaking
-    internals, and is logged with its traceback.
+    internals, and is logged with its traceback. Both record the code and message on the
+    request metric.
 
     Args:
         app: FastAPI application to register the handlers on.
@@ -128,10 +154,12 @@ def register_exception_handlers(app: FastAPI) -> None:
         """Render an ``AppError`` with its own status code and envelope."""
         if exc.status_code >= 500:
             logger.warning("%s: %s", exc.code, exc.message)
+        note_error(exc.code, exc.message)
         return JSONResponse(status_code=exc.status_code, content=_body(exc.code, exc.message, exc.details))
 
     @app.exception_handler(Exception)
     async def _unhandled(_: Request, exc: Exception) -> JSONResponse:
         """Log an unexpected exception and return a generic 500 response."""
         logger.exception("Unhandled error")
+        note_error("internal_error", f"Unexpected server error ({type(exc).__name__})")
         return JSONResponse(status_code=500, content=_body("internal_error", "Unexpected server error"))

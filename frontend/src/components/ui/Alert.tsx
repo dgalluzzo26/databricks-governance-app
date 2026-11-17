@@ -2,6 +2,7 @@
  * @file Inline status and error banners with tone-based styling and ARIA roles.
  */
 import type { ReactNode } from "react";
+import { describeError } from "@/api/errors";
 import styles from "./Alert.module.css";
 
 /** Visual and semantic severity for {@link Alert}. */
@@ -23,15 +24,21 @@ export function Alert({ tone = "info", title, children }: { tone?: AlertTone; ti
 }
 
 /**
- * Convenience danger {@link Alert} that stringifies an unknown error.
- * @param props.error - Thrown value or Error whose message is shown in the body.
- * @param props.title - Optional alert title (default `"Something went wrong"`).
+ * Danger {@link Alert} for a thrown error: the message, a next-step hint for known error codes
+ * (for example a stopped SQL warehouse), and the server reference ID when there is one.
+ * A warehouse that is still starting is shown as a warning rather than a failure.
+ * @param props.error - Thrown value, usually an `ApiError`.
+ * @param props.title - Optional context title such as "Could not load policies"; defaults to
+ *   a title derived from the error code.
  */
-export function ErrorAlert({ error, title = "Something went wrong" }: { error: unknown; title?: string }) {
-  const message = error instanceof Error ? error.message : String(error);
+export function ErrorAlert({ error, title }: { error: unknown; title?: string }) {
+  const described = describeError(error);
+  const tone: AlertTone = described.code === "warehouse_unavailable" ? "warning" : "danger";
   return (
-    <Alert tone="danger" title={title}>
-      {message}
+    <Alert tone={tone} title={title ?? described.title}>
+      <span>{described.message}</span>
+      {described.hint && <span className={styles.hint}>{described.hint}</span>}
+      {described.requestId && <span className={styles.reference}>Reference: {described.requestId}</span>}
     </Alert>
   );
 }

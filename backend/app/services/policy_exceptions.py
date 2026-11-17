@@ -23,6 +23,7 @@ from backend.app.models.policy_exception import (
 from backend.app.models.principal import PrincipalKind
 from backend.app.models.user import CurrentUser
 from backend.app.repositories.base import StorageProvider
+from backend.app.services.tasks import step, task_summary
 
 
 class PolicyExceptionService:
@@ -194,11 +195,14 @@ class PolicyExceptionService:
         mask_synced = False
         row_synced = False
         if self._mask_rules is not None:
-            self._mask_rules.ensure_pack(actor)
+            with step("Rebuild mask policy pack"):
+                self._mask_rules.ensure_pack(actor)
             mask_synced = True
         if self._row_filters is not None:
-            self._row_filters.ensure_pack(actor)
+            with step("Rebuild row-filter policy pack"):
+                self._row_filters.ensure_pack(actor)
             row_synced = True
+        task_summary(f"{len(principals)} exempt principals applied")
         self._audit(
             "policy_exception.applied",
             actor.user_name,

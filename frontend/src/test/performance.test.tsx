@@ -45,27 +45,101 @@ describe("performance formatting helpers", () => {
 });
 
 describe("Performance page", () => {
-  it("renders KPIs, recommendations, activities, sizing, and slow requests", async () => {
+  it("renders KPIs and recommendations on the overview tab", async () => {
     renderApp("/performance");
     expect(await screen.findByRole("heading", { name: "Performance" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
     expect(await screen.findByText("Slower than expected")).toBeInTheDocument();
     expect(screen.getByText("Slow time on warehouse")).toBeInTheDocument();
     expect(screen.getByText("75%")).toBeInTheDocument();
 
     const recs = screen.getByRole("list", { name: "Scaling recommendations" });
     expect(within(recs).getByText("Approve permission request: warehouse time dominates")).toBeInTheDocument();
+    expect(screen.queryByRole("table", { name: "Slow requests" })).not.toBeInTheDocument();
+  });
 
-    const activities = screen.getByRole("table", { name: "Latency by activity" });
+  it("shows latency by activity and slow requests on the latency tab", async () => {
+    renderApp("/performance?tab=latency");
+    const activities = await screen.findByRole("table", { name: "Latency by activity" });
     expect(within(activities).getByText("Approve permission request")).toBeInTheDocument();
     expect(within(activities).getByText("9.0 s")).toBeInTheDocument();
 
-    expect(screen.getByText("Current sizing")).toBeInTheDocument();
-    expect(screen.getByText("Unavailable: Could not read endpoint")).toBeInTheDocument();
-    expect(screen.getByText(/1–2 clusters/)).toBeInTheDocument();
-
-    const slow = screen.getByRole("table", { name: "Slow requests" });
+    const slow = await screen.findByRole("table", { name: "Slow requests" });
     expect(within(slow).getByText("9.0 s")).toBeInTheDocument();
     expect(within(slow).getByText("admin@example.com")).toBeInTheDocument();
+  });
+
+  it("shows sizing and app cost on the sizing tab, without the window selector", async () => {
+    renderApp("/performance?tab=sizing");
+    expect(await screen.findByText("Current sizing")).toBeInTheDocument();
+    expect(await screen.findByText("Unavailable: Could not read endpoint")).toBeInTheDocument();
+    expect(screen.getByText(/1–2 clusters/)).toBeInTheDocument();
+    expect(screen.getByText("App cost")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Window")).not.toBeInTheDocument();
+  });
+
+  it("switches tabs and keeps the choice in the URL", async () => {
+    const { default: userEvent } = await import("@testing-library/user-event");
+    const user = userEvent.setup();
+    renderApp("/performance");
+    await user.click(await screen.findByRole("tab", { name: "Tasks" }));
+    expect(screen.getByRole("tab", { name: "Tasks" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByRole("table", { name: "Task history" })).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Overview" }));
+    expect(await screen.findByText("Slower than expected")).toBeInTheDocument();
+  });
+
+  it("lists every user's requests and filters to failures", async () => {
+    const { default: userEvent } = await import("@testing-library/user-event");
+    const user = userEvent.setup();
+    const services = fakeServices();
+    const requests = vi.spyOn(services.performance, "requests");
+    renderApp("/performance?tab=requests", services);
+    const table = await screen.findByRole("table", { name: "Request history" });
+    expect(within(table).getByText("warehouse_unavailable")).toBeInTheDocument();
+    expect(within(table).getByText("req-503-abc")).toBeInTheDocument();
+    expect(within(table).getByText("analyst@example.com")).toBeInTheDocument();
+    expect(screen.getByText("1 succeeded")).toBeInTheDocument();
+    expect(screen.getByText("1 failed")).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText("Outcome"), "failed");
+    await waitFor(() =>
+      expect(requests).toHaveBeenLastCalledWith(expect.objectContaining({ status: "failed", page: 1 }), expect.anything()),
+    );
+  });
+
+  it("lists tracked tasks with expandable steps and a status filter", async () => {
+    const { default: userEvent } = await import("@testing-library/user-event");
+    const user = userEvent.setup();
+    const services = fakeServices();
+    const tasks = vi.spyOn(services.performance, "tasks");
+    renderApp("/performance?tab=tasks", services);
+    const table = await screen.findByRole("table", { name: "Task history" });
+    expect(within(table).getByText("Sync mask policy pack")).toBeInTheDocument();
+    expect(within(table).getByText("warehouse_unavailable: SQL warehouse governance-wh is starting")).toBeInTheDocument();
+
+    await user.click(within(table).getByRole("button", { name: "1 of 2 steps" }));
+    const steps = await screen.findByRole("list", { name: "Steps for Sync mask policy pack" });
+    expect(within(steps).getByText("Recreate column mask policy")).toBeInTheDocument();
+    expect(within(steps).getByText("4 of 4 rules")).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText("Status"), "failed");
+    await waitFor(() =>
+      expect(tasks).toHaveBeenLastCalledWith(expect.objectContaining({ status: "failed" }), expect.anything()),
+    );
+  });
+
+  it("explains empty and failed history loads", async () => {
+    renderApp(
+      "/performance?tab=tasks",
+      fakeServices({ performanceTasks: { items: [], total: 0, page: 1, pageSize: 25, running: 0, failed: 0 } }),
+    );
+    expect(await screen.findByText(/No tasks in this window/)).toBeInTheDocument();
+  });
+
+  it("reports request history errors", async () => {
+    renderApp("/performance?tab=requests", fakeServices({ performanceRequests: new Error("history exploded") }));
+    expect(await screen.findByText("Could not load request history")).toBeInTheDocument();
   });
 
   it("refetches the summary when the window changes", async () => {
@@ -95,22 +169,25 @@ describe("Performance page", () => {
   });
 
   it("reports summary, capacity, and slow-request errors without breaking the page", async () => {
-    renderApp(
-      "/performance",
+    const failing = () =>
       fakeServices({
         performanceSummary: new Error("summary exploded"),
         performanceCapacity: new Error("sizing exploded"),
         performanceSlowRequests: new Error("slow exploded"),
-      }),
-    );
+      });
+    const first = renderApp("/performance", failing());
     expect(await screen.findByText("Could not load performance summary")).toBeInTheDocument();
-    expect(await screen.findByText("Could not read sizing")).toBeInTheDocument();
+    first.unmount();
+    const second = renderApp("/performance?tab=latency", failing());
     expect(await screen.findByText("Could not load slow requests")).toBeInTheDocument();
+    second.unmount();
+    renderApp("/performance?tab=sizing", failing());
+    expect(await screen.findByText("Could not read sizing")).toBeInTheDocument();
   });
 
   it("shows a message when nothing is slower than expected", async () => {
     renderApp(
-      "/performance",
+      "/performance?tab=latency",
       fakeServices({
         performanceSlowRequests: { items: [], total: 0, page: 1, pageSize: 25 },
       }),
@@ -199,7 +276,7 @@ describe("Data access analytics paged tables", () => {
 
 describe("App cost card", () => {
   it("shows per-sync and per-day cost from billing", async () => {
-    renderApp("/performance");
+    renderApp("/performance?tab=sizing");
     expect(await screen.findByText("App cost")).toBeInTheDocument();
     expect(await screen.findByText("Avg cost per sync")).toBeInTheDocument();
     expect(screen.getByText("Lakebase last 7 days")).toBeInTheDocument();
@@ -212,7 +289,7 @@ describe("App cost card", () => {
 
   it("explains when billing cannot be read", async () => {
     renderApp(
-      "/performance",
+      "/performance?tab=sizing",
       fakeServices({
         performanceAppCost: {
           ...testAppCost,

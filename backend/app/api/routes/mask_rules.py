@@ -56,7 +56,10 @@ def upsert_rule(body: UpsertMaskRuleRequest, admin: Admin, container: Container)
     Raises:
         ForbiddenError: If the caller is not an app admin (HTTP 403).
     """
-    return container.mask_rules.upsert_rule(body, admin)
+    with container.tasks.track(
+        "mask_rules.save", f"Save mask rule {body.rule_key}", admin.user_name, link="/mask-rules"
+    ):
+        return container.mask_rules.upsert_rule(body, admin)
 
 
 @router.delete("/{rule_key}", status_code=204)
@@ -74,7 +77,10 @@ def delete_rule(rule_key: str, admin: Admin, container: Container) -> None:
         ForbiddenError: If the caller is not an app admin (HTTP 403).
         NotFoundError: If the rule does not exist (HTTP 404).
     """
-    container.mask_rules.delete_rule(rule_key, admin)
+    with container.tasks.track(
+        "mask_rules.delete", f"Delete mask rule {rule_key}", admin.user_name, link="/mask-rules"
+    ):
+        container.mask_rules.delete_rule(rule_key, admin)
 
 
 @router.post("/seed", response_model=MaskRuleList)
@@ -89,7 +95,10 @@ def seed_defaults(admin: Admin, container: Container) -> MaskRuleList:
     Raises:
         ForbiddenError: If the caller is not an app admin (HTTP 403).
     """
-    return container.mask_rules.seed_defaults(admin)
+    with container.tasks.track(
+        "mask_rules.seed", "Seed default mask rules", admin.user_name, link="/mask-rules"
+    ):
+        return container.mask_rules.seed_defaults(admin)
 
 
 @router.get("/pack", response_model=MaskRulePackStatus)
@@ -120,7 +129,10 @@ def ensure_pack(admin: Admin, container: Container) -> MaskRulePackStatus:
     Raises:
         ForbiddenError: If the caller is not an app admin (HTTP 403).
     """
-    return container.mask_rules.ensure_pack(admin)
+    with container.tasks.track(
+        "mask_rules.pack", "Sync mask policy pack", admin.user_name, link="/mask-rules"
+    ):
+        return container.mask_rules.ensure_pack(admin)
 
 
 @router.post("/sync-uc")
@@ -136,7 +148,10 @@ def sync_uc(admin: Admin, container: Container) -> dict[str, int]:
         ForbiddenError: If the caller is not an app admin (HTTP 403).
     """
     _ = admin
-    return container.mask_rules.sync_to_uc()
+    with container.tasks.track(
+        "mask_rules.sync_uc", "Sync mask rules to Unity Catalog", admin.user_name, link="/mask-rules"
+    ):
+        return container.mask_rules.sync_to_uc()
 
 
 @router.post("/salt/rotate", response_model=MaskingConfigStatus)
@@ -151,7 +166,10 @@ def rotate_salt(admin: Admin, container: Container) -> MaskingConfigStatus:
     Raises:
         ForbiddenError: If the caller is not an app admin (HTTP 403).
     """
-    return container.mask_rules.ensure_salt(admin, rotate=True)
+    with container.tasks.track(
+        "mask_rules.rotate_salt", "Rotate joinable mask salt", admin.user_name, link="/mask-rules"
+    ):
+        return container.mask_rules.ensure_salt(admin, rotate=True)
 
 
 @router.post("/handlers/draft", response_model=MaskHandlerDraft)

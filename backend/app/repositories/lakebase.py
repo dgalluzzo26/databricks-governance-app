@@ -45,7 +45,9 @@ from backend.app.models.mask_rule import MaskRuleDefinition, MaskRuleKind
 from backend.app.models.performance import RequestMetric
 from backend.app.models.policy_exception import PolicyException
 from backend.app.models.principal import PrincipalKind
+from backend.app.models.task import TaskRecord
 from backend.app.repositories.base import (
+    STALE_TASK_MESSAGE,
     AccessRequestRepository,
     AuditRepository,
     CategoryApproverRepository,
@@ -56,6 +58,7 @@ from backend.app.repositories.base import (
     PolicyExceptionRepository,
     SettingsRepository,
     StorageProvider,
+    TaskRepository,
 )
 from backend.app.repositories.data_access_state import (
     MEMBER_KINDS,
@@ -280,6 +283,26 @@ CREATE TABLE IF NOT EXISTS {schema}.request_metrics (
 CREATE INDEX IF NOT EXISTS request_metrics_recorded_idx
   ON {schema}.request_metrics (recorded_at);
 
+CREATE TABLE IF NOT EXISTS {schema}.app_tasks (
+  task_id        TEXT PRIMARY KEY,
+  kind           TEXT NOT NULL,
+  title          TEXT NOT NULL,
+  actor          TEXT NOT NULL,
+  status         TEXT NOT NULL,
+  steps          JSONB NOT NULL DEFAULT '[]'::jsonb,
+  started_at     TIMESTAMPTZ NOT NULL,
+  finished_at    TIMESTAMPTZ,
+  updated_at     TIMESTAMPTZ NOT NULL,
+  error_code     TEXT,
+  error_message  TEXT,
+  request_id     TEXT,
+  link           TEXT,
+  summary        TEXT
+);
+CREATE INDEX IF NOT EXISTS app_tasks_started_idx ON {schema}.app_tasks (started_at DESC);
+CREATE INDEX IF NOT EXISTS app_tasks_actor_idx ON {schema}.app_tasks (lower(actor), started_at DESC);
+CREATE INDEX IF NOT EXISTS app_tasks_running_idx ON {schema}.app_tasks (status, updated_at);
+
 CREATE TABLE IF NOT EXISTS {schema}.data_access_gap_items (
   item_key        TEXT PRIMARY KEY,
   kind            TEXT NOT NULL,
@@ -410,7 +433,8 @@ class LakebasePerformanceRepository(PerformanceRepository):
 
     _COLUMNS = (
         "recorded_at, method, route, activity, status_code, duration_ms, "
-        "warehouse_ms, warehouse_calls, lakebase_ms, lakebase_calls, user_name"
+        "warehouse_ms, warehouse_calls, lakebase_ms, lakebase_calls, user_name, "
+        "request_id, error_code, error_message"
     )
 
     def __init__(self, pg: _Pg) -> None:
@@ -433,12 +457,15 @@ class LakebasePerformanceRepository(PerformanceRepository):
                 m.lakebase_ms,
                 m.lakebase_calls,
                 m.user_name,
+                m.request_id,
+                m.error_code,
+                m.error_message,
             )
             for m in metrics
         ]
         statement = (
             f"INSERT INTO {self._pg.schema}.request_metrics ({self._COLUMNS}) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
         )
         with self._pg.pool.connection() as conn, conn.cursor() as cur:
             cur.executemany(statement, rows)
@@ -452,11 +479,98 @@ class LakebasePerformanceRepository(PerformanceRepository):
         )
         return [RequestMetric(**row) for row in rows]
 
+    def list_for_user(
+        self, user_name: str, since: datetime, *, failed_only: bool = False, limit: int = 50
+    ) -> list[RequestMetric]:
+        """Return one user's metrics newest first, optionally failures only."""
+        where = "user_name = %(user)s AND recorded_at >= %(since)s"
+        if failed_only:
+            where += " AND status_code >= 400"
+        rows = self._pg.fetch(
+            f"SELECT {self._COLUMNS} FROM {{schema}}.request_metrics WHERE {where} "
+            "ORDER BY recorded_at DESC LIMIT %(limit)s",
+            {"user": user_name, "since": since, "limit": max(1, limit)},
+        )
+        return [RequestMetric(**row) for row in rows]
+
     def prune(self, before: datetime) -> int:
         """Delete metrics older than ``before``."""
         rows = self._pg.fetch(
             "WITH gone AS (DELETE FROM {schema}.request_metrics WHERE recorded_at < %(before)s "
             "RETURNING 1) SELECT count(*) AS n FROM gone",
+            {"before": before},
+        )
+        return int(rows[0]["n"]) if rows else 0
+
+
+class LakebaseTaskRepository(TaskRepository):
+    """Postgres-backed tracked tasks (``app_tasks``); steps are stored as JSONB.
+
+    Args:
+        pg: Schema-scoped query helper.
+    """
+
+    _COLUMNS = (
+        "task_id, kind, title, actor, status, steps, started_at, finished_at, updated_at, "
+        "error_code, error_message, request_id, link, summary"
+    )
+
+    def __init__(self, pg: _Pg) -> None:
+        self._pg = pg
+
+    def save(self, task: TaskRecord) -> None:
+        """Upsert the full task row."""
+        params = task.model_dump(mode="python", exclude={"steps", "duration_seconds"})
+        params["status"] = task.status.value
+        params["steps"] = Jsonb([step.model_dump(mode="json") for step in task.steps])
+        self._pg.run(
+            f"INSERT INTO {{schema}}.app_tasks ({self._COLUMNS}) VALUES ("
+            "%(task_id)s, %(kind)s, %(title)s, %(actor)s, %(status)s, %(steps)s, %(started_at)s, "
+            "%(finished_at)s, %(updated_at)s, %(error_code)s, %(error_message)s, %(request_id)s, "
+            "%(link)s, %(summary)s) "
+            "ON CONFLICT (task_id) DO UPDATE SET status = EXCLUDED.status, steps = EXCLUDED.steps, "
+            "finished_at = EXCLUDED.finished_at, updated_at = EXCLUDED.updated_at, "
+            "error_code = EXCLUDED.error_code, error_message = EXCLUDED.error_message, "
+            "summary = EXCLUDED.summary, title = EXCLUDED.title, link = EXCLUDED.link",
+            params,
+        )
+
+    def get(self, task_id: str) -> TaskRecord | None:
+        """Return one task by id, or None."""
+        rows = self._pg.fetch(
+            f"SELECT {self._COLUMNS} FROM {{schema}}.app_tasks WHERE task_id = %(task_id)s",
+            {"task_id": task_id},
+        )
+        return TaskRecord(**rows[0]) if rows else None
+
+    def list_since(self, since: datetime, *, actor: str | None = None) -> list[TaskRecord]:
+        """Return tasks started at or after ``since``, newest first, optionally for one actor."""
+        where = "started_at >= %(since)s"
+        params: dict[str, Any] = {"since": since}
+        if actor:
+            where += " AND lower(actor) = lower(%(actor)s)"
+            params["actor"] = actor
+        rows = self._pg.fetch(
+            f"SELECT {self._COLUMNS} FROM {{schema}}.app_tasks WHERE {where} ORDER BY started_at DESC", params
+        )
+        return [TaskRecord(**row) for row in rows]
+
+    def mark_stale(self, before: datetime, at: datetime) -> int:
+        """Fail running tasks with no heartbeat since ``before``."""
+        rows = self._pg.fetch(
+            "WITH gone AS (UPDATE {schema}.app_tasks SET status = 'failed', finished_at = %(at)s, "
+            "updated_at = %(at)s, error_code = 'stale', error_message = %(message)s "
+            "WHERE status = 'running' AND updated_at < %(before)s RETURNING 1) "
+            "SELECT count(*) AS n FROM gone",
+            {"before": before, "at": at, "message": STALE_TASK_MESSAGE},
+        )
+        return int(rows[0]["n"]) if rows else 0
+
+    def prune(self, before: datetime) -> int:
+        """Delete tasks started before ``before``."""
+        rows = self._pg.fetch(
+            "WITH gone AS (DELETE FROM {schema}.app_tasks WHERE started_at < %(before)s RETURNING 1) "
+            "SELECT count(*) AS n FROM gone",
             {"before": before},
         )
         return int(rows[0]["n"]) if rows else 0
@@ -2044,6 +2158,7 @@ class LakebaseStorageProvider(StorageProvider):
         self._mask_rules = LakebaseMaskRuleRepository(self._pg)
         self._policy_exceptions = LakebasePolicyExceptionRepository(self._pg)
         self._performance = LakebasePerformanceRepository(self._pg)
+        self._tasks = LakebaseTaskRepository(self._pg)
         self._data_access_views = LakebaseDataAccessViews(self._pg)
         self._data_access_state = LakebaseDataAccessStateRepository(self._pg)
 
@@ -2093,6 +2208,11 @@ class LakebaseStorageProvider(StorageProvider):
         return self._performance
 
     @property
+    def tasks(self) -> TaskRepository:
+        """Return the persisted tracked-task repository."""
+        return self._tasks
+
+    @property
     def data_access_views(self) -> DataAccessViewsReader | None:
         """Return the reader for the data-access SQL views."""
         return self._data_access_views
@@ -2134,6 +2254,13 @@ class LakebaseStorageProvider(StorageProvider):
             )
             self._pg.run(
                 "ALTER TABLE {schema}.mask_rule_definitions ADD COLUMN IF NOT EXISTS validated_at TIMESTAMPTZ"
+            )
+            # Request metrics gained correlation IDs and error details for the activity views.
+            for column in ("request_id", "error_code", "error_message"):
+                self._pg.run(f"ALTER TABLE {{schema}}.request_metrics ADD COLUMN IF NOT EXISTS {column} TEXT")
+            self._pg.run(
+                "CREATE INDEX IF NOT EXISTS request_metrics_user_idx "
+                "ON {schema}.request_metrics (user_name, recorded_at DESC)"
             )
             # Approvers gained attribute_key so row-filter dimensions can have their own reviewers.
             self._pg.run(

@@ -181,6 +181,22 @@ Every request you have opened, where it was routed, its status, and when you sub
 
 ---
 
+## Activity panel: what is running and what failed
+
+The **Activity** button in the top bar opens a side panel with your own recent tasks and errors.
+
+- **Tasks** lists actions that take several steps, such as syncing a policy pack or running a
+  grants sync. Each step shows as running, done, or failed while it happens. Jobs keep reporting
+  here after you leave the page.
+- **Recent errors** lists requests that failed in the last 24 hours. **Clear** hides them.
+- The badge on the button shows how many tasks are running, or how many new problems you have
+  not seen yet.
+
+When something fails, the message includes a **Reference** ID. Quote it when you ask an app
+admin for help. If the message says the SQL warehouse is not ready, wait a minute and try again.
+
+---
+
 ## Labels you may see
 
 | Label | Meaning |

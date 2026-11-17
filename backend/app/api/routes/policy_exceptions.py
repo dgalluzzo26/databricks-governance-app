@@ -90,4 +90,7 @@ def apply_exceptions(admin: Admin, container: Container) -> ApplyPolicyException
     Raises:
         ForbiddenError: If the caller is not an app admin (HTTP 403).
     """
-    return container.policy_exceptions.apply(admin)
+    with container.tasks.track(
+        "policy_exceptions.apply", "Apply policy exceptions", admin.user_name, link="/exceptions"
+    ):
+        return container.policy_exceptions.apply(admin)

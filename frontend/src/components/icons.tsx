@@ -16,6 +16,34 @@ function Icon({ children, ...props }: IconProps) {
   );
 }
 
+/** Activity panel toggle (pulse line). */
+export const ActivityIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M1.5 8h3l2-4.5 3 9 2-4.5h3" />
+  </Icon>
+);
+
+/** Completed step check mark. */
+export const CheckIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="m3.5 8.5 3 3 6-7" />
+  </Icon>
+);
+
+/** Failed step cross. */
+export const CrossIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="m4.5 4.5 7 7M11.5 4.5l-7 7" />
+  </Icon>
+);
+
+/** Close button for panels and dialogs. */
+export const CloseIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="m4 4 8 8M12 4l-8 8" />
+  </Icon>
+);
+
 /** Home / dashboard nav icon. */
 export const HomeIcon = (p: IconProps) => (
   <Icon {...p}>

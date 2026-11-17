@@ -17,6 +17,7 @@ from backend.app.models.performance import (
     SlowRequest,
     SlowRequestPage,
 )
+from backend.app.models.task import RequestPage, RequestRecord
 from backend.app.repositories.base import StorageProvider
 from backend.app.services.performance_analytics import build_summary, slow_requests
 from backend.app.services.table_query import TableQuery, sort_and_filter
@@ -41,6 +42,19 @@ SLOW_REQUEST_READERS: dict[str, Callable[[SlowRequest], Any]] = {
     "app": lambda item: item.app_ms,
     "user": lambda item: item.user_name,
 }
+
+# In-memory readers for the request history table. Keys match the frontend column keys.
+REQUEST_READERS: dict[str, Callable[[RequestRecord], Any]] = {
+    "when": lambda item: item.recorded_at,
+    "activity": lambda item: f"{item.activity} {item.method} {item.route}",
+    "status": lambda item: item.status_code,
+    "total": lambda item: item.duration_ms,
+    "user": lambda item: item.user_name,
+    "error": lambda item: f"{item.error_code or ''} {item.error_message or ''}".strip(),
+    "request": lambda item: item.request_id,
+}
+
+REQUEST_STATUS_FILTERS = ("all", "succeeded", "failed")
 
 
 class PerformanceService:
@@ -105,6 +119,78 @@ class PerformanceService:
             total=len(rows),
             page=max(1, page),
             page_size=size,
+        )
+
+    def requests_page(
+        self,
+        *,
+        hours: int | None = None,
+        status: str = "all",
+        page: int = 1,
+        page_size: int = SLOW_PAGE_SIZE_DEFAULT,
+        table_query: TableQuery | None = None,
+    ) -> RequestPage:
+        """One page of every user's requests, newest first, with success and failure counts.
+
+        Args:
+            hours: Window length in hours.
+            status: ``all``, ``succeeded`` (status below 400), or ``failed`` (400 and above).
+            page: 1-based page.
+            page_size: Rows per page.
+            table_query: Optional column sort and filters applied before paging.
+
+        Returns:
+            The page; ``succeeded`` and ``failed`` count the whole window.
+        """
+        window = self.clamp_hours(hours)
+        _, metrics = self._window(window)
+        records = [RequestRecord.from_metric(m) for m in reversed(metrics)]
+        succeeded = sum(1 for r in records if r.ok)
+        failed = len(records) - succeeded
+        wanted = status if status in REQUEST_STATUS_FILTERS else "all"
+        if wanted != "all":
+            records = [r for r in records if r.ok == (wanted == "succeeded")]
+        rows = sort_and_filter(records, table_query or TableQuery(), REQUEST_READERS)
+        size = min(max(1, page_size), SLOW_PAGE_SIZE_MAX)
+        start = (max(1, page) - 1) * size
+        return RequestPage(
+            items=rows[start : start + size],
+            total=len(rows),
+            page=max(1, page),
+            page_size=size,
+            succeeded=succeeded,
+            failed=failed,
+        )
+
+    def requests_for_user(
+        self, user_name: str, *, hours: int = 24, failed_only: bool = True, limit: int = 30
+    ) -> RequestPage:
+        """The signed-in user's recent requests (failures by default) for the activity panel.
+
+        Args:
+            user_name: The caller.
+            hours: Window length in hours.
+            failed_only: When True, only failed requests.
+            limit: Most rows to return.
+
+        Returns:
+            The requests, newest first.
+        """
+        window = self.clamp_hours(hours)
+        since = datetime.now(UTC) - timedelta(hours=window)
+        cap = min(max(1, limit), SLOW_PAGE_SIZE_MAX)
+        metrics = self._storage.performance.list_for_user(
+            user_name, since, failed_only=failed_only, limit=cap
+        )
+        records = [RequestRecord.from_metric(m) for m in metrics]
+        failed = sum(1 for r in records if not r.ok)
+        return RequestPage(
+            items=records,
+            total=len(records),
+            page=1,
+            page_size=cap,
+            succeeded=len(records) - failed,
+            failed=failed,
         )
 
     def capacity(self) -> CapacityReport:

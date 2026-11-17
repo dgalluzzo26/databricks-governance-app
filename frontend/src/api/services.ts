@@ -34,6 +34,12 @@ import type {
   PerformanceCapacity,
   PerformanceSlowRequestPage,
   PerformanceSummary,
+  ActivityFeed,
+  RequestPage,
+  RequestStatusFilter,
+  TaskPage,
+  TaskRecord,
+  TaskStatus,
   AppSettings,
   UsageOverview,
   UsageTableList,
@@ -1367,6 +1373,75 @@ export class PerformanceApi {
   appCost(days: number, signal?: AbortSignal): Promise<AppCostReport> {
     return this.http.get<AppCostReport>(`/performance/app-cost?days=${days}`, signal);
   }
+
+  /**
+   * `GET /performance/requests` — every user's requests, newest first, with success/failure counts.
+   *
+   * @param params - Window in hours, status filter, 1-based page, page size, and table query.
+   * @param signal - Optional abort signal.
+   */
+  requests(
+    params: { hours: number; status: RequestStatusFilter; page: number; pageSize: number } & TableQueryParams,
+    signal?: AbortSignal,
+  ): Promise<RequestPage> {
+    return this.http.get<RequestPage>(
+      `/performance/requests${toQuery({
+        hours: String(params.hours),
+        status: params.status,
+        page: String(params.page),
+        page_size: String(params.pageSize),
+        ...tableQuery(params),
+      })}`,
+      signal,
+    );
+  }
+
+  /**
+   * `GET /performance/tasks` — every user's tracked tasks with their steps, newest first.
+   *
+   * @param params - Window in hours, optional status, 1-based page, page size, and table query.
+   * @param signal - Optional abort signal.
+   */
+  tasks(
+    params: { hours: number; status: TaskStatus | null; page: number; pageSize: number } & TableQueryParams,
+    signal?: AbortSignal,
+  ): Promise<TaskPage> {
+    return this.http.get<TaskPage>(
+      `/performance/tasks${toQuery({
+        hours: String(params.hours),
+        status: params.status ?? undefined,
+        page: String(params.page),
+        page_size: String(params.pageSize),
+        ...tableQuery(params),
+      })}`,
+      signal,
+    );
+  }
+}
+
+/** The signed-in user's own tracked tasks and failed requests (activity panel). */
+export class ActivityApi {
+  /** @param http - Shared HTTP client. */
+  constructor(private readonly http: HttpClient) {}
+
+  /**
+   * `GET /activity` — the caller's recent tasks and failed requests.
+   *
+   * @param signal - Optional abort signal.
+   */
+  feed(signal?: AbortSignal): Promise<ActivityFeed> {
+    return this.http.get<ActivityFeed>("/activity", signal);
+  }
+
+  /**
+   * `GET /activity/tasks/{taskId}` — one of the caller's tasks with its steps.
+   *
+   * @param taskId - Task identifier.
+   * @param signal - Optional abort signal.
+   */
+  task(taskId: string, signal?: AbortSignal): Promise<TaskRecord> {
+    return this.http.get<TaskRecord>(`/activity/tasks/${encodeURIComponent(taskId)}`, signal);
+  }
 }
 
 export class UsageAnalyticsApi {
@@ -1444,6 +1519,7 @@ export interface ApiServices {
   policyExceptions: PolicyExceptionsApi;
   recovery: RecoveryApi;
   performance: PerformanceApi;
+  activity: ActivityApi;
 }
 
 /**
@@ -1461,6 +1537,7 @@ export function createApiServices(http: HttpClient = new HttpClient()): ApiServi
     usageAnalytics: new UsageAnalyticsApi(http),
     appSettings: new AppSettingsApi(http),
     performance: new PerformanceApi(http),
+    activity: new ActivityApi(http),
     recovery: new RecoveryApi(http),
     policies: new PoliciesApi(http),
     identityAttributes: new IdentityAttributesApi(http),

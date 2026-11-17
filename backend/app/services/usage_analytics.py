@@ -74,42 +74,47 @@ class UsageAnalyticsService:
         )
 
     def overview(self, days: int | None = None) -> UsageOverview:
-        """Return KPIs, trends, top tables, and sensitive columns for the time window."""
-        window = clamp_days(days)
-        return self._cache.get_or_load(
-            ("usage-overview", window),
-            lambda: self._build_overview(window),
-        )
+        """Return KPIs, trends, top tables, and sensitive columns for the time window.
 
-    def _build_overview(self, days: int) -> UsageOverview:
-        now = datetime.now(UTC)
+        A failed load returns ``available=False`` with the reason and error code, and is not
+        cached, so the next request retries as soon as the warehouse recovers.
+        """
+        window = clamp_days(days)
         try:
-            last_run = self._load_last_run()
-            kpis = self._load_kpis(days)
-            daily_trends = self._load_daily_trends(days)
-            top_tables = self._load_top_tables(days, limit=10)
-            top_users = self._load_top_users(days, limit=10)
-            sensitive = self._load_sensitive_breakdown(days)
-            return UsageOverview(
-                available=True,
-                days=days,
-                generated_at=now,
-                kpis=kpis,
-                last_run=last_run,
-                daily_trends=daily_trends,
-                top_tables=top_tables,
-                top_users=top_users,
-                sensitive_breakdown=sensitive,
+            return self._cache.get_or_load(
+                ("usage-overview", window),
+                lambda: self._build_overview(window),
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 - surfaced as an unavailable overview
             logger.warning("Usage overview unavailable: %s", exc)
             return UsageOverview(
                 available=False,
-                detail=str(exc),
-                days=days,
-                generated_at=now,
+                detail=getattr(exc, "message", None) or str(exc),
+                error_code=getattr(exc, "code", None),
+                days=window,
+                generated_at=datetime.now(UTC),
                 kpis=UsageKpis(),
             )
+
+    def _build_overview(self, days: int) -> UsageOverview:
+        now = datetime.now(UTC)
+        last_run = self._load_last_run()
+        kpis = self._load_kpis(days)
+        daily_trends = self._load_daily_trends(days)
+        top_tables = self._load_top_tables(days, limit=10)
+        top_users = self._load_top_users(days, limit=10)
+        sensitive = self._load_sensitive_breakdown(days)
+        return UsageOverview(
+            available=True,
+            days=days,
+            generated_at=now,
+            kpis=kpis,
+            last_run=last_run,
+            daily_trends=daily_trends,
+            top_tables=top_tables,
+            top_users=top_users,
+            sensitive_breakdown=sensitive,
+        )
 
     def list_tables(self, days: int | None = None, q: str | None = None, limit: int = 50) -> UsageTableList:
         """List tables accessed during the time window, with optional search."""

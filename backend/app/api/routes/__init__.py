@@ -9,6 +9,7 @@ from fastapi import APIRouter
 from backend.app.api.routes import (
     access_explorer,
     access_requests,
+    activity,
     app_info,
     app_settings,
     attribute_explorer,
@@ -49,6 +50,7 @@ ROUTERS: tuple[APIRouter, ...] = (
     usage_analytics.router,
     recovery.router,
     performance.router,
+    activity.router,
 )
 
 api_router = APIRouter(prefix="/api")

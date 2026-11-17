@@ -25,6 +25,8 @@ from typing import Literal
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from backend.app.core.activities import activity_for
+from backend.app.core.request_id import HEADER as REQUEST_ID_HEADER
+from backend.app.core.request_id import new_request_id, set_request_id
 from backend.app.models.performance import RequestMetric
 
 logger = logging.getLogger(__name__)
@@ -47,12 +49,18 @@ class RequestTimings:
         warehouse_calls: Number of SQL warehouse statements.
         lakebase_ms: Wall time spent on Lakebase queries.
         lakebase_calls: Number of Lakebase queries.
+        request_id: Correlation ID of the request.
+        error_code: Error code when the request failed with an app error.
+        error_message: Error message shown to the caller for a failed request.
     """
 
     warehouse_ms: float = 0.0
     warehouse_calls: int = 0
     lakebase_ms: float = 0.0
     lakebase_calls: int = 0
+    request_id: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def add(self, dependency: Dependency, elapsed_ms: float) -> None:
@@ -69,15 +77,38 @@ class RequestTimings:
 _current: ContextVar[RequestTimings | None] = ContextVar("request_timings", default=None)
 
 
-def start_request() -> RequestTimings:
+def start_request(request_id: str | None = None) -> RequestTimings:
     """Open a timing accumulator for the current request context.
+
+    Args:
+        request_id: Correlation ID for the request.
 
     Returns:
         The accumulator; the middleware reads it after the response is produced.
     """
-    timings = RequestTimings()
+    timings = RequestTimings(request_id=request_id)
     _current.set(timings)
     return timings
+
+
+MAX_ERROR_MESSAGE = 500
+
+
+def note_error(code: str, message: str) -> None:
+    """Record why the current request failed so the stored metric carries it.
+
+    No-op outside a request. The first error wins, so an outer handler does not overwrite
+    a more specific code.
+
+    Args:
+        code: Machine-readable error code.
+        message: Message returned to the caller (truncated for storage).
+    """
+    timings = _current.get()
+    if timings is None or timings.error_code is not None:
+        return
+    timings.error_code = code
+    timings.error_message = message[:MAX_ERROR_MESSAGE]
 
 
 @contextmanager
@@ -193,6 +224,8 @@ class RequestTimingMiddleware:
 
     Route templates are resolved after the response so that path parameters collapse to one
     activity (``/api/policies/{policy_id}``). Health probes are skipped to keep the table signal-only.
+    Each request gets a correlation ID (see :mod:`backend.app.core.request_id`) that is echoed
+    in the ``X-Request-ID`` response header and stored on the metric with any error code.
 
     Args:
         app: Downstream ASGI application.
@@ -200,7 +233,8 @@ class RequestTimingMiddleware:
         route_template: Resolves a request scope to its route template, or None when unmatched.
     """
 
-    SKIP_PATHS = frozenset({"/api/health"})
+    # Health probes and the activity panel's own polling would drown the request history.
+    SKIP_PATHS = frozenset({"/api/health", "/api/activity"})
 
     def __init__(
         self,
@@ -220,17 +254,26 @@ class RequestTimingMiddleware:
             await self.app(scope, receive, send)
             return
 
-        timings = start_request()
+        request_id = new_request_id(_header(scope, REQUEST_ID_HEADER.encode()))
+        set_request_id(request_id)
+        timings = start_request(request_id)
         started = time.perf_counter()
         status = {"code": 500}
 
         async def send_wrapper(message: Message) -> None:
             if message["type"] == "http.response.start":
                 status["code"] = int(message["status"])
+                headers = list(message.get("headers", []))
+                headers.append((REQUEST_ID_HEADER.encode(), request_id.encode()))
+                message = {**message, "headers": headers}
             await send(message)
 
         try:
             await self.app(scope, receive, send_wrapper)
+        except Exception as exc:
+            # The generic 500 handler runs outside this middleware, after the metric is stored.
+            note_error("internal_error", f"Unexpected server error ({type(exc).__name__})")
+            raise
         finally:
             self._finish(scope, timings, status["code"], (time.perf_counter() - started) * 1000)
 
@@ -255,15 +298,23 @@ class RequestTimingMiddleware:
                     lakebase_ms=round(timings.lakebase_ms, 2),
                     lakebase_calls=timings.lakebase_calls,
                     user_name=_forwarded_user(scope),
+                    request_id=timings.request_id,
+                    error_code=timings.error_code,
+                    error_message=timings.error_message,
                 )
             )
         except Exception:  # noqa: BLE001 - timing must never fail a request
             logger.debug("Could not record request metric", exc_info=True)
 
 
-def _forwarded_user(scope: Scope) -> str | None:
-    """Return the Databricks Apps forwarded email for the request, when present."""
+def _header(scope: Scope, name: bytes) -> str | None:
+    """Return one request header value decoded as latin-1, or None when absent or empty."""
     for key, value in scope.get("headers", []):
-        if key == b"x-forwarded-email":
+        if key == name:
             return value.decode("latin-1") or None
     return None
+
+
+def _forwarded_user(scope: Scope) -> str | None:
+    """Return the Databricks Apps forwarded email for the request, when present."""
+    return _header(scope, b"x-forwarded-email")

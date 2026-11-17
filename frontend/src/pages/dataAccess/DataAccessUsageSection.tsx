@@ -227,8 +227,14 @@ export function DataAccessUsageSection() {
       )}
 
       {data && !data.available && (
-        <Alert tone="warning" title="Usage analytics unavailable">
+        <Alert
+          tone="warning"
+          title={data.errorCode === "warehouse_unavailable" ? "SQL warehouse is not ready" : "Usage analytics unavailable"}
+        >
           {data.detail ?? "Could not query usage summary tables."}
+          {(data.errorCode === "warehouse_unavailable" || data.errorCode === "timeout") && (
+            <> This page retries on the next load; it is not cached while the warehouse is down.</>
+          )}
         </Alert>
       )}
 

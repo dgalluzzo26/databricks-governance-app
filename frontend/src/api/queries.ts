@@ -31,8 +31,10 @@ import type {
   GapKind,
   GapStatus,
   PrincipalKind,
+  RequestStatusFilter,
   TableQueryParams,
   TagChangeKind,
+  TaskStatus,
 } from "./types";
 
 /**
@@ -118,6 +120,11 @@ export const queryKeys = {
     ["performance", "slow-requests", hours, page, pageSize, table] as const,
   performanceCapacity: ["performance", "capacity"] as const,
   performanceAppCost: (days: number) => ["performance", "app-cost", days] as const,
+  performanceRequests: (hours: number, status: string, page: number, pageSize: number, table: string) =>
+    ["performance", "requests", hours, status, page, pageSize, table] as const,
+  performanceTasks: (hours: number, status: string, page: number, pageSize: number, table: string) =>
+    ["performance", "tasks", hours, status, page, pageSize, table] as const,
+  activity: ["activity"] as const,
   directoryPrincipals: (q: string, kind?: string) => ["directory", "principals", q, kind ?? ""] as const,
 };
 
@@ -503,6 +510,75 @@ export function usePerformanceAppCost(days: number) {
     queryKey: queryKeys.performanceAppCost(days),
     queryFn: ({ signal }) => api.performance.appCost(days, signal),
     staleTime: 5 * 60 * 1000,
+  });
+}
+
+/**
+ * Fetches one page of every user's requests (`GET /performance/requests`, admin).
+ *
+ * @param params - Window, status filter, page, page size, and table query.
+ */
+export function usePerformanceRequests(
+  params: { hours: number; status: RequestStatusFilter; page: number; pageSize: number } & TableQueryParams,
+) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.performanceRequests(
+      params.hours,
+      params.status,
+      params.page,
+      params.pageSize,
+      tableQueryKey(params),
+    ),
+    queryFn: ({ signal }) => api.performance.requests(params, signal),
+    placeholderData: keepPreviousData,
+  });
+}
+
+/**
+ * Fetches one page of every user's tracked tasks (`GET /performance/tasks`, admin).
+ * Polls every five seconds while any task in the window is still running.
+ *
+ * @param params - Window, optional status, page, page size, and table query.
+ */
+export function usePerformanceTasks(
+  params: { hours: number; status: TaskStatus | null; page: number; pageSize: number } & TableQueryParams,
+) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.performanceTasks(
+      params.hours,
+      params.status ?? "all",
+      params.page,
+      params.pageSize,
+      tableQueryKey(params),
+    ),
+    queryFn: ({ signal }) => api.performance.tasks(params, signal),
+    placeholderData: keepPreviousData,
+    refetchInterval: (query) => ((query.state.data?.running ?? 0) > 0 ? 5000 : false),
+  });
+}
+
+/** Poll interval while the caller has running tasks or actions in flight. */
+export const ACTIVITY_FAST_POLL_MS = 1500;
+/** Poll interval otherwise, so badges pick up background Job outcomes. */
+export const ACTIVITY_IDLE_POLL_MS = 30000;
+
+/**
+ * Fetches the caller's own tasks and failed requests (`GET /activity`) for the Activity panel.
+ *
+ * @param busy - True while the UI has a mutation in flight; polls fast so steps show live.
+ */
+export function useActivityFeed(busy: boolean) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.activity,
+    queryFn: ({ signal }) => api.activity.feed(signal),
+    refetchInterval: (query) =>
+      busy || (query.state.data?.tasks.running ?? 0) > 0 ? ACTIVITY_FAST_POLL_MS : ACTIVITY_IDLE_POLL_MS,
+    refetchIntervalInBackground: false,
+    retry: false,
+    meta: { silent: true },
   });
 }
 

@@ -73,7 +73,10 @@ def preview_export(admin: Admin, container: Container) -> RecoveryPreview:
     Raises:
         ForbiddenError: If the caller is not an app admin (HTTP 403).
     """
-    return container.recovery.build_preview(admin)
+    with container.tasks.track(
+        "recovery.preview", "Build recovery preview", admin.user_name, link="/recovery"
+    ):
+        return container.recovery.build_preview(admin)
 
 
 @router.post("/export/push", response_model=RecoveryPushResult)
@@ -95,7 +98,10 @@ def push_export(admin: Admin, container: Container) -> RecoveryPushResult:
         InvalidRequestError: If the repository, path, or token secret is not configured (HTTP 422).
         UpstreamError: If a Git step failed (HTTP 502).
     """
-    return container.recovery.push(admin)
+    with container.tasks.track(
+        "recovery.push", "Push recovery export to Git", admin.user_name, link="/recovery"
+    ):
+        return container.recovery.push(admin)
 
 
 @router.post("/import", response_model=RecoveryImportPreview)
@@ -117,7 +123,10 @@ def import_from_git(admin: Admin, container: Container) -> RecoveryImportPreview
         InvalidRequestError: If the repository, path, token, or snapshot is invalid (HTTP 422).
         UpstreamError: If a Git step failed (HTTP 502).
     """
-    return container.recovery.import_from_git(admin)
+    with container.tasks.track(
+        "recovery.import", "Import recovery snapshot from Git", admin.user_name, link="/recovery"
+    ):
+        return container.recovery.import_from_git(admin)
 
 
 @router.post("/recover", response_model=RecoveryApplyResult)
@@ -140,4 +149,7 @@ def recover(body: RecoveryApplyRequest, admin: Admin, container: Container) -> R
         InvalidRequestError: If confirm is missing or the snapshot is invalid (HTTP 422).
         UpstreamError: If a Git step failed (HTTP 502).
     """
-    return container.recovery.recover(admin, body)
+    with container.tasks.track(
+        "recovery.recover", "Recover from Git snapshot", admin.user_name, link="/recovery"
+    ):
+        return container.recovery.recover(admin, body)

@@ -37,6 +37,7 @@ from backend.app.services.policy_exceptions import PolicyExceptionService
 from backend.app.services.recovery import RecoveryService
 from backend.app.services.request_context import RequestContextResolver
 from backend.app.services.row_filters import RowFilterService
+from backend.app.services.tasks import TaskService
 from backend.app.services.usage_access import UsageAccessService
 from backend.app.services.usage_analytics import UsageAnalyticsService
 
@@ -71,6 +72,7 @@ class ServiceContainer:
         policy_exceptions: Principals exempted from the app-managed policies.
         data_access: Tag-driven group grant sync (settings, readiness, dry-run/apply).
         recovery: Recovery export preview and Git target settings.
+        tasks: Tracked multi-step tasks (activity panel and admin task history).
         identity_uc_sync: Mirrors identity attributes to Unity Catalog Delta; only set for
             the Lakebase backend, otherwise None.
     """
@@ -100,6 +102,7 @@ class ServiceContainer:
     usage_analytics: UsageAnalyticsService
     usage_access: UsageAccessService
     metrics: MetricsRecorder
+    tasks: TaskService
     identity_uc_sync: IdentityUcSync | None = None
 
     @classmethod
@@ -215,6 +218,7 @@ class ServiceContainer:
                 sink=storage.performance.record_many,
                 pruner=storage.performance.prune,
             ),
+            tasks=TaskService(lambda: storage.tasks),
             identity_uc_sync=uc_sync,
         )
 
@@ -260,6 +264,7 @@ class ServiceContainer:
         if migrate_storage:
             # Serving path only; the sync Job does not handle requests, so it records nothing.
             self.metrics.start()
+            self.tasks.start()
             self.recovery.start_scheduler()
         if mirror_in_background:
             threading.Thread(target=self._warm_caches, name="cache-warm", daemon=True).start()
@@ -292,6 +297,7 @@ class ServiceContainer:
     def shutdown(self) -> None:
         """Stop background loops, flush request metrics, then release storage resources."""
         self.recovery.stop_scheduler()
+        self.tasks.stop()
         self.metrics.stop()
         self.storage.close()
 

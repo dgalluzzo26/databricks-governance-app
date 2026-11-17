@@ -25,6 +25,9 @@ class RequestMetric(ApiModel):
         lakebase_ms: Time spent on Lakebase queries.
         lakebase_calls: Lakebase queries issued.
         user_name: Caller, when known.
+        request_id: Correlation ID echoed in the ``X-Request-ID`` header.
+        error_code: App error code for failed requests (for example ``warehouse_unavailable``).
+        error_message: Error message returned to the caller for failed requests.
     """
 
     recorded_at: datetime
@@ -38,6 +41,9 @@ class RequestMetric(ApiModel):
     lakebase_ms: float = 0.0
     lakebase_calls: int = 0
     user_name: str | None = None
+    request_id: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None
 
     @property
     def app_ms(self) -> float:

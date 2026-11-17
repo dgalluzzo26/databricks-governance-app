@@ -54,7 +54,7 @@ sequenceDiagram
 ```
 
 Errors raise `AppError` subclasses (`backend/app/core/errors.py`) and render as
-`{"error": {"code", "message", "details"}}`:
+`{"error": {"code", "message", "details", "requestId"}}`:
 
 | Error | HTTP | Typical cause |
 | --- | --- | --- |
@@ -62,8 +62,34 @@ Errors raise `AppError` subclasses (`backend/app/core/errors.py`) and render as
 | `UnauthorizedError` | 401 | No forwarded identity (local CLI identity only with `ALLOW_LOCAL_IDENTITY`) |
 | `ForbiddenError` | 403 | Non-admin on admin route, not an approver |
 | `NotFoundError` | 404 | Unknown id / slug |
-| `UpstreamError` | 502 | Databricks API or SQL failed or timed out |
+| `UpstreamError` | 502 | Databricks API or SQL failed |
+| `WarehouseUnavailableError` | 503 | SQL warehouse stopped, starting, or recovering |
+| `StatementTimeoutError` | 504 | SQL statement or followed Job ran past its time limit |
 | `NotConfiguredError` | 503 | Warehouse, Lakebase, or admin SP missing |
+
+Every request gets an ID (the incoming `x-request-id`, or a new one) that is returned in the
+`x-request-id` response header, put in the error envelope and log lines, and stored with the
+request metric together with the error code and message. The UI shows it as **Reference** so a
+user report can be matched to the request history and logs.
+
+### Tasks and steps
+
+Long actions are recorded as tasks (`services/tasks.py`, `app_tasks` table in Lakebase, memory
+otherwise) so the UI can show what is running and which steps finished:
+
+- Routes wrap the work in `container.tasks.track(kind, title, actor, link=...)`. A failure marks
+  the task failed with the error code and message, then re-raises.
+- Services mark steps with `step("...")` (a context manager that also works as a decorator),
+  report progress with `step_detail(...)`, and set a one-line outcome with `task_summary(...)`.
+  These are no-ops outside a tracked task, so jobs and tests need no changes. A `track` inside a
+  tracked task becomes a nested step.
+- Grants sync and usage rollup runs are followed on a background thread
+  (`services/job_trackers.py`) that polls the Job run every 10 seconds, for up to 4 hours.
+- Running tasks heartbeat every 30 seconds. Tasks without a heartbeat for 3 minutes (for example
+  after an instance restart) are marked failed. Tasks older than 30 days are pruned.
+
+`GET /api/activity` returns the caller's own tasks and failed requests for the Activity panel;
+`GET /api/performance/tasks` and `/api/performance/requests` return everyone's for admins.
 
 ---
 
@@ -175,6 +201,10 @@ through `quote_identifier` and literals through `string_literal`; never interpol
   the samples and writes them to storage every 5 seconds, in batches of 200.
   `performance_analytics` builds the summary, hourly roll-up, and slow-request pages from them. A
   request slower than its expected time is flagged for review; it is not an error.
+- **Performance page.** Tabs: **Overview** (KPIs, recommendations, charts), **Latency** (by
+  activity, slow requests), **Requests** (every user's requests with success and failure filters,
+  error, and reference), **Tasks** (every tracked task with status, outcome, and steps), and
+  **Sizing & cost**. The selected tab is kept in `?tab=`.
 - **Capacity.** `PerformanceService.capacity()` reads the app's compute size, the Lakebase endpoint,
   and the SQL warehouse size through the Account Admin SP. Each read fails separately.
 - **App telemetry.** The app exports OpenTelemetry logs (and optionally metrics/traces) to
@@ -226,6 +256,8 @@ through `quote_identifier` and literals through `string_literal`; never interpol
 | Outstanding work and tag snapshot | `DataAccessService._record_state` | End of every sync run |
 | Request metrics flush | `MetricsRecorder` (daemon thread) | Every 5 seconds; queued metrics are written in batches of 200 |
 | Request metrics prune | `MetricsRecorder` | At most hourly; deletes rows older than 14 days |
+| Task heartbeat and prune | `TaskService` (daemon thread) | Every 30 seconds; marks stale running tasks failed, hourly deletes tasks older than 30 days |
+| Job run followers | `job_trackers.follow_*` (daemon thread per run) | Grants sync and usage rollup runs started from the app |
 
 ---
 

@@ -54,6 +54,10 @@ import type {
   AccessUnusedList,
   AccessNoAccessList,
   AppCostReport,
+  ActivityFeed,
+  RequestPage,
+  TaskPage,
+  TaskRecord,
   PerformanceCapacity,
   PerformanceSlowRequestPage,
   PerformanceSummary,
@@ -1089,6 +1093,118 @@ export const testPerformanceSummary: PerformanceSummary = {
 };
 
 /** Sample slow-request page. */
+export const testRunningTask: TaskRecord = {
+  taskId: "task-running",
+  kind: "mask_rules.pack",
+  title: "Sync mask policy pack",
+  actor: "admin@example.com",
+  status: "running",
+  steps: [
+    {
+      name: "Sync mask registry to Unity Catalog",
+      status: "done",
+      startedAt: "2026-11-12T11:59:00Z",
+      finishedAt: "2026-11-12T11:59:04Z",
+      detail: "4 of 4 rules",
+      depth: 0,
+    },
+    {
+      name: "Recreate column mask policy",
+      status: "running",
+      startedAt: "2026-11-12T11:59:04Z",
+      finishedAt: null,
+      detail: null,
+      depth: 0,
+    },
+  ],
+  startedAt: "2026-11-12T11:59:00Z",
+  finishedAt: null,
+  updatedAt: "2026-11-12T11:59:04Z",
+  errorCode: null,
+  errorMessage: null,
+  requestId: "req-running-01",
+  link: "/mask-rules",
+  summary: null,
+  durationSeconds: null,
+};
+
+export const testFailedTask: TaskRecord = {
+  taskId: "task-failed",
+  kind: "policy_exceptions.apply",
+  title: "Apply policy exceptions",
+  actor: "admin@example.com",
+  status: "failed",
+  steps: [
+    {
+      name: "Rebuild mask policy pack",
+      status: "failed",
+      startedAt: "2026-11-12T11:40:00Z",
+      finishedAt: "2026-11-12T11:40:30Z",
+      detail: "SQL warehouse governance-wh is starting",
+      depth: 0,
+    },
+  ],
+  startedAt: "2026-11-12T11:40:00Z",
+  finishedAt: "2026-11-12T11:40:30Z",
+  updatedAt: "2026-11-12T11:40:30Z",
+  errorCode: "warehouse_unavailable",
+  errorMessage: "SQL warehouse governance-wh is starting",
+  requestId: "req-failed-01",
+  link: "/exceptions",
+  summary: null,
+  durationSeconds: 30,
+};
+
+export const testActivityFeed: ActivityFeed = {
+  tasks: { items: [], total: 0, page: 1, pageSize: 30, running: 0, failed: 0 },
+  errors: { items: [], total: 0, page: 1, pageSize: 30, succeeded: 0, failed: 0 },
+};
+
+export const testRequestPage: RequestPage = {
+  items: [
+    {
+      recordedAt: "2026-11-12T11:30:00Z",
+      method: "POST",
+      route: "/api/mask-rules/pack/ensure",
+      activity: "Sync mask policy pack",
+      statusCode: 503,
+      ok: false,
+      durationMs: 90_500,
+      userName: "admin@example.com",
+      requestId: "req-503-abc",
+      errorCode: "warehouse_unavailable",
+      errorMessage: "SQL warehouse governance-wh is starting",
+    },
+    {
+      recordedAt: "2026-11-12T11:29:00Z",
+      method: "GET",
+      route: "/api/me",
+      activity: "Load signed-in user",
+      statusCode: 200,
+      ok: true,
+      durationMs: 42,
+      userName: "analyst@example.com",
+      requestId: "req-200-def",
+      errorCode: null,
+      errorMessage: null,
+    },
+  ],
+  total: 2,
+  page: 1,
+  pageSize: 25,
+  succeeded: 1,
+  failed: 1,
+};
+
+export const testTaskPage: TaskPage = {
+  items: [testRunningTask, testFailedTask],
+  total: 2,
+  page: 1,
+  pageSize: 25,
+  running: 1,
+  failed: 1,
+};
+
 export const testPerformanceSlowRequests: PerformanceSlowRequestPage = {
   items: [
     {
@@ -1336,6 +1452,9 @@ export function fakeServices(
     performanceSlowRequests?: PerformanceSlowRequestPage | Error;
     performanceCapacity?: PerformanceCapacity | Error;
     performanceAppCost?: AppCostReport | Error;
+    activity?: ActivityFeed | Error;
+    performanceRequests?: RequestPage | Error;
+    performanceTasks?: TaskPage | Error;
   } = {},
 ): ApiServices {
   const governedTags = overrides.governedTags ?? testGovernedTags;
@@ -1400,6 +1519,21 @@ export function fakeServices(
         if (overrides.performanceAppCost instanceof Error) return Promise.reject(overrides.performanceAppCost);
         return { ...(overrides.performanceAppCost ?? testAppCost), days };
       },
+      requests: async (params: { page: number; pageSize: number }) => {
+        if (overrides.performanceRequests instanceof Error) return Promise.reject(overrides.performanceRequests);
+        return { ...(overrides.performanceRequests ?? testRequestPage), page: params.page, pageSize: params.pageSize };
+      },
+      tasks: async (params: { page: number; pageSize: number }) => {
+        if (overrides.performanceTasks instanceof Error) return Promise.reject(overrides.performanceTasks);
+        return { ...(overrides.performanceTasks ?? testTaskPage), page: params.page, pageSize: params.pageSize };
+      },
+    },
+    activity: {
+      feed: async () => {
+        if (overrides.activity instanceof Error) return Promise.reject(overrides.activity);
+        return overrides.activity ?? testActivityFeed;
+      },
+      task: async (taskId: string) => ({ ...testRunningTask, taskId }),
     },
     recovery: {
       getSettings: async () => testRecoverySettings,

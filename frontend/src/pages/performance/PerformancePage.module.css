@@ -140,3 +140,40 @@
   flex-direction: column;
   gap: var(--space-3);
 }
+
+.counts {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  align-self: flex-end;
+}
+
+.errorCell {
+  color: var(--color-danger-text);
+  overflow-wrap: anywhere;
+}
+
+.statusCell {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.stepsRow td {
+  background: var(--color-bg);
+  padding: var(--space-3) var(--space-4);
+}
+
+.linkButton {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--color-primary);
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.linkButton:hover {
+  text-decoration: underline;
+}

@@ -1622,6 +1622,85 @@ export interface PerformanceCapacity {
   settings: PerformanceCapacitySetting[];
 }
 
+/** Lifecycle of a tracked task. */
+export type TaskStatus = "running" | "succeeded" | "failed";
+
+/** Lifecycle of one task step. */
+export type TaskStepStatus = "running" | "done" | "failed";
+
+/** One step of a tracked task, in start order. `depth` is 1 for steps started inside another. */
+export interface TaskStep {
+  name: string;
+  status: TaskStepStatus;
+  startedAt: string;
+  finishedAt: string | null;
+  detail: string | null;
+  depth: number;
+}
+
+/** One tracked multi-step operation (inline request or followed Job run). */
+export interface TaskRecord {
+  taskId: string;
+  kind: string;
+  title: string;
+  actor: string;
+  status: TaskStatus;
+  steps: TaskStep[];
+  startedAt: string;
+  finishedAt: string | null;
+  updatedAt: string;
+  errorCode: string | null;
+  errorMessage: string | null;
+  requestId: string | null;
+  link: string | null;
+  summary: string | null;
+  durationSeconds: number | null;
+}
+
+/** A page of tasks with window-wide running and failed counts. */
+export interface TaskPage {
+  items: TaskRecord[];
+  total: number;
+  page: number;
+  pageSize: number;
+  running: number;
+  failed: number;
+}
+
+/** One stored API request (activity panel errors and admin request history). */
+export interface RequestRecord {
+  recordedAt: string;
+  method: string;
+  route: string;
+  activity: string;
+  statusCode: number;
+  ok: boolean;
+  durationMs: number;
+  userName: string | null;
+  requestId: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+}
+
+/** A page of requests with window-wide success and failure counts. */
+export interface RequestPage {
+  items: RequestRecord[];
+  total: number;
+  page: number;
+  pageSize: number;
+  succeeded: number;
+  failed: number;
+}
+
+/** The signed-in user's own tasks and failed requests (`GET /activity`). */
+export interface ActivityFeed {
+  tasks: TaskPage;
+  errors: RequestPage;
+}
+
+/** Status filter for the admin request history. */
+export type RequestStatusFilter = "all" | "succeeded" | "failed";
+
 /** One UTC day of app cost in USD, by billing source (list prices). */
 export interface AppCostDay {
   usageDate: string;
@@ -1745,6 +1824,8 @@ export interface UsageSensitiveSummary {
 export interface UsageOverview {
   available: boolean;
   detail: string | null;
+  /** Backend error code when the overview could not load (e.g. `warehouse_unavailable`). */
+  errorCode?: string | null;
   days: number;
   generatedAt: string;
   kpis: UsageKpis;

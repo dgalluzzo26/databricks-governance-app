@@ -322,5 +322,7 @@ def sync_identity_to_uc(admin: Admin, container: Container) -> dict[str, int]:
     Raises:
         ForbiddenError: If the caller is not an app admin (HTTP 403).
     """
-    _ = admin
-    return container.identity_attributes.sync_to_uc()
+    with container.tasks.track(
+        "identity.sync_uc", "Sync identity attributes to Unity Catalog", admin.user_name, link="/identity"
+    ):
+        return container.identity_attributes.sync_to_uc()

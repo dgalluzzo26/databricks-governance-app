@@ -16,6 +16,7 @@ import { ApprovalsPage } from "@/pages/approvals/ApprovalsPage";
 import { AttributeExplorerPage } from "@/pages/attributeExplorer/AttributeExplorerPage";
 import { IdentityPage } from "@/pages/identity/IdentityPage";
 import { NotFoundPage } from "@/pages/NotFoundPage";
+import { RouteErrorPage } from "@/pages/RouteErrorPage";
 import { PoliciesPage } from "@/pages/policies/PoliciesPage";
 import { PolicyDetailPage } from "@/pages/policies/PolicyDetailPage";
 import { AccessExplorerPage } from "@/pages/accessExplorer/AccessExplorerPage";
@@ -33,116 +34,123 @@ import { AppSettingsPage } from "@/pages/appSettings/AppSettingsPage";
 export const routes: RouteObject[] = [
   {
     element: <AppShell />,
+    errorElement: <RouteErrorPage />,
     children: [
-      { index: true, element: <HomePage /> },
-      { path: "access-explorer", element: <AccessExplorerPage /> },
       {
-        path: "attribute-explorer",
-        element: (
-          <RequireApprover>
-            <AttributeExplorerPage />
-          </RequireApprover>
-        ),
+        // Pathless boundary: a page crash renders inside the shell, not over it.
+        errorElement: <RouteErrorPage />,
+        children: [
+          { index: true, element: <HomePage /> },
+          { path: "access-explorer", element: <AccessExplorerPage /> },
+          {
+            path: "attribute-explorer",
+            element: (
+              <RequireApprover>
+                <AttributeExplorerPage />
+              </RequireApprover>
+            ),
+          },
+          { path: "identity", element: <IdentityPage /> },
+          {
+            path: "approvals",
+            element: (
+              <RequireApprover>
+                <ApprovalsPage />
+              </RequireApprover>
+            ),
+          },
+          { path: "help", element: <HelpPage /> },
+          {
+            path: "policies",
+            element: (
+              <RequireAdmin>
+                <PoliciesPage />
+              </RequireAdmin>
+            ),
+          },
+          {
+            path: "policies/:policyId",
+            element: (
+              <RequireAdmin>
+                <PolicyDetailPage />
+              </RequireAdmin>
+            ),
+          },
+          {
+            path: "exceptions",
+            element: (
+              <RequireAdmin>
+                <PolicyExceptionsPage />
+              </RequireAdmin>
+            ),
+          },
+          {
+            path: "row-filters",
+            element: (
+              <RequireAdmin>
+                <RowFiltersPage />
+              </RequireAdmin>
+            ),
+          },
+          {
+            path: "mask-rules",
+            element: (
+              <RequireAdmin>
+                <MaskRulesPage />
+              </RequireAdmin>
+            ),
+          },
+          {
+            path: "data-access",
+            element: (
+              <RequireAdmin>
+                <DataAccessPage />
+              </RequireAdmin>
+            ),
+          },
+          {
+            path: "data-access/analytics",
+            element: (
+              <RequireAdmin>
+                <DataAccessAnalyticsPage />
+              </RequireAdmin>
+            ),
+          },
+          {
+            path: "performance",
+            element: (
+              <RequireAdmin>
+                <PerformancePage />
+              </RequireAdmin>
+            ),
+          },
+          {
+            path: "recovery",
+            element: (
+              <RequireAdmin>
+                <RecoveryPage />
+              </RequireAdmin>
+            ),
+          },
+          {
+            path: "status",
+            element: (
+              <RequireAdmin>
+                <AppStatusPage />
+              </RequireAdmin>
+            ),
+          },
+          {
+            path: "app-settings",
+            element: (
+              <RequireAdmin>
+                <AppSettingsPage />
+              </RequireAdmin>
+            ),
+          },
+          { path: "*", element: <NotFoundPage /> },
+        ],
       },
-      { path: "identity", element: <IdentityPage /> },
-      {
-        path: "approvals",
-        element: (
-          <RequireApprover>
-            <ApprovalsPage />
-          </RequireApprover>
-        ),
-      },
-      { path: "help", element: <HelpPage /> },
-      {
-        path: "policies",
-        element: (
-          <RequireAdmin>
-            <PoliciesPage />
-          </RequireAdmin>
-        ),
-      },
-      {
-        path: "policies/:policyId",
-        element: (
-          <RequireAdmin>
-            <PolicyDetailPage />
-          </RequireAdmin>
-        ),
-      },
-      {
-        path: "exceptions",
-        element: (
-          <RequireAdmin>
-            <PolicyExceptionsPage />
-          </RequireAdmin>
-        ),
-      },
-      {
-        path: "row-filters",
-        element: (
-          <RequireAdmin>
-            <RowFiltersPage />
-          </RequireAdmin>
-        ),
-      },
-      {
-        path: "mask-rules",
-        element: (
-          <RequireAdmin>
-            <MaskRulesPage />
-          </RequireAdmin>
-        ),
-      },
-      {
-        path: "data-access",
-        element: (
-          <RequireAdmin>
-            <DataAccessPage />
-          </RequireAdmin>
-        ),
-      },
-      {
-        path: "data-access/analytics",
-        element: (
-          <RequireAdmin>
-            <DataAccessAnalyticsPage />
-          </RequireAdmin>
-        ),
-      },
-      {
-        path: "performance",
-        element: (
-          <RequireAdmin>
-            <PerformancePage />
-          </RequireAdmin>
-        ),
-      },
-      {
-        path: "recovery",
-        element: (
-          <RequireAdmin>
-            <RecoveryPage />
-          </RequireAdmin>
-        ),
-      },
-      {
-        path: "status",
-        element: (
-          <RequireAdmin>
-            <AppStatusPage />
-          </RequireAdmin>
-        ),
-      },
-      {
-        path: "app-settings",
-        element: (
-          <RequireAdmin>
-            <AppSettingsPage />
-          </RequireAdmin>
-        ),
-      },
-      { path: "*", element: <NotFoundPage /> },
     ],
   },
 ];

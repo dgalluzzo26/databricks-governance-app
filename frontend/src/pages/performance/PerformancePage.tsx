@@ -1,11 +1,12 @@
 /**
  * @file Admin health monitor: request latency, slow-request attribution, scaling recommendations,
- * and current app, Lakebase, and SQL warehouse sizing.
+ * every user's request and task history, and current app, Lakebase, and SQL warehouse sizing.
  *
  * Data comes from `/api/performance/*`. Every API request is timed by the backend and stored in
  * Lakebase, so the page reflects real traffic in the chosen window.
  */
 import { useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useServerTableView } from "@/hooks/useServerTableView";
 import {
   Bar,
@@ -41,6 +42,7 @@ import identityStyles from "../identity/IdentityPage.module.css";
 import styles from "./PerformancePage.module.css";
 import { useTableView, type TableColumn } from "@/hooks/useTableView";
 import { DataTableHead } from "@/components/ui/DataTableHead";
+import { RequestsTab, TasksTab } from "./PerformanceHistory";
 
 const WINDOW_OPTIONS = [
   { hours: 1, label: "Last hour" },
@@ -487,58 +489,103 @@ const COST_COLORS = {
   lakebase: "#0f766e",
 };
 
+/** Performance page tabs, in display order. */
+const TABS = [
+  { id: "overview", label: "Overview" },
+  { id: "latency", label: "Latency" },
+  { id: "requests", label: "Requests" },
+  { id: "tasks", label: "Tasks" },
+  { id: "sizing", label: "Sizing & cost" },
+] as const;
+
+type PerformanceTab = (typeof TABS)[number]["id"];
+
+function isTab(value: string | null): value is PerformanceTab {
+  return TABS.some((tab) => tab.id === value);
+}
+
 /**
- * Health-monitor page for app admins.
+ * Health-monitor page for app admins, split into tabs: overview (KPIs, recommendations, charts),
+ * latency (per activity and slow requests), every user's requests and tracked tasks, and
+ * current sizing with app cost. The selected tab is kept in the `tab` query parameter.
  */
 export function PerformancePage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requested = searchParams.get("tab");
+  const tab: PerformanceTab = isTab(requested) ? requested : "overview";
   const [hours, setHours] = useState<number>(24);
   const summaryQuery = usePerformanceSummary(hours);
   const capacityQuery = usePerformanceCapacity();
   const summary: PerformanceSummary | undefined = summaryQuery.data;
   const hourRows = useMemo(() => (summary ? buildHourRows(summary.hourly) : []), [summary]);
+  const usesSummary = tab === "overview" || tab === "latency";
+
+  const selectTab = (next: PerformanceTab) => {
+    const params = new URLSearchParams(searchParams);
+    if (next === "overview") params.delete("tab");
+    else params.set("tab", next);
+    setSearchParams(params, { replace: true });
+  };
 
   return (
     <div className={styles.page}>
       <PageHeader
         title="Performance"
-        description="How long each part of the app takes, what is slower than expected, and whether to resize the app, Lakebase, or the SQL warehouse."
+        description="How long each part of the app takes, what is slower than expected, every request and tracked task, and whether to resize the app, Lakebase, or the SQL warehouse."
       />
 
-      <div className={identityStyles.toolbar}>
-        <div className={identityStyles.field}>
-          <label className={identityStyles.label} htmlFor="performance-window">
-            Window
-          </label>
-          <select
-            id="performance-window"
-            className={identityStyles.select}
-            value={hours}
-            onChange={(event) => setHours(Number(event.target.value))}
+      <div className={identityStyles.tabs} role="tablist" aria-label="Performance views">
+        {TABS.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            role="tab"
+            aria-selected={tab === item.id}
+            className={`${identityStyles.tab}${tab === item.id ? ` ${identityStyles.tabActive}` : ""}`}
+            onClick={() => selectTab(item.id)}
           >
-            {WINDOW_OPTIONS.map((option) => (
-              <option key={option.hours} value={option.hours}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </div>
-        {summary ? (
-          <span className={styles.freshness}>Updated {new Date(summary.generatedAt).toLocaleTimeString()}</span>
-        ) : null}
+            {item.label}
+          </button>
+        ))}
       </div>
 
-      {summaryQuery.isPending ? <Spinner label="Loading performance summary" /> : null}
-      {summaryQuery.isError ? (
+      {tab !== "sizing" ? (
+        <div className={identityStyles.toolbar}>
+          <div className={identityStyles.field}>
+            <label className={identityStyles.label} htmlFor="performance-window">
+              Window
+            </label>
+            <select
+              id="performance-window"
+              className={identityStyles.select}
+              value={hours}
+              onChange={(event) => setHours(Number(event.target.value))}
+            >
+              {WINDOW_OPTIONS.map((option) => (
+                <option key={option.hours} value={option.hours}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          {summary && usesSummary ? (
+            <span className={styles.freshness}>Updated {new Date(summary.generatedAt).toLocaleTimeString()}</span>
+          ) : null}
+        </div>
+      ) : null}
+
+      {usesSummary && summaryQuery.isPending ? <Spinner label="Loading performance summary" /> : null}
+      {usesSummary && summaryQuery.isError ? (
         <ErrorAlert error={summaryQuery.error} title="Could not load performance summary" />
       ) : null}
 
-      {summary && summary.kpis.totalRequests === 0 ? (
+      {usesSummary && summary && summary.kpis.totalRequests === 0 ? (
         <Alert tone="info" title="No requests recorded yet">
           Timings are stored for every API request. Use the app for a few minutes, then refresh.
         </Alert>
       ) : null}
 
-      {summary && summary.kpis.totalRequests > 0 ? (
+      {tab === "overview" && summary && summary.kpis.totalRequests > 0 ? (
         <>
           <KpiGrid kpis={summary.kpis} />
 
@@ -559,33 +606,62 @@ export function PerformancePage() {
               <LatencyChart rows={hourRows} />
             </Card>
           </div>
+        </>
+      ) : null}
 
-          <Card title="Latency by activity">
-            <ActivityTable rows={summary.activities} />
-            <p className={styles.caption}>
-              Expected times are set per activity in the backend catalog. Red cells are over expected.
-            </p>
+      {tab === "latency" ? (
+        <>
+          {summary && summary.kpis.totalRequests > 0 ? (
+            <Card title="Latency by activity">
+              <ActivityTable rows={summary.activities} />
+              <p className={styles.caption}>
+                Expected times are set per activity in the backend catalog. Red cells are over expected.
+              </p>
+            </Card>
+          ) : null}
+          <Card title="Slow requests">
+            <SlowRequestsTable key={hours} hours={hours} />
           </Card>
         </>
       ) : null}
 
-      <Card title="Current sizing">
-        {capacityQuery.isPending ? <Spinner label="Reading sizing" /> : null}
-        {capacityQuery.isError ? (
-          <ErrorAlert error={capacityQuery.error} title="Could not read sizing" />
-        ) : null}
-        {capacityQuery.data ? <CapacityList settings={capacityQuery.data.settings} /> : null}
-        <p className={styles.caption}>
-          Read with the Account Admin service principal. Autoscaling ranges show the minimum and maximum
-          Lakebase compute units.
-        </p>
-      </Card>
+      {tab === "requests" ? (
+        <Card title="Request history">
+          <RequestsTab key={hours} hours={hours} />
+          <p className={styles.caption}>
+            Every API request from every user, with the error code and message for failures. Quote the
+            request ID when reporting a problem; it matches the server log line.
+          </p>
+        </Card>
+      ) : null}
 
-      <AppCostCard />
+      {tab === "tasks" ? (
+        <Card title="Task history">
+          <TasksTab key={hours} hours={hours} />
+          <p className={styles.caption}>
+            Multi-step operations (rule saves, policy pack syncs, recovery, Job runs) with each step and its
+            outcome. Kept for 30 days.
+          </p>
+        </Card>
+      ) : null}
 
-      <Card title="Slow requests">
-        <SlowRequestsTable key={hours} hours={hours} />
-      </Card>
+      {tab === "sizing" ? (
+        <>
+          <Card title="Current sizing">
+            {capacityQuery.isPending ? <Spinner label="Reading sizing" /> : null}
+            {capacityQuery.isError ? (
+              <ErrorAlert error={capacityQuery.error} title="Could not read sizing" />
+            ) : null}
+            {capacityQuery.data ? <CapacityList settings={capacityQuery.data.settings} /> : null}
+            <p className={styles.caption}>
+              Read with the Account Admin service principal. Autoscaling ranges show the minimum and maximum
+              Lakebase compute units.
+            </p>
+          </Card>
+
+          <AppCostCard />
+        </>
+      ) : null}
     </div>
   );
 }

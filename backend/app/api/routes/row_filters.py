@@ -55,7 +55,13 @@ def upsert_dimension(
     Raises:
         ForbiddenError: If the caller is not an app admin (HTTP 403).
     """
-    return container.row_filters.upsert_dimension(body, admin)
+    with container.tasks.track(
+        "row_filters.save_dimension",
+        f"Save row-filter dimension {body.key}",
+        admin.user_name,
+        link="/row-filters",
+    ):
+        return container.row_filters.upsert_dimension(body, admin)
 
 
 @router.delete("/dimensions/{key}", status_code=204)
@@ -73,7 +79,13 @@ def delete_dimension(key: str, admin: Admin, container: Container) -> None:
         ForbiddenError: If the caller is not an app admin (HTTP 403).
         NotFoundError: If the dimension does not exist (HTTP 404).
     """
-    container.row_filters.delete_dimension(key, admin)
+    with container.tasks.track(
+        "row_filters.delete_dimension",
+        f"Delete row-filter dimension {key}",
+        admin.user_name,
+        link="/row-filters",
+    ):
+        container.row_filters.delete_dimension(key, admin)
 
 
 @router.post("/dimensions/{key}/refresh", response_model=RowFilterDimension)
@@ -94,7 +106,13 @@ def refresh_dimension(key: str, admin: Admin, container: Container) -> RowFilter
         ForbiddenError: If the caller is not an app admin (HTTP 403).
         NotFoundError: If the dimension does not exist (HTTP 404).
     """
-    return container.row_filters.refresh_dimension(key, admin)
+    with container.tasks.track(
+        "row_filters.refresh_dimension",
+        f"Refresh row-filter values for {key}",
+        admin.user_name,
+        link="/row-filters",
+    ):
+        return container.row_filters.refresh_dimension(key, admin)
 
 
 @router.post("/seed-preview", response_model=SeedPreview)
@@ -146,7 +164,10 @@ def ensure_pack(admin: Admin, container: Container) -> RowFilterPackStatus:
     Raises:
         ForbiddenError: If the caller is not an app admin (HTTP 403).
     """
-    return container.row_filters.ensure_pack(admin)
+    with container.tasks.track(
+        "row_filters.pack", "Sync row-filter policy pack", admin.user_name, link="/row-filters"
+    ):
+        return container.row_filters.ensure_pack(admin)
 
 
 @router.get("/attachments", response_model=RowFilterAttachmentList)
@@ -181,7 +202,13 @@ def attach(body: AttachRowFilterRequest, admin: Admin, container: Container) -> 
     Raises:
         ForbiddenError: If the caller is not an app admin (HTTP 403).
     """
-    return container.row_filters.attach(body, admin)
+    with container.tasks.track(
+        "row_filters.attach",
+        f"Attach row filter to {body.table_full_name}.{body.column_name}",
+        admin.user_name,
+        link="/row-filters",
+    ):
+        return container.row_filters.attach(body, admin)
 
 
 @router.delete("/attachments", status_code=204)
@@ -199,4 +226,10 @@ def detach(table_full_name: str, column_name: str, admin: Admin, container: Cont
     Raises:
         ForbiddenError: If the caller is not an app admin (HTTP 403).
     """
-    container.row_filters.detach(table_full_name, column_name, admin)
+    with container.tasks.track(
+        "row_filters.detach",
+        f"Detach row filter from {table_full_name}.{column_name}",
+        admin.user_name,
+        link="/row-filters",
+    ):
+        container.row_filters.detach(table_full_name, column_name, admin)

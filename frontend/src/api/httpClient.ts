@@ -7,30 +7,36 @@
 
 /** Error envelope returned by the backend for non-2xx responses. All fields are optional because proxies may return other shapes. */
 export interface ApiErrorBody {
-  error?: { code?: string; message?: string; details?: Record<string, unknown> };
+  error?: { code?: string; message?: string; details?: Record<string, unknown>; requestId?: string };
 }
+
+/** Response header carrying the server's request ID (also echoed in error bodies). */
+export const REQUEST_ID_HEADER = "x-request-id";
 
 /**
  * Error thrown by {@link HttpClient} for any non-2xx HTTP response.
  *
  * @remarks
- * `code` is the backend's machine-readable error code, or `"http_error"` when the body was
- * not a JSON error envelope (e.g. an HTML page from the Databricks Apps proxy).
+ * `code` is the backend's machine-readable error code, `"http_error"` when the body was
+ * not a JSON error envelope (e.g. an HTML page from the Databricks Apps proxy), or
+ * `"network_error"` (status 0) when the request never reached the server.
  */
 export class ApiError extends Error {
   /**
    * Creates an API error.
    *
-   * @param status - HTTP status code of the failed response.
-   * @param code - Backend error code, or `"http_error"` when unavailable.
+   * @param status - HTTP status code of the failed response (0 for network failures).
+   * @param code - Backend error code, `"http_error"`, or `"network_error"`.
    * @param message - Human-readable message (backend message, status text, or a generic fallback).
    * @param details - Optional structured details from the backend error envelope.
+   * @param requestId - Server request ID, to match the error to server logs and history.
    */
   constructor(
     readonly status: number,
     readonly code: string,
     message: string,
     readonly details: Record<string, unknown> = {},
+    readonly requestId: string | null = null,
   ) {
     super(message);
     this.name = "ApiError";
@@ -132,7 +138,7 @@ export class HttpClient {
    * @throws {@link ApiError} When the response status is not 2xx.
    */
   private async request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
-    const response = await this.fetchFn(`${this.baseUrl}${path}`, {
+    const response = await this.send(`${this.baseUrl}${path}`, {
       method,
       signal,
       credentials: "same-origin",
@@ -158,7 +164,7 @@ export class HttpClient {
    * @throws {@link ApiError} When the response status is not 2xx.
    */
   private async requestText(method: string, path: string, signal?: AbortSignal): Promise<string> {
-    const response = await this.fetchFn(`${this.baseUrl}${path}`, {
+    const response = await this.send(`${this.baseUrl}${path}`, {
       method,
       signal,
       credentials: "same-origin",
@@ -168,6 +174,22 @@ export class HttpClient {
       throw await HttpClient.toError(response);
     }
     return response.text();
+  }
+
+  /**
+   * Calls fetch, turning a failed connection into an {@link ApiError} with code `network_error`.
+   *
+   * @remarks Aborts (query cancellation) are rethrown unchanged so TanStack Query ignores them.
+   */
+  private async send(url: string, init: RequestInit): Promise<Response> {
+    try {
+      return await this.fetchFn(url, init);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") throw error;
+      if (init.signal?.aborted) throw error;
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new ApiError(0, "network_error", `Could not reach the app server (${reason})`);
+    }
   }
 
   /**
@@ -188,6 +210,7 @@ export class HttpClient {
       body.error?.code ?? "http_error",
       body.error?.message ?? (response.statusText || `Request failed (${response.status})`),
       body.error?.details,
+      body.error?.requestId ?? response.headers?.get?.(REQUEST_ID_HEADER) ?? null,
     );
   }
 }

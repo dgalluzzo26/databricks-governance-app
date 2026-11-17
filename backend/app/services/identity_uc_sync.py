@@ -22,6 +22,7 @@ from backend.app.models.identity_attribute import (
 )
 from backend.app.repositories.base import IdentityAttributeRepository
 from backend.app.repositories.delta import DeltaIdentityAttributeRepository, _DeltaTable
+from backend.app.services.tasks import step, step_detail, task_summary
 
 logger = logging.getLogger(__name__)
 
@@ -120,24 +121,28 @@ class IdentityUcSync:
             UpstreamError: If any mirror statement fails.
             NotConfiguredError: If no SQL warehouse is configured.
         """
-        self.ensure_tables()
+        with step("Ensure Unity Catalog mirror tables"):
+            self.ensure_tables()
         with self.lock:
             definitions = source.list_definitions()
             assignments = source.list_assignments(AttributeAssignmentFilter(include_inactive=True))
-            self._overwrite(
-                self._definitions,
-                "identity_attribute_definitions",
-                _DEFINITION_COLUMNS,
-                [_definition_row(d) for d in definitions],
-            )
-            self._overwrite(
-                self._assignments,
-                "identity_attributes",
-                _ASSIGNMENT_COLUMNS,
-                [_assignment_row(a) for a in assignments],
-            )
+            with step(f"Write {len(definitions)} definitions"):
+                self._overwrite(
+                    self._definitions,
+                    "identity_attribute_definitions",
+                    _DEFINITION_COLUMNS,
+                    [_definition_row(d) for d in definitions],
+                )
+            with step(f"Write {len(assignments)} assignments"):
+                self._overwrite(
+                    self._assignments,
+                    "identity_attributes",
+                    _ASSIGNMENT_COLUMNS,
+                    [_assignment_row(a) for a in assignments],
+                )
 
         counts = {"definitions": len(definitions), "assignments": len(assignments)}
+        task_summary(f"{counts['definitions']} definitions, {counts['assignments']} assignments mirrored")
         logger.info(
             "Synced identity attributes to UC (%s): %s definitions, %s assignments",
             self.location,
@@ -159,6 +164,7 @@ class IdentityUcSync:
         try:
             for start in range(0, len(rows), _OVERWRITE_CHUNK):
                 chunk = rows[start : start + _OVERWRITE_CHUNK]
+                step_detail(f"{start + len(chunk)} of {len(rows)} rows staged")
                 self._sql.execute(f"INSERT INTO {staging.fqn} ({columns}) VALUES {', '.join(chunk)}")
             self._sql.execute(
                 f"INSERT OVERWRITE {table.fqn} ({columns}) SELECT {columns} FROM {staging.fqn}"

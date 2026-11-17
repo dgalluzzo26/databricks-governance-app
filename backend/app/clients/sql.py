@@ -16,7 +16,13 @@ from databricks.sdk.service.sql import (
     StatementState,
 )
 
-from backend.app.core.errors import InvalidRequestError, NotConfiguredError, UpstreamError
+from backend.app.core.errors import (
+    InvalidRequestError,
+    NotConfiguredError,
+    StatementTimeoutError,
+    UpstreamError,
+    WarehouseUnavailableError,
+)
 from backend.app.core.perf import track
 
 logger = logging.getLogger(__name__)
@@ -111,8 +117,10 @@ class SqlExecutor:
 
         Raises:
             NotConfiguredError: If no warehouse ID is configured.
-            UpstreamError: If the statement fails, is cancelled, or times out (a timed-out
-                statement is cancelled first).
+            WarehouseUnavailableError: If the statement timed out because the warehouse is not
+                running or not healthy (the statement is cancelled first).
+            StatementTimeoutError: If the statement timed out on a running warehouse.
+            UpstreamError: If the statement fails or is cancelled.
         """
         if not self._warehouse_id:
             raise NotConfiguredError("DATABRICKS_WAREHOUSE_ID is not configured")
@@ -138,7 +146,7 @@ class SqlExecutor:
         while response.status and response.status.state in _PENDING:
             if time.monotonic() > deadline:
                 client.statement_execution.cancel_execution(response.statement_id)
-                raise UpstreamError("SQL statement timed out")
+                raise self._timeout_error(client)
             time.sleep(1)
             response = client.statement_execution.get_statement(response.statement_id)
 
@@ -155,6 +163,32 @@ class SqlExecutor:
             rows.extend(chunk.data_array or [])
             next_chunk = chunk.next_chunk_index
         return [dict(zip(columns, row, strict=False)) for row in rows]
+
+    def _timeout_error(self, client: WorkspaceClient) -> UpstreamError:
+        """Explain a timeout: a stopped, starting, or unhealthy warehouse, or a slow statement.
+
+        The warehouse lookup is best effort; if it fails, the plain timeout is reported.
+        """
+        details: dict[str, Any] = {"warehouseId": self._warehouse_id, "waitedSeconds": self._max_wait}
+        try:
+            warehouse = client.warehouses.get(id=self._warehouse_id)
+            state = warehouse.state.value if warehouse.state else "UNKNOWN"
+            health = warehouse.health.status.value if warehouse.health and warehouse.health.status else None
+        except Exception as exc:  # noqa: BLE001 - diagnosis must not hide the timeout
+            logger.debug("Could not read warehouse %s state: %s", self._warehouse_id, exc)
+            return StatementTimeoutError(f"SQL statement timed out after {self._max_wait}s", details=details)
+        details.update({"state": state, "health": health})
+        name = warehouse.name or self._warehouse_id
+        if state != "RUNNING" or (health and health != "HEALTHY"):
+            health_note = f", health {health}" if health else ""
+            return WarehouseUnavailableError(
+                f"SQL warehouse {name} is {state.lower()}{health_note}; "
+                "queries wait until it is running. Try again in a minute.",
+                details=details,
+            )
+        return StatementTimeoutError(
+            f"SQL statement timed out after {self._max_wait}s on running warehouse {name}", details=details
+        )
 
     def execute(self, statement: str, parameters: dict[str, Any] | None = None) -> None:
         """Execute a statement for its side effects, discarding any rows.

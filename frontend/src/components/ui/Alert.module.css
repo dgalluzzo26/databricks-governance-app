@@ -12,6 +12,19 @@
   font-weight: 600;
 }
 
+.hint {
+  display: block;
+  margin-top: var(--space-1);
+}
+
+.reference {
+  display: block;
+  margin-top: var(--space-1);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  opacity: 0.8;
+}
+
 .info {
   background: var(--color-primary-subtle);
   border-color: #b9d6ef;

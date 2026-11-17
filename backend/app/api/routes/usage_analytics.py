@@ -18,6 +18,7 @@ from backend.app.models.usage_analytics import (
     UsageTableList,
     UsageUserList,
 )
+from backend.app.services.job_trackers import follow_job_run
 
 router = APIRouter(prefix="/usage-analytics", tags=["usage-analytics"])
 
@@ -75,7 +76,18 @@ def refresh_usage_rollup(
     container: Container,
 ) -> UsageRefreshResponse:
     """Trigger an on-demand run of the usage rollup job."""
-    return container.usage_analytics.refresh(actor=admin)
+    result = container.usage_analytics.refresh(actor=admin)
+    if result.run_id and result.run_id.isdigit():
+        follow_job_run(
+            container.tasks,
+            lambda: container.workspace.app().jobs,
+            int(result.run_id),
+            kind="usage.rollup",
+            title="Refresh usage analytics",
+            actor=admin.user_name,
+            link="/data-access/analytics",
+        )
+    return result
 
 
 @router.get("/export")

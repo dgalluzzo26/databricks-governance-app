@@ -16,6 +16,7 @@ from backend.app.models.data_access import (
     DataAccessSettingsView,
     DataAccessViewPage,
     RunDataAccessRequest,
+    SyncRunStatus,
 )
 from backend.app.models.data_access_pending import (
     AccessStatusList,
@@ -24,6 +25,7 @@ from backend.app.models.data_access_pending import (
     PendingSummary,
     TagChangePage,
 )
+from backend.app.services.job_trackers import follow_data_access_run
 from backend.app.services.table_query import parse_table_query
 
 router = APIRouter(prefix="/data-access", tags=["data-access"])
@@ -263,7 +265,10 @@ def run_now(admin: Admin, container: Container, body: RunDataAccessRequest | Non
         The started run (``running`` when triggered via the Job).
     """
     mode = body.mode if body is not None else "dry_run"
-    return container.data_access.run_now(admin, mode=mode)
+    run = container.data_access.run_now(admin, mode=mode)
+    if run.status == SyncRunStatus.RUNNING:
+        follow_data_access_run(container.tasks, container.data_access.get_run, run, admin.user_name)
+    return run
 
 
 @router.get("/pending", response_model=PendingSummary)

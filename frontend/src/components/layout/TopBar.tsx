@@ -1,8 +1,9 @@
 /**
- * @file Application top bar with brand link, theme toggle, and optional user menu.
+ * @file Application top bar with brand link, activity panel, theme toggle, and optional user menu.
  */
 import { Link } from "react-router-dom";
 import type { CurrentUser } from "@/api/types";
+import { ActivityButton } from "@/components/activity/ActivityPanel";
 import { DatabricksLogo } from "@/components/icons";
 import { BusyStatus } from "./BusyBar";
 import { ThemeToggle } from "./ThemeToggle";
@@ -23,6 +24,7 @@ export function TopBar({ user, realUser }: { user?: CurrentUser; realUser?: Curr
       </Link>
       <div className={styles.spacer} />
       <BusyStatus />
+      {user && <ActivityButton />}
       <ThemeToggle />
       {user && <UserMenu user={user} realUser={realUser} />}
     </header>

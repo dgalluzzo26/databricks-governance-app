@@ -82,6 +82,7 @@ class UsageOverview(ApiModel):
 
     available: bool = True
     detail: str | None = None
+    error_code: str | None = None
     days: int = 30
     generated_at: datetime = Field(default_factory=datetime.utcnow)
     kpis: UsageKpis = Field(default_factory=UsageKpis)
