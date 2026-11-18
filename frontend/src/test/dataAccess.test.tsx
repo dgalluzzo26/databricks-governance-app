@@ -4,20 +4,29 @@ import { describe, expect, it, vi } from "vitest";
 import { fakeServices, renderApp, testDataAccessRun, testDataAccessSettings } from "./renderApp";
 
 describe("Data access dry-run", () => {
-  it("shows settings, readiness, and the latest plan on Dry-run", async () => {
+  it("shows readiness and the latest plan on Dry-run", async () => {
     renderApp("/data-access");
     expect(await screen.findByRole("heading", { name: "Data access" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Dry-run" })).toHaveAttribute("aria-selected", "true");
     expect(await screen.findByText("Dry-run ready")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("data_access_control")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Run now" })).toBeEnabled();
     expect(screen.getByLabelText("Plan summary")).toBeInTheDocument();
     expect(screen.getByText("Eligible objects")).toBeInTheDocument();
     expect(screen.getByText("Grants +")).toBeInTheDocument();
     expect(screen.getByText("Dry-run logs")).toBeInTheDocument();
     expect(screen.getByText(/Grants to add sample/i)).toBeInTheDocument();
-    expect(screen.getByLabelText("Schedule mode")).toHaveValue("dry_run");
     expect(screen.getByText("2.0s")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Schedule mode")).not.toBeInTheDocument();
+  });
+
+  it("shows settings on the Settings tab", async () => {
+    const user = userEvent.setup();
+    renderApp("/data-access");
+    await user.click(await screen.findByRole("tab", { name: "Settings" }));
+    expect(screen.getByRole("tab", { name: "Settings" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByDisplayValue("data_access_control")).toBeInTheDocument();
+    expect(screen.getByLabelText("Schedule mode")).toHaveValue("dry_run");
+    expect(screen.getByRole("button", { name: "Save settings" })).toBeInTheDocument();
   });
 
   it("loads a log row into the report when clicked", async () => {
@@ -71,7 +80,7 @@ describe("Data access settings save", () => {
       },
     });
     const save = vi.spyOn(services.dataAccess, "saveSettings");
-    renderApp("/data-access", services);
+    renderApp("/data-access?tab=settings", services);
 
     expect(await screen.findByDisplayValue("data_access_control")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Save settings" }));

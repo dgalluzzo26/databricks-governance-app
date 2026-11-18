@@ -1,7 +1,8 @@
 /**
  * @file Admin UI for the tag-driven data-access group planner.
  *
- * Dry-run tab: configure schedule, run the planner, inspect dry-run logs.
+ * Settings tab: tags, enrollment, schedule, and conflict policy.
+ * Dry-run tab: readiness, run the planner, inspect dry-run logs.
  * Live tab: apply readiness, manual apply, live-only logs.
  * Outstanding work tab: the full list of changes the next sync still has to make, plus tag changes.
  * Schedule is a Databricks Job; Run now triggers that Job and waits.
@@ -30,16 +31,18 @@ import { useTableView, type TableColumn } from "@/hooks/useTableView";
 import { DataTableHead } from "@/components/ui/DataTableHead";
 import { useServerTableView, type ServerTableView } from "@/hooks/useServerTableView";
 
-type DataAccessTab = "dry-run" | "live" | "outstanding";
+type DataAccessTab = "settings" | "dry-run" | "live" | "outstanding";
 
 /**
- * Data-access administration with Dry-run, Live, and Outstanding work tabs.
+ * Data-access administration with Settings, Dry-run, Live, and Outstanding work tabs.
  */
 export function DataAccessPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const requested = (searchParams.get("tab") as DataAccessTab | null) ?? "dry-run";
   const tab: DataAccessTab =
-    requested === "live" || requested === "outstanding" ? requested : "dry-run";
+    requested === "settings" || requested === "live" || requested === "outstanding"
+      ? requested
+      : "dry-run";
   const [dryPage, setDryPage] = useState(1);
   const [livePage, setLivePage] = useState(1);
   const [drySelectedId, setDrySelectedId] = useState<string | null>(null);
@@ -77,6 +80,15 @@ export function DataAccessPage() {
         <button
           type="button"
           role="tab"
+          aria-selected={tab === "settings"}
+          className={`${styles.tab}${tab === "settings" ? ` ${styles.tabActive}` : ""}`}
+          onClick={() => setTab("settings")}
+        >
+          Settings
+        </button>
+        <button
+          type="button"
+          role="tab"
           aria-selected={tab === "dry-run"}
           className={`${styles.tab}${tab === "dry-run" ? ` ${styles.tabActive}` : ""}`}
           onClick={() => setTab("dry-run")}
@@ -105,6 +117,26 @@ export function DataAccessPage() {
 
       {tab === "outstanding" && <OutstandingWorkPanel />}
 
+      {tab === "settings" && (
+        <>
+          {settingsQuery.isPending && <Spinner label="Loading settings" />}
+          {settingsQuery.error && (
+            <ErrorAlert error={settingsQuery.error} title="Could not load settings" />
+          )}
+          {settingsQuery.data && (
+            <SettingsCard
+              initial={settingsQuery.data.settings}
+              enrolledCatalogs={settingsQuery.data.enrolledCatalogs}
+              minInterval={settingsQuery.data.minIntervalMinutes}
+              applyReady={readiness.data?.applyReady === true && readiness.data?.setupReady === true}
+              saving={save.isPending}
+              error={save.error}
+              onSave={(body) => void save.mutateAsync(body)}
+            />
+          )}
+        </>
+      )}
+
       {tab === "dry-run" && (
         <>
           {readiness.isPending && <Spinner label="Checking Account Admin SP" />}
@@ -122,24 +154,13 @@ export function DataAccessPage() {
               <button type="button" className={styles.linkButton} onClick={() => setTab("live")}>
                 Live
               </button>{" "}
-              for apply, or set the schedule mode to Apply so each interval plans then mutates.{" "}
+              for apply, or set{" "}
+              <button type="button" className={styles.linkButton} onClick={() => setTab("settings")}>
+                Settings → Schedule mode
+              </button>{" "}
+              to Apply so each interval plans then mutates.{" "}
               {!readiness.data.dryRunReady && <Link to="/status">Open App status</Link>}
             </Alert>
-          )}
-          {settingsQuery.isPending && <Spinner label="Loading settings" />}
-          {settingsQuery.error && (
-            <ErrorAlert error={settingsQuery.error} title="Could not load settings" />
-          )}
-          {settingsQuery.data && (
-            <SettingsCard
-              initial={settingsQuery.data.settings}
-              enrolledCatalogs={settingsQuery.data.enrolledCatalogs}
-              minInterval={settingsQuery.data.minIntervalMinutes}
-              applyReady={readiness.data?.applyReady === true && readiness.data?.setupReady === true}
-              saving={save.isPending}
-              error={save.error}
-              onSave={(body) => void save.mutateAsync(body)}
-            />
           )}
           <Card
             title="Manual sync (dry-run)"
@@ -311,7 +332,7 @@ function LiveTab(props: {
             {scheduleEnabled === false
               ? " (schedule paused)."
               : " (schedule mode is Dry-run)."}{" "}
-            Turn it on under Dry-run → Settings → Schedule mode = Apply.
+            Turn it on under Settings → Schedule mode = Apply.
           </p>
         )}
       </Card>
