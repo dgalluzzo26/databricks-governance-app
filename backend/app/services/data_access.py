@@ -16,6 +16,7 @@ import uuid
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 from databricks.sdk.errors import DatabricksError
@@ -152,6 +153,17 @@ _EXCLUDED_CATALOGS = ("system", "samples", "__databricks_internal")
 # Background refresh ages for read paths; the sync Job always reads live inventory.
 _ENROLLED_REFRESH_SECONDS = 60
 _TAGS_REFRESH_SECONDS = 60
+
+
+def _json_cell(value: Any) -> Any:
+    """Return a SQL cell in a JSON-friendly form.
+
+    Postgres ``numeric`` (e.g. ``EXTRACT(EPOCH ...)`` on Postgres 14+) arrives as ``Decimal``,
+    which pydantic serializes as a string. The frontend only reads JSON numbers, so convert here.
+    """
+    if isinstance(value, Decimal):
+        return float(value)
+    return value
 
 
 def _run_elapsed_seconds(run: DataAccessRun) -> float | None:
@@ -519,7 +531,7 @@ class DataAccessService:
                 mode=mode_filter, change=change, limit=size, offset=offset, table_query=table_query
             )
         return DataAccessViewPage(
-            rows=[{to_camel(key): value for key, value in row.items()} for row in rows],
+            rows=[{to_camel(key): _json_cell(value) for key, value in row.items()} for row in rows],
             total=total,
             page=current,
             page_size=size,

@@ -936,6 +936,24 @@ def test_write_run_caps_history_at_limit(monkeypatch: pytest.MonkeyPatch) -> Non
     assert [r.run_id for r in svc._runs()] == ["r2", "r1"]  # noqa: SLF001
 
 
+def test_view_page_sends_numeric_columns_as_json_numbers() -> None:
+    """Postgres ``numeric`` (e.g. EXTRACT on PG14+) must not leave the API as a string."""
+    from decimal import Decimal
+
+    class _Reader:
+        def runs_page(self, **_: Any) -> tuple[list[dict[str, Any]], int]:
+            return [{"run_id": "r1", "duration_seconds": Decimal("12.345678"), "grants_to_add": 0}], 1
+
+    svc = _service(storage=InMemoryStorageProvider())
+    svc._storage = SimpleNamespace(data_access_views=_Reader())  # type: ignore[assignment]  # noqa: SLF001
+    page = svc.view_page(kind="runs")
+    row = page.rows[0]
+    assert row["durationSeconds"] == pytest.approx(12.345678)
+    assert isinstance(row["durationSeconds"], float)
+    assert row["grantsToAdd"] == 0
+    assert '"durationSeconds":12.345678' in page.model_dump_json()
+
+
 def test_corrupt_run_history_is_ignored() -> None:
     storage = InMemoryStorageProvider()
     svc = _service(storage=storage)
