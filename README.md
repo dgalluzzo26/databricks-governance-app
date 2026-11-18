@@ -115,9 +115,19 @@ entry in `app/navigation.ts` and `app/routes.tsx`.
 ## Local development
 
 ```bash
-python3 -m venv .venv && PIP_INDEX_URL=https://pypi-proxy.dev.databricks.com/simple .venv/bin/pip install -r requirements-dev.txt
-DATABRICKS_CONFIG_PROFILE=dbc-16303671-e52d ./scripts/dev.sh   # API :8000, UI :5173
+python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+DATABRICKS_CONFIG_PROFILE=<your-profile> ./scripts/dev.sh   # API :8000, UI :5173
 ```
+
+Installs from public PyPI by default. If you need a private mirror (for example the Databricks
+internal proxy), set it for that shell only:
+
+```bash
+export PIP_INDEX_URL=https://pypi-proxy.dev.databricks.com/simple
+.venv/bin/pip install -r requirements-dev.txt
+```
+
+Do not bake that URL into the repo or a long-lived branch; leave it as an optional env override.
 
 Locally the caller is the CLI profile's user (or `DEV_USER_EMAIL`) and storage defaults to
 in-memory. `dev.sh` sets `ALLOW_LOCAL_IDENTITY=true` for this; without it (as in the deployed

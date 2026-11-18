@@ -31,15 +31,28 @@ flowchart TD
 | Account Admin service principal | Runs ABAC, grants sync, usage rollup, Account SCIM |
 | An admin group | Members become app admins (`admin_group`, default `admins`) |
 
-Clone the repo and create a venv once:
+Clone the repo and create a venv once (public PyPI by default):
 
 ```bash
 python3 -m venv .venv
-PIP_INDEX_URL=https://pypi-proxy.dev.databricks.com/simple \
-  .venv/bin/pip install -r requirements-dev.txt
+.venv/bin/pip install -r requirements-dev.txt
 ```
 
-Use your workspace's PyPI index if that proxy is not available.
+`./scripts/deploy.sh` does not use pip; only local installs and tests need a package index.
+If you must use a private mirror (for example Databricks' internal proxy), set it for that
+shell only — do not commit it or keep a separate "proxy" branch:
+
+```bash
+export PIP_INDEX_URL=https://pypi-proxy.dev.databricks.com/simple
+.venv/bin/pip install -r requirements-dev.txt
+```
+
+Before installing on a new machine, check that nothing still points at that proxy:
+
+```bash
+echo "${PIP_INDEX_URL:-<unset>}"
+.venv/bin/pip config list 2>/dev/null || pip config list
+```
 
 ---
 
