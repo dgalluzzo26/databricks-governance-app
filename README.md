@@ -20,13 +20,17 @@ Developer reference for the mask and row-filter chains:
 
 Requires the Databricks CLI (authenticated to the target workspace), Node 22+, and Python 3.11+.
 
+For a **new workspace** (secrets, deploy, demo catalog, Identity definitions, packs, first
+grants sync, and every helper script), follow
+[docs/setup-guide.md](docs/setup-guide.md). The short path below only deploys the empty app.
+
 ```bash
 ./scripts/deploy.sh            # target "dev": Lakebase storage
 ./scripts/deploy.sh dev-delta  # same workspace, Delta table storage
 ```
 
 The script builds the UI, deploys the bundle, runs the setup job, and starts the app. Re-running
-it is safe; every step is idempotent.
+it is safe; every step is idempotent. It does **not** seed demo tables or enroll catalogs.
 
 | Created | By | Purpose |
 | --- | --- | --- |

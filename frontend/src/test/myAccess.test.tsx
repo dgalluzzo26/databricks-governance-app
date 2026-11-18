@@ -39,7 +39,7 @@ describe("Identity My access", () => {
     const user = userEvent.setup();
     const services = fakeServices();
     const tables = Array.from({ length: 25 }, (_, i) => ({
-      fullName: `data_access_control.finance.t${String(i).padStart(3, "0")}`,
+      fullName: `data_governance_demo.finance.t${String(i).padStart(3, "0")}`,
       columnName: null,
       tagValue: "finance",
       match: "descendant" as const,
@@ -56,14 +56,14 @@ describe("Identity My access", () => {
 
     await user.click((await screen.findAllByRole("button", { name: "Show resources" }))[0]!);
     const table = await screen.findByRole("table", { name: "Tables unlocked" });
-    expect(within(table).getByText("data_access_control.finance.t000")).toBeInTheDocument();
-    expect(within(table).queryByText("data_access_control.finance.t010")).not.toBeInTheDocument();
+    expect(within(table).getByText("data_governance_demo.finance.t000")).toBeInTheDocument();
+    expect(within(table).queryByText("data_governance_demo.finance.t010")).not.toBeInTheDocument();
     expect(screen.getByText("1–10 of 25")).toBeInTheDocument();
 
     const pagerNext = screen.getAllByRole("button", { name: "Next" });
     await user.click(pagerNext[pagerNext.length - 1]!);
     expect(screen.getByText("11–20 of 25")).toBeInTheDocument();
-    expect(within(table).getByText("data_access_control.finance.t010")).toBeInTheDocument();
-    expect(within(table).queryByText("data_access_control.finance.t000")).not.toBeInTheDocument();
+    expect(within(table).getByText("data_governance_demo.finance.t010")).toBeInTheDocument();
+    expect(within(table).queryByText("data_governance_demo.finance.t000")).not.toBeInTheDocument();
   });
 });

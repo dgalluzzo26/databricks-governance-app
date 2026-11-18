@@ -30,8 +30,8 @@ class _FakeAccessSql:
         if "SELECT g.table_full_name" in statement:
             return [
                 {
-                    "table_full_name": "data_access_control.finance.budget",
-                    "catalog_name": "data_access_control",
+                    "table_full_name": "data_governance_demo.finance.budget",
+                    "catalog_name": "data_governance_demo",
                     "schema_name": "finance",
                     "table_name": "budget",
                     "tag_value": "finance.budget",
@@ -62,7 +62,7 @@ class _FakeAccessSql:
         if "SELECT p.table_full_name, p.user_name, p.grants, g.tag_value" in statement:
             return [
                 {
-                    "table_full_name": "data_access_control.finance.budget",
+                    "table_full_name": "data_governance_demo.finance.budget",
                     "user_name": "bo@example.com",
                     "grants": "USER|bo@example.com|finance.budget",
                     "tag_value": "finance.budget",
@@ -71,7 +71,7 @@ class _FakeAccessSql:
         if "SELECT w.table_full_name, w.user_name, w.reads" in statement:
             return [
                 {
-                    "table_full_name": "data_access_control.finance.budget",
+                    "table_full_name": "data_governance_demo.finance.budget",
                     "user_name": "eve@example.com",
                     "reads": "7",
                     "last_read_at": "2026-11-15T09:00:00Z",
@@ -80,7 +80,7 @@ class _FakeAccessSql:
         if "SELECT p.table_full_name, g.tag_value, p.user_name" in statement:
             return [
                 {
-                    "table_full_name": "data_access_control.finance.budget",
+                    "table_full_name": "data_governance_demo.finance.budget",
                     "tag_value": "finance.budget",
                     "user_name": "ana@example.com",
                     "grants": "GROUP|finance_readers|finance",
@@ -115,7 +115,7 @@ def test_tables_summarise_holders_unused_and_reader_gaps(access: UsageAccessServ
     assert result.as_of == "2026-11-17"
     assert result.total == 2
     table = result.tables[0]
-    assert table.table_full_name == "data_access_control.finance.budget"
+    assert table.table_full_name == "data_governance_demo.finance.budget"
     assert table.holders == 3
     assert table.holders_with_reads == 1
     assert table.unused_holders == 2
@@ -124,8 +124,8 @@ def test_tables_summarise_holders_unused_and_reader_gaps(access: UsageAccessServ
 
 
 def test_table_detail_lists_holders_grants_and_reader_gaps(access: UsageAccessService) -> None:
-    detail = access.table_detail("Data_Access_Control.Finance.Budget", days=30)
-    assert detail.table_full_name == "data_access_control.finance.budget"
+    detail = access.table_detail("Data_Governance_Demo.Finance.Budget", days=30)
+    assert detail.table_full_name == "data_governance_demo.finance.budget"
     assert detail.tag_value == "finance.budget"
     ana, bo = detail.holders
     assert ana.user_name == "ana@example.com"
@@ -189,7 +189,7 @@ def test_access_routes_return_camel_case(client: TestClient, access: UsageAccess
 
     detail = client.get(
         "/api/usage-analytics/access/table-detail",
-        params={"table_full_name": "data_access_control.finance.budget", "days": 30},
+        params={"table_full_name": "data_governance_demo.finance.budget", "days": 30},
         headers=admin,
     )
     assert detail.status_code == 200

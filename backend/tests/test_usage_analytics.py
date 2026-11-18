@@ -27,7 +27,7 @@ class _FakeUsageSql:
                 "window_start": "2026-08-19",
                 "window_end": "2026-11-17",
                 "read_events": "467",
-                "catalogs": "data_access_control,sandbox",
+                "catalogs": "data_governance_demo,sandbox",
             }]
         # KPIs - tables
         if "coalesce(sum(reads), 0) AS total_reads" in statement:
@@ -101,8 +101,8 @@ class _FakeUsageSql:
         # Top tables
         if "table_full_name" in statement and "GROUP BY u.table_full_name" in statement:
             return [{
-                "table_full_name": "data_access_control.people.employees",
-                "catalog_name": "data_access_control",
+                "table_full_name": "data_governance_demo.people.employees",
+                "catalog_name": "data_governance_demo",
                 "schema_name": "people",
                 "table_name": "employees",
                 "reads": "120",
@@ -139,10 +139,10 @@ def test_usage_overview_admin(client: TestClient, container: Any) -> None:
     assert data["kpis"]["maskedReads"] == 65
     assert data["kpis"]["exemptReads"] == 5
     assert data["lastRun"]["runId"] == "r-123"
-    assert data["lastRun"]["catalogs"] == ["data_access_control", "sandbox"]
+    assert data["lastRun"]["catalogs"] == ["data_governance_demo", "sandbox"]
     assert len(data["dailyTrends"]) == 2
     assert len(data["topTables"]) == 1
-    assert data["topTables"][0]["tableFullName"] == "data_access_control.people.employees"
+    assert data["topTables"][0]["tableFullName"] == "data_governance_demo.people.employees"
     assert len(data["topUsers"]) == 1
     assert data["topUsers"][0]["userName"] == "david.galluzzo@databricks.com"
     assert len(data["sensitiveBreakdown"]) == 1
@@ -184,12 +184,12 @@ def test_table_detail(client: TestClient, container: Any) -> None:
 
     resp = client.get(
         "/api/usage-analytics/table-detail",
-        params={"table_full_name": "data_access_control.people.employees", "days": 30},
+        params={"table_full_name": "data_governance_demo.people.employees", "days": 30},
         headers=headers_for("admin@example.com"),
     )
     assert resp.status_code == 200
     detail = resp.json()
-    assert detail["tableFullName"] == "data_access_control.people.employees"
+    assert detail["tableFullName"] == "data_governance_demo.people.employees"
     assert detail["reads"] == 45
     assert detail["distinctUsers"] == 1
     assert len(detail["users"]) == 1
@@ -243,4 +243,4 @@ def test_export_usage_csv(client: TestClient, container: Any) -> None:
     assert "attachment; filename=" in resp.headers["content-disposition"]
     text = resp.text
     assert "Table,Catalog,Schema,Name,Reads,Distinct Users,Last Read At" in text
-    assert "data_access_control.people.employees" in text
+    assert "data_governance_demo.people.employees" in text

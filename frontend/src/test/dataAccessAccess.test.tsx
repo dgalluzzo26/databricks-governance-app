@@ -13,7 +13,7 @@ describe("Data access analytics access reports", () => {
     );
     expect(await screen.findByRole("heading", { name: "Governed tables" })).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "data_access_control.finance.budget" }),
+      screen.getByRole("button", { name: "data_governance_demo.finance.budget" }),
     ).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Unused access" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Reads without assigned access" })).toBeInTheDocument();
@@ -26,13 +26,13 @@ describe("Data access analytics access reports", () => {
     renderApp("/data-access/analytics?tab=access");
 
     const tableBtn = await screen.findByRole("button", {
-      name: "data_access_control.finance.budget",
+      name: "data_governance_demo.finance.budget",
     });
     await user.click(tableBtn);
 
     expect(
       await screen.findByRole("heading", {
-        name: "Access detail: data_access_control.finance.budget",
+        name: "Access detail: data_governance_demo.finance.budget",
       }),
     ).toBeInTheDocument();
     expect(screen.getByText("ana@example.com")).toBeInTheDocument();
@@ -42,7 +42,7 @@ describe("Data access analytics access reports", () => {
     await user.click(screen.getByRole("button", { name: "Close access detail" }));
     expect(
       screen.queryByRole("heading", {
-        name: "Access detail: data_access_control.finance.budget",
+        name: "Access detail: data_governance_demo.finance.budget",
       }),
     ).not.toBeInTheDocument();
   });

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Seed catalog ``data_access_control`` with FEMA-domain schemas, dummy tables, and tags.
+"""Seed catalog ``data_governance_demo`` with FEMA-domain schemas, dummy tables, and tags.
 
 Creates:
-  * Catalog ``data_access_control``
+  * Catalog ``data_governance_demo``
   * One schema per FEMA domain
   * Tables named ``<subdomain>_<table>`` with ``data_access_control`` + ``clr_review_status``
   * Column tags for masking (sensitivity_category / sensitivity / data_type / mask_rule)
@@ -10,8 +10,8 @@ Creates:
   * Extends the governed ``data_access_control`` tag policy with new path values
 
 Usage:
-  python scripts/seed_data_access_control_catalog.py --profile dbc-16303671-e52d
-  python scripts/seed_data_access_control_catalog.py --profile dbc-16303671-e52d --warehouse-id dd0a656c3ddc883e
+  python scripts/seed_data_governance_demo.py --profile dbc-16303671-e52d
+  python scripts/seed_data_governance_demo.py --profile dbc-16303671-e52d --warehouse-id dd0a656c3ddc883e
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ import time
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-CATALOG = "data_access_control"
+CATALOG = "data_governance_demo"
 ACCESS_TAG = "data_access_control"
 REVIEW_TAG = "clr_review_status"
 STATES = ("CA", "NY", "TX", "FL", "WA", "CO", "VA", "IL")

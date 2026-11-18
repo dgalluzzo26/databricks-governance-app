@@ -27,9 +27,17 @@ def test_help_flows_is_admin_only(client: TestClient) -> None:
 def test_admin_sees_and_loads_every_doc(client: TestClient) -> None:
     docs = client.get("/api/help/docs", headers=ADMIN).json()["docs"]
     by_slug = {d["slug"]: d for d in docs}
-    assert list(by_slug) == ["user", "approver", "masking-row-filters", "grants-sync", "backend"]
+    assert list(by_slug) == [
+        "user",
+        "approver",
+        "setup",
+        "masking-row-filters",
+        "grants-sync",
+        "backend",
+    ]
     assert by_slug["user"]["audiences"] == ["user"]
     assert by_slug["approver"]["audiences"] == ["approver"]
+    assert by_slug["setup"]["audiences"] == ["admin"]
     assert by_slug["grants-sync"]["audiences"] == ["admin"]
     for slug, meta in by_slug.items():
         response = client.get(f"/api/help/docs/{slug}", headers=ADMIN)
@@ -43,7 +51,7 @@ def test_user_reads_only_the_user_guide(client: TestClient) -> None:
     docs = client.get("/api/help/docs", headers=ANALYST).json()["docs"]
     assert [d["slug"] for d in docs] == ["user"]
     assert client.get("/api/help/docs/user", headers=ANALYST).status_code == 200
-    for slug in ("approver", "masking-row-filters", "grants-sync", "backend"):
+    for slug in ("approver", "setup", "masking-row-filters", "grants-sync", "backend"):
         assert client.get(f"/api/help/docs/{slug}", headers=ANALYST).status_code == 404, slug
 
 

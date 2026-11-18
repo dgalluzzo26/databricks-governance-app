@@ -8,11 +8,11 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-SEED_PATH = Path(__file__).resolve().parents[2] / "scripts" / "seed_data_access_control_catalog.py"
+SEED_PATH = Path(__file__).resolve().parents[2] / "scripts" / "seed_data_governance_demo.py"
 
 
 def _load_seed() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("seed_data_access_control_catalog", SEED_PATH)
+    spec = importlib.util.spec_from_file_location("seed_data_governance_demo", SEED_PATH)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     # Dataclasses look the module up in sys.modules while it is being executed.

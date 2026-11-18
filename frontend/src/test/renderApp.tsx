@@ -191,7 +191,7 @@ export const testDataAccessSettings: DataAccessSettingsView = {
   },
   minIntervalMinutes: 5,
   applyAvailable: true,
-  enrolledCatalogs: ["data_access_control", "dgalluzzo_sandbox_7474655957102538"],
+  enrolledCatalogs: ["data_governance_demo", "dgalluzzo_sandbox_7474655957102538"],
 };
 
 export const testAppSettings: AppSettings = {
@@ -220,7 +220,7 @@ export const testUsageOverview: UsageOverview = {
     windowStart: "2026-08-19",
     windowEnd: "2026-11-17",
     readEvents: 467,
-    catalogs: ["data_access_control"],
+    catalogs: ["data_governance_demo"],
   },
   dailyTrends: [
     {
@@ -233,8 +233,8 @@ export const testUsageOverview: UsageOverview = {
   ],
   topTables: [
     {
-      tableFullName: "data_access_control.people.employees_pending_hires",
-      catalogName: "data_access_control",
+      tableFullName: "data_governance_demo.people.employees_pending_hires",
+      catalogName: "data_governance_demo",
       schemaName: "people",
       tableName: "employees_pending_hires",
       reads: 120,
@@ -270,8 +270,8 @@ export const testAccessTableList: AccessTableList = {
   total: 1,
   tables: [
     {
-      tableFullName: "data_access_control.finance.budget",
-      catalogName: "data_access_control",
+      tableFullName: "data_governance_demo.finance.budget",
+      catalogName: "data_governance_demo",
       schemaName: "finance",
       tableName: "budget",
       tagValue: "finance.budget",
@@ -286,7 +286,7 @@ export const testAccessTableList: AccessTableList = {
 };
 
 export const testAccessTableDetail: AccessTableDetail = {
-  tableFullName: "data_access_control.finance.budget",
+  tableFullName: "data_governance_demo.finance.budget",
   tagValue: "finance.budget",
   days: 30,
   asOf: "2026-11-17",
@@ -316,7 +316,7 @@ export const testAccessUnused: AccessUnusedList = {
   total: 1,
   items: [
     {
-      tableFullName: "data_access_control.finance.budget",
+      tableFullName: "data_governance_demo.finance.budget",
       tagValue: "finance.budget",
       userName: "bo@example.com",
       grants: [{ viaType: "USER", viaPrincipal: "bo@example.com", heldValue: "finance.budget" }],
@@ -329,7 +329,7 @@ export const testAccessNoAccess: AccessNoAccessList = {
   total: 1,
   items: [
     {
-      tableFullName: "data_access_control.finance.budget",
+      tableFullName: "data_governance_demo.finance.budget",
       userName: "eve@example.com",
       reads: 7,
       lastReadAt: "2026-11-15T09:00:00Z",

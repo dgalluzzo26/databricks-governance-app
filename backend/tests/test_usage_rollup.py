@@ -76,8 +76,8 @@ def test_catalog_filter_empty_is_false() -> None:
 
 
 def test_catalog_filter_quotes_names() -> None:
-    clause = catalog_filter("c", ["data_access_control", "sandbox"])
-    assert "data_access_control" in clause
+    clause = catalog_filter("c", ["data_governance_demo", "sandbox"])
+    assert "data_governance_demo" in clause
     assert "sandbox" in clause
     assert clause.startswith("c IN (")
 
@@ -105,19 +105,19 @@ def test_table_ddl_covers_expected_tables() -> None:
 
 def test_refresh_sql_scopes_to_catalogs() -> None:
     tables = UsageTables(catalog="app", identity_table="app.app.identity_attributes")
-    catalogs = ["data_access_control"]
+    catalogs = ["data_governance_demo"]
     read = "\n".join(refresh_read_events_sql(tables, catalogs))
     col = "\n".join(refresh_column_events_sql(tables, catalogs))
     assert "system.access.table_lineage" in read
     assert "system.access.column_lineage" in col
-    assert "data_access_control" in read
+    assert "data_governance_demo" in read
     assert "DELETE FROM" in read
     assert "event_date >= :start" in read
 
 
 def test_aggregate_and_access_sql_mention_sensitivity() -> None:
     tables = UsageTables(catalog="app", identity_table="`app`.`app`.`identity_attributes`")
-    agg = "\n".join(aggregate_sql(tables, ["data_access_control"]))
+    agg = "\n".join(aggregate_sql(tables, ["data_governance_demo"]))
     assert "access_mode" in agg or "'masked'" in agg
     assert "sensitivity" in agg
     assert "has_sensitivity" not in agg  # evaluated in SQL via held paths, not the UDF
@@ -129,7 +129,7 @@ def test_aggregate_and_access_sql_mention_sensitivity() -> None:
 def test_access_holder_sql_matches_hierarchical_tag_values() -> None:
     tables = UsageTables(catalog="app", identity_table="`app`.`app`.`identity_attributes`")
     sql = "\n".join(
-        access_holder_sql(tables, ["data_access_control"], ["data_access"], "data_access_control")
+        access_holder_sql(tables, ["data_governance_demo"], ["data_access"], "data_access_control")
     )
     assert "governed_table_snapshot" in sql
     assert "table_access_snapshot" in sql
@@ -155,7 +155,7 @@ def test_exempt_sql_explodes_except_principals() -> None:
 
 def test_usage_rollup_run_happy_path() -> None:
     sql = _FakeSql()
-    sql.on("catalog_tags", [{"catalog_name": "data_access_control"}])
+    sql.on("catalog_tags", [{"catalog_name": "data_governance_demo"}])
     sql.on("max(window_end)", [{"window_end": None}])
     # Most specific needles first: the users query also mentions the read_events table.
     sql.on("UNION", [{"user_name": "ana@example.com"}])
@@ -176,7 +176,7 @@ def test_usage_rollup_run_happy_path() -> None:
     )
     assert result.status == "success"
     assert result.run_id == "run-1"
-    assert result.catalogs == ["data_access_control"]
+    assert result.catalogs == ["data_governance_demo"]
     assert result.read_events == 12
     assert result.column_read_events == 34
     assert result.users_resolved == 1

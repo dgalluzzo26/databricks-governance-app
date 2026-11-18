@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Ensure the catalog enrollment tag and apply it to the governance perimeter catalogs.
 
-Creates/extends the governed tag policy ``data_access_controlled`` (value ``true``) and tags:
+Creates/extends the governed tag policy ``data_access_controlled`` (value ``true``) and tags
+the catalogs listed in ``CATALOGS`` (edit for your workspace).
 
-  * data_access_control
-  * dgalluzzo_sandbox_7474655957102538
+Default catalogs:
+
+  * data_governance_demo  (from ``scripts/seed_data_governance_demo.py``)
 
 Usage:
   python scripts/enroll_governance_catalogs.py --profile dbc-16303671-e52d --warehouse-id dd0a656c3ddc883e
@@ -22,8 +24,7 @@ from typing import Any
 TAG_KEY = "data_access_controlled"
 TAG_VALUE = "true"
 CATALOGS = (
-    "data_access_control",
-    "dgalluzzo_sandbox_7474655957102538",
+    "data_governance_demo",
 )
 
 

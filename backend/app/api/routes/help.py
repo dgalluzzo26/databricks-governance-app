@@ -58,6 +58,13 @@ _DOCS: tuple[HelpDoc, ...] = (
         audiences=[HelpAudience.APPROVER],
     ),
     HelpDoc(
+        slug="setup",
+        title="New environment setup",
+        description="Bootstrap a new workspace: secrets, deploy, demo data, packs, and first sync.",
+        source_path="docs/setup-guide.md",
+        audiences=[HelpAudience.ADMIN],
+    ),
+    HelpDoc(
         slug="masking-row-filters",
         title="Masking & row filters",
         description="Decision flows for column masks, row filters, access requests, and Access Explorer.",

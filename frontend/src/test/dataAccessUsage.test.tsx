@@ -22,7 +22,7 @@ describe("Data access analytics usage", () => {
     expect(screen.getByText("finance.budget.PII.Name")).toBeInTheDocument();
     expect(screen.getByText("Top tables accessed")).toBeInTheDocument();
     expect(
-      await screen.findByText("data_access_control.people.employees_pending_hires"),
+      await screen.findByText("data_governance_demo.people.employees_pending_hires"),
     ).toBeInTheDocument();
     expect(screen.getByText("Top users")).toBeInTheDocument();
     expect(await screen.findByText("david.galluzzo@databricks.com")).toBeInTheDocument();
@@ -48,13 +48,13 @@ describe("Data access analytics usage", () => {
     renderApp("/data-access/analytics");
 
     const tableBtn = await screen.findByRole("button", {
-      name: "data_access_control.people.employees_pending_hires",
+      name: "data_governance_demo.people.employees_pending_hires",
     });
     await user.click(tableBtn);
 
     expect(
       await screen.findByRole("heading", {
-        name: "Table detail: data_access_control.people.employees_pending_hires",
+        name: "Table detail: data_governance_demo.people.employees_pending_hires",
       }),
     ).toBeInTheDocument();
     expect(screen.getByText("first_name")).toBeInTheDocument();
@@ -65,7 +65,7 @@ describe("Data access analytics usage", () => {
     await user.click(screen.getByRole("button", { name: "Close table detail" }));
     expect(
       screen.queryByRole("heading", {
-        name: "Table detail: data_access_control.people.employees_pending_hires",
+        name: "Table detail: data_governance_demo.people.employees_pending_hires",
       }),
     ).not.toBeInTheDocument();
   });
