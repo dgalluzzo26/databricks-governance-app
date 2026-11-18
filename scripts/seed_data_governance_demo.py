@@ -1,17 +1,24 @@
 #!/usr/bin/env python3
-"""Seed catalog ``data_governance_demo`` with FEMA-domain schemas, dummy tables, and tags.
+"""Seed catalog ``data_governance_demo`` with FEMA-domain schemas and dummy tables.
 
 Creates:
   * Catalog ``data_governance_demo``
   * One schema per FEMA domain
-  * Tables named ``<subdomain>_<table>`` with ``data_access_control`` + ``clr_review_status``
-  * Column tags for masking (sensitivity_category / sensitivity / data_type / mask_rule)
-  * Column tags for row filters (``row_filter=state``) on selected tables
-  * Extends the governed ``data_access_control`` tag policy with new path values
+  * Tables named ``<subdomain>_<table>`` with sample rows
+  * Cross-domain views over those tables
+
+By default also applies the demo tag set and extends governed tag policies:
+
+  * Object tags: ``data_access_control`` + ``clr_review_status``
+  * Column tags: sensitivity / data_type / mask_rule / row_filter
+
+Pass ``--no-tags`` to create only the catalog, schemas, tables, rows, and views. Use that in
+workspaces that use different access or review tag keys; you apply tags yourself afterward.
 
 Usage:
   python scripts/seed_data_governance_demo.py --profile dbc-16303671-e52d
   python scripts/seed_data_governance_demo.py --profile dbc-16303671-e52d --warehouse-id dd0a656c3ddc883e
+  python scripts/seed_data_governance_demo.py --profile dbc-16303671-e52d --no-tags
 """
 
 from __future__ import annotations
@@ -747,18 +754,25 @@ VIEW_COLUMN_GOVERNANCE_TAGS = (
 )
 
 
-def create_views(sql: Any, views: list[ViewSpec]) -> None:
-    """Create or replace each view, tag the view object, and clear any governance column tags.
+def create_views(sql: Any, views: list[ViewSpec], *, apply_tags: bool = True) -> None:
+    """Create or replace each view; optionally tag the view object.
 
     Args:
         sql: Executor with ``execute(statement)`` and rows from ``SELECT`` statements.
         views: Views to create.
+        apply_tags: When True (default), set access/review object tags and clear leftover
+            governance column tags. When False, only create the views.
     """
-    print("Creating cross-domain views (object tags only; columns inherit from base tables)…")
+    print(
+        "Creating cross-domain views"
+        + (" (object tags only; columns inherit from base tables)…" if apply_tags else " (no tags)…")
+    )
     for view in views:
         vfqn = f"`{CATALOG}`.`{view.schema}`.`{view.name}`"
         print(f"  [view] {CATALOG}.{view.schema}.{view.name} → {view.access_value}")
         sql.execute(f"CREATE OR REPLACE VIEW {vfqn} AS {view.select_sql}")
+        if not apply_tags:
+            continue
         review_value = "reviewed" if view.reviewed else "pending"
         sql.execute(
             f"ALTER VIEW {vfqn} SET TAGS ("
@@ -992,62 +1006,78 @@ def tag_clause(tags: dict[str, str]) -> str:
     return ", ".join(f"'{k}' = '{v}'" for k, v in tags.items())
 
 
-def seed(profile: str, warehouse_id: str) -> None:
+def seed(profile: str, warehouse_id: str, *, apply_tags: bool = True) -> None:
+    """Create the demo catalog, schemas, tables, rows, and views.
+
+    Args:
+        profile: Databricks CLI profile.
+        warehouse_id: SQL warehouse for DDL/DML.
+        apply_tags: When True (default), create/extend demo tag policies and tag every object
+            and column with the hard-coded demo keys. When False, leave tagging to the caller.
+    """
     tables = build_tables()
     schemas = sorted({t.schema for t in tables})
-    print(f"Seeding catalog={CATALOG} schemas={len(schemas)} tables={len(tables)}")
-    print("Ensuring governed tag policies…")
-    ensure_tag_policy(
-        profile,
-        ACCESS_TAG,
-        "Data-access control path (domain or domain.subdomain)",
-        ACCESS_PATHS,
-    )
-    ensure_tag_policy(
-        profile,
-        REVIEW_TAG,
-        "CLR review status for data-access eligibility",
-        ["pending", "reviewed"],
-    )
-    ensure_tag_policy(
-        profile,
-        "sensitivity_category",
-        "Left side of required sensitivity path",
-        SENSITIVITY_CATEGORY_VALUES,
-    )
-    ensure_tag_policy(
-        profile,
-        "sensitivity",
-        "Right side / leaf of required sensitivity path",
-        SENSITIVITY_VALUES,
-    )
+    mode = "with tags" if apply_tags else "no tags"
+    print(f"Seeding catalog={CATALOG} schemas={len(schemas)} tables={len(tables)} ({mode})")
+    if apply_tags:
+        print("Ensuring governed tag policies…")
+        ensure_tag_policy(
+            profile,
+            ACCESS_TAG,
+            "Data-access control path (domain or domain.subdomain)",
+            ACCESS_PATHS,
+        )
+        ensure_tag_policy(
+            profile,
+            REVIEW_TAG,
+            "CLR review status for data-access eligibility",
+            ["pending", "reviewed"],
+        )
+        ensure_tag_policy(
+            profile,
+            "sensitivity_category",
+            "Left side of required sensitivity path",
+            SENSITIVITY_CATEGORY_VALUES,
+        )
+        ensure_tag_policy(
+            profile,
+            "sensitivity",
+            "Right side / leaf of required sensitivity path",
+            SENSITIVITY_VALUES,
+        )
 
     sql = DatabricksSql(profile, warehouse_id)
     print("Creating catalog and schemas…")
     sql.execute(f"CREATE CATALOG IF NOT EXISTS `{CATALOG}`")
-    sql.execute(
-        f"ALTER CATALOG `{CATALOG}` SET TAGS ('{ACCESS_TAG}' = 'public', '{REVIEW_TAG}' = 'reviewed')"
-    )
+    if apply_tags:
+        sql.execute(
+            f"ALTER CATALOG `{CATALOG}` SET TAGS ('{ACCESS_TAG}' = 'public', '{REVIEW_TAG}' = 'reviewed')"
+        )
     for schema in schemas:
         sql.execute(f"CREATE SCHEMA IF NOT EXISTS `{CATALOG}`.`{schema}`")
         # Schema tags seed nesting only; grants still require table-level tags.
         # cross_domain is not a domain path, so it carries no access tag.
-        if schema in ACCESS_PATHS:
+        if apply_tags and schema in ACCESS_PATHS:
             sql.execute(
                 f"ALTER SCHEMA `{CATALOG}`.`{schema}` SET TAGS ("
                 f"'{ACCESS_TAG}' = '{schema}', '{REVIEW_TAG}' = 'reviewed')"
             )
 
-    print("Creating tables, loading rows, applying tags…")
+    print("Creating tables and loading rows" + ("…" if not apply_tags else ", applying tags…"))
     for i, table in enumerate(tables, start=1):
         fqn = f"`{CATALOG}`.`{table.schema}`.`{table.name}`"
-        print(f"  [{i}/{len(tables)}] {CATALOG}.{table.schema}.{table.name} → {table.access_value}"
-              f"{'' if table.reviewed else ' (unreviewed)'}")
+        print(
+            f"  [{i}/{len(tables)}] {CATALOG}.{table.schema}.{table.name}"
+            + (f" → {table.access_value}" if apply_tags else "")
+            + ("" if table.reviewed or not apply_tags else " (unreviewed)")
+        )
         sql.execute(f"CREATE TABLE IF NOT EXISTS {fqn} ({table.columns_sql})")
         count_rows = sql.execute(f"SELECT COUNT(*) FROM {fqn}")
         count = int((count_rows[0][0] if count_rows else 0) or 0)
         if count == 0:
             sql.execute(f"INSERT INTO {fqn} VALUES {table.insert_sql}")
+        if not apply_tags:
+            continue
         review_value = "reviewed" if table.reviewed else "pending"
         sql.execute(
             f"ALTER TABLE {fqn} SET TAGS ("
@@ -1059,23 +1089,36 @@ def seed(profile: str, warehouse_id: str) -> None:
             )
 
     views = build_views()
-    create_views(sql, views)
+    create_views(sql, views, apply_tags=apply_tags)
 
-    reviewed = sum(1 for t in tables if t.reviewed)
-    masked = sum(1 for t in tables if any("mask_rule" in tags for tags in t.column_tags.values()))
-    filtered = sum(1 for t in tables if any(tags.get("row_filter") for tags in t.column_tags.values()))
     print()
     print("Done.")
-    print(f"  tables: {len(tables)} ({reviewed} reviewed, {len(tables) - reviewed} unreviewed)")
+    print(f"  tables: {len(tables)}")
     print(f"  views: {len(views)} (cross_domain)")
-    print(f"  with column masks: {masked}")
-    print(f"  with row filters: {filtered}")
-    print(f"  access paths: {len(ACCESS_PATHS)}")
-    print()
-    print("Next:")
-    print("  1. Ensure Identity data_access / sensitivity vocabularies include the new paths")
-    print("  2. Assign sensitivity paths like people.employees.PII.Name (and cross-domain ones)")
-    print("  3. Run dry-run / apply and measure elapsed time")
+    if apply_tags:
+        reviewed = sum(1 for t in tables if t.reviewed)
+        masked = sum(
+            1 for t in tables if any("mask_rule" in tags for tags in t.column_tags.values())
+        )
+        filtered = sum(
+            1 for t in tables if any(tags.get("row_filter") for tags in t.column_tags.values())
+        )
+        print(f"  reviewed tables: {reviewed} (unreviewed: {len(tables) - reviewed})")
+        print(f"  with column masks: {masked}")
+        print(f"  with row filters: {filtered}")
+        print(f"  access paths: {len(ACCESS_PATHS)}")
+        print()
+        print("Next:")
+        print("  1. Ensure Identity data_access / sensitivity vocabularies include the new paths")
+        print("  2. Assign sensitivity paths like people.employees.PII.Name (and cross-domain ones)")
+        print("  3. Run dry-run / apply and measure elapsed time")
+    else:
+        print("  tags: none (use your environment's access / review / sensitivity tag keys)")
+        print()
+        print("Next:")
+        print("  1. Tag tables with your access and review tags (and enroll the catalog)")
+        print("  2. Tag columns for masks / row filters if needed")
+        print("  3. Create Identity definitions and sync packs in the app")
 
 
 def main() -> int:
@@ -1086,9 +1129,14 @@ def main() -> int:
         default="dd0a656c3ddc883e",
         help="SQL warehouse id (default: Serverless Starter Warehouse on this workspace)",
     )
+    parser.add_argument(
+        "--no-tags",
+        action="store_true",
+        help="Create catalog/schemas/tables/views only; skip tag policies and all SET TAGS",
+    )
     args = parser.parse_args()
     try:
-        seed(args.profile, args.warehouse_id)
+        seed(args.profile, args.warehouse_id, apply_tags=not args.no_tags)
     except Exception as exc:  # noqa: BLE001
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

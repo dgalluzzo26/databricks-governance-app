@@ -66,3 +66,36 @@ def test_clear_view_column_tags_noop_when_clean() -> None:
     sql = FakeSql(leftover=[])
     seed.clear_view_column_tags(sql, view)
     assert not any("UNSET TAGS" in s for s in sql.statements)
+
+
+def test_create_views_no_tags_skips_set_tags() -> None:
+    seed = _load_seed()
+    sql = FakeSql(leftover=[("first_name", "sensitivity")])
+    seed.create_views(sql, seed.build_views(), apply_tags=False)
+
+    assert any("CREATE OR REPLACE VIEW" in s for s in sql.statements)
+    assert not any("SET TAGS" in s for s in sql.statements)
+    assert not any("UNSET TAGS" in s for s in sql.statements)
+
+
+def test_seed_no_tags_creates_objects_without_tagging(monkeypatch) -> None:  # noqa: ANN001
+    seed = _load_seed()
+    sql = FakeSql(leftover=[])
+    policies: list[str] = []
+
+    monkeypatch.setattr(seed, "DatabricksSql", lambda *_a, **_k: sql)
+    monkeypatch.setattr(
+        seed,
+        "ensure_tag_policy",
+        lambda *a, **k: policies.append(a[1] if len(a) > 1 else k.get("tag_key", "")),
+    )
+
+    seed.seed("profile", "warehouse", apply_tags=False)
+
+    assert any("CREATE CATALOG" in s for s in sql.statements)
+    assert any("CREATE SCHEMA" in s for s in sql.statements)
+    assert any("CREATE TABLE" in s for s in sql.statements)
+    assert any("CREATE OR REPLACE VIEW" in s for s in sql.statements)
+    assert not policies
+    assert not any("SET TAGS" in s for s in sql.statements)
+    assert not any("tag-policies" in s for s in sql.statements)

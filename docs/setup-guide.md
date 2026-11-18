@@ -137,9 +137,12 @@ Deploy does **not** create customer/demo tables. Use the scripts under `scripts/
 
 ### 4a. Seed the demo catalog
 
-Creates catalog **`data_governance_demo`**, FEMA-domain schemas, tagged tables and views,
-column tags for masks and row filters, and extends the governed tag policies the demo needs
-(`data_access_control`, `clr_review_status`, `sensitivity_category`, `sensitivity`):
+Creates catalog **`data_governance_demo`**, FEMA-domain schemas, tables with sample rows, and
+cross-domain views.
+
+**Default (also tags):** applies the demo tag set and extends governed tag policies
+(`data_access_control`, `clr_review_status`, `sensitivity_category`, `sensitivity`), plus column
+tags for masks and row filters:
 
 ```bash
 .venv/bin/python scripts/seed_data_governance_demo.py \
@@ -147,11 +150,22 @@ column tags for masks and row filters, and extends the governed tag policies the
   --warehouse-id <sql-warehouse-id>
 ```
 
+**Other environments / custom tag keys:** create objects only, then tag yourself:
+
+```bash
+.venv/bin/python scripts/seed_data_governance_demo.py \
+  --profile "$PROFILE" \
+  --warehouse-id <sql-warehouse-id> \
+  --no-tags
+```
+
+`--no-tags` skips tag-policy create/update and every `SET TAGS` on catalog, schema, table,
+column, and view. Use it when this workspace’s access/review tags are not the demo defaults.
+
 Safe to re-run: catalogs/schemas/tables use `IF NOT EXISTS`; empty tables get rows once.
 
-The **access tag key** stays `data_access_control` (table tag). Only the **catalog name** is
-`data_governance_demo`. Do not rename the tag key without also changing app settings and ABAC
-policies.
+With the default (tagged) mode, the **access tag key** is hard-coded as `data_access_control`.
+Only the **catalog name** is `data_governance_demo`.
 
 ### 4b. Enroll catalogs in the governance perimeter
 
@@ -281,7 +295,7 @@ Then open **Data access → Analytics** (usage / access / sync tabs).
 | --- | --- | --- |
 | `scripts/deploy.sh` | Every environment / release | Build UI, deploy bundle, setup job, start app |
 | `scripts/dev.sh` | Local development | API `:8000`, Vite UI `:5173`, in-memory or remote storage |
-| `scripts/seed_data_governance_demo.py` | After deploy, for a demo | Catalog `data_governance_demo` + tagged tables/views + tag policies |
+| `scripts/seed_data_governance_demo.py` | After deploy, for a demo | Catalog `data_governance_demo` + tables/views; add `--no-tags` to skip tagging |
 | `scripts/enroll_governance_catalogs.py` | After catalogs exist | Enrollment tag policy + tag catalogs in its `CATALOGS` list |
 | `scripts/catalog_policies.py` | Optional fallback | Apply mask/row-filter policies at **catalog** scope if metastore ABAC is unavailable |
 | `scripts/perf_grants.py` | Load / scale testing | 2.5k–5k tables in `….perf_test`, assignments, timed sync runs |
