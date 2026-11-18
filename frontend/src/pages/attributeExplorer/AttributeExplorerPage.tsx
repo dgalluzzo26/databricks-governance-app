@@ -22,7 +22,7 @@ import type {
   AttributePrincipalSummary,
   UnlockedTable,
 } from "@/api/types";
-import { Alert, Badge, Card, ErrorAlert, PageHeader, Spinner, TablePager } from "@/components/ui";
+import { Alert, Badge, Card, ErrorAlert, PageHeader, SearchableSelect, Spinner, TablePager } from "@/components/ui";
 import { DataTableHead } from "@/components/ui/DataTableHead";
 import { useTableView, type TableColumn } from "@/hooks/useTableView";
 import styles from "../identity/IdentityPage.module.css";
@@ -148,19 +148,13 @@ export function AttributeExplorerPage() {
             <label className={styles.field}>
               <span className={styles.label}>Value / path</span>
               {values.length > 0 ? (
-                <select
-                  className={styles.select}
-                  value={attributeValue}
-                  onChange={(event) => setAttributeValue(event.target.value)}
+                <SearchableSelect
                   aria-label="Value"
-                >
-                  <option value="">Select value</option>
-                  {values.map((value) => (
-                    <option key={value} value={value}>
-                      {value}
-                    </option>
-                  ))}
-                </select>
+                  value={attributeValue}
+                  onChange={setAttributeValue}
+                  options={values}
+                  placeholder="Select value"
+                />
               ) : (
                 <input
                   className={styles.input}

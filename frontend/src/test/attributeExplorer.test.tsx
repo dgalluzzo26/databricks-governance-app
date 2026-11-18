@@ -10,8 +10,9 @@ describe("Attribute explorer", () => {
     expect(await screen.findByRole("heading", { name: "Attribute explorer" })).toBeInTheDocument();
     expect(await screen.findByRole("option", { name: /sensitivity/i })).toBeInTheDocument();
     await user.selectOptions(screen.getByLabelText("Attribute"), "sensitivity");
-    expect(await screen.findByRole("option", { name: "finance" })).toBeInTheDocument();
-    await user.selectOptions(screen.getByLabelText("Value"), "finance");
+    const value = screen.getByRole("combobox", { name: "Value" });
+    await user.click(value);
+    await user.click(await screen.findByRole("option", { name: "finance" }));
     await user.click(screen.getByRole("button", { name: "Analyze" }));
     expect(await screen.findByRole("table", { name: "Holders" })).toBeInTheDocument();
     expect(screen.getByText("ana.lopez@example.com")).toBeInTheDocument();
@@ -27,8 +28,9 @@ describe("Attribute explorer", () => {
     renderApp("/attribute-explorer", services);
     expect(await screen.findByRole("option", { name: /sensitivity/i })).toBeInTheDocument();
     await user.selectOptions(screen.getByLabelText("Attribute"), "sensitivity");
-    expect(await screen.findByRole("option", { name: "finance" })).toBeInTheDocument();
-    await user.selectOptions(screen.getByLabelText("Value"), "finance");
+    const value = screen.getByRole("combobox", { name: "Value" });
+    await user.click(value);
+    await user.click(await screen.findByRole("option", { name: "finance" }));
     await user.click(screen.getByRole("button", { name: "Analyze" }));
     expect(await screen.findByRole("table", { name: "Holders" })).toBeInTheDocument();
     await user.click(

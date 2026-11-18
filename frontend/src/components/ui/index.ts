@@ -8,6 +8,8 @@ export { Card } from "./Card";
 export { DescriptionList } from "./DescriptionList";
 export { IconButton } from "./IconButton";
 export { PageHeader } from "./PageHeader";
+export { SearchableSelect } from "./SearchableSelect";
+export type { SearchableSelectOption } from "./SearchableSelect";
 export { Spinner } from "./Spinner";
 export { TABLE_PAGE_SIZES, TablePager } from "./TablePager";
 export type { TablePageSize, TablePagerProps } from "./TablePager";

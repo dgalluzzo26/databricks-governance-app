@@ -51,7 +51,7 @@ import type {
 import { AccessStatusBadge } from "@/components/AccessStatusBadge";
 import { accessStatusLabel } from "@/components/AccessStatusBadge";
 import { PrincipalPicker } from "@/components/PrincipalPicker";
-import { Alert, Badge, Card, ErrorAlert, PageHeader, Spinner, TablePager } from "@/components/ui";
+import { Alert, Badge, Card, ErrorAlert, PageHeader, SearchableSelect, Spinner, TablePager } from "@/components/ui";
 import { DataTableHead } from "@/components/ui/DataTableHead";
 import { useTableView, type TableColumn } from "@/hooks/useTableView";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
@@ -729,19 +729,14 @@ function RequestAccessPanel() {
         </label>
         <label className={styles.fieldGrow}>
           <span className={styles.label}>{isRowFilter ? "Dimension value" : "Sensitivity path"}</span>
-          <select
-            className={styles.select}
+          <SearchableSelect
+            aria-label={isRowFilter ? "Dimension value" : "Sensitivity path"}
             value={attributeValue}
-            onChange={(event) => setAttributeValue(event.target.value)}
+            onChange={setAttributeValue}
+            options={values}
+            placeholder="Select value"
             disabled={!values.length}
-          >
-            <option value="">Select value</option>
-            {values.map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
-            ))}
-          </select>
+          />
         </label>
         <label className={styles.field}>
           <span className={styles.label}>Requested expiry</span>
@@ -981,37 +976,25 @@ function CategoryApproversPanel() {
           {scope === "sensitivity" ? (
             <label className={styles.field}>
               <span className={styles.label}>Category</span>
-              <select
-                className={styles.select}
+              <SearchableSelect
+                aria-label="Category"
                 value={categoryPath}
-                onChange={(event) => setCategoryPath(event.target.value)}
-              >
-                <option value="">Select category</option>
-                {(categoryTag?.values ?? []).map((value) => (
-                  <option key={value} value={value}>
-                    {value}
-                  </option>
-                ))}
-              </select>
+                onChange={setCategoryPath}
+                options={categoryTag?.values ?? []}
+                placeholder="Select category"
+              />
             </label>
           ) : scope === "data_access" ? (
             <label className={styles.field}>
               <span className={styles.label}>Data-access path</span>
-              <select
-                className={styles.select}
+              <SearchableSelect
+                aria-label="Data-access path"
                 value={dataAccessPath}
-                onChange={(event) => setDataAccessPath(event.target.value)}
+                onChange={setDataAccessPath}
+                options={dataAccessPaths}
+                placeholder={dataAccessDef ? "Select path" : "Create a data-access definition first"}
                 disabled={!dataAccessDef}
-              >
-                <option value="">
-                  {dataAccessDef ? "Select path" : "Create a data-access definition first"}
-                </option>
-                {dataAccessPaths.map((value) => (
-                  <option key={value} value={value}>
-                    {value}
-                  </option>
-                ))}
-              </select>
+              />
             </label>
           ) : (
             <label className={styles.field}>
@@ -1366,23 +1349,17 @@ function AssignmentsPanel() {
                 <label className={styles.field}>
                   <span className={styles.label}>Value</span>
                   {valueOptions.length ? (
-                    <select
-                      className={styles.select}
+                    <SearchableSelect
+                      aria-label="Value"
                       value={row.value}
-                      onChange={(event) => {
-                        const value = event.target.value;
+                      onChange={(value) => {
                         setAttrRows((current) =>
                           current.map((item) => (item.id === row.id ? { ...item, value } : item)),
                         );
                       }}
-                    >
-                      <option value="">Select value</option>
-                      {valueOptions.map((value) => (
-                        <option key={value} value={value}>
-                          {value}
-                        </option>
-                      ))}
-                    </select>
+                      options={valueOptions}
+                      placeholder="Select value"
+                    />
                   ) : (
                     <input
                       className={styles.input}
@@ -1394,6 +1371,7 @@ function AssignmentsPanel() {
                         );
                       }}
                       placeholder="finance or finance.budget"
+                      aria-label="Value"
                     />
                   )}
                 </label>

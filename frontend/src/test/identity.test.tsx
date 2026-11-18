@@ -50,10 +50,9 @@ describe("Identity attributes", () => {
     expect(within(card as HTMLElement).getByText("ana.lopez@example.com")).toBeInTheDocument();
 
     await user.selectOptions(within(card as HTMLElement).getByLabelText("Attribute"), "sensitivity");
-    await user.selectOptions(
-      within(card as HTMLElement).getByLabelText("Value"),
-      "finance.budget.PII.Name",
-    );
+    const valueBox = within(card as HTMLElement).getByRole("combobox", { name: "Value" });
+    await user.click(valueBox);
+    await user.click(await screen.findByRole("option", { name: "finance.budget.PII.Name" }));
     await user.type(within(card as HTMLElement).getByLabelText("Justification"), "Close support");
     expect(screen.getByText("1 principal × 1 value = 1 assignment")).toBeInTheDocument();
     await user.click(within(card as HTMLElement).getByRole("button", { name: "Assign" }));
@@ -110,8 +109,9 @@ describe("Identity attributes", () => {
     renderApp("/identity?tab=request");
 
     expect(await screen.findByRole("heading", { name: "Request access" })).toBeInTheDocument();
-    await screen.findByRole("option", { name: "finance.budget.PII.Name" });
-    await user.selectOptions(screen.getByLabelText("Sensitivity path"), "finance.budget.PII.Name");
+    const path = await screen.findByRole("combobox", { name: "Sensitivity path" });
+    await user.click(path);
+    await user.click(await screen.findByRole("option", { name: "finance.budget.PII.Name" }));
     await user.type(screen.getByLabelText("Justification"), "Quarterly close");
     await user.type(screen.getByLabelText("Requested expiry"), "2026-12-31T12:00");
     expect(screen.getByRole("button", { name: "Submit request" })).toBeEnabled();
@@ -134,6 +134,6 @@ describe("Identity attributes", () => {
     expect(within(table).getByText("finance-owners")).toBeInTheDocument();
 
     await user.selectOptions(screen.getByLabelText("Scope"), "data_access");
-    expect(screen.getByLabelText("Data-access path")).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Data-access path" })).toBeDisabled();
   });
 });
