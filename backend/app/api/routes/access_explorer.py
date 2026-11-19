@@ -105,9 +105,7 @@ def list_tables(
 
 
 @router.post("/analyze", response_model=TableAccessInsight)
-def analyze_table(
-    body: AnalyzeTableRequest, user: User, container: Container
-) -> TableAccessInsight:
+def analyze_table(body: AnalyzeTableRequest, user: User, container: Container) -> TableAccessInsight:
     """Analyze column masks, row filters, and attribute gaps for a table.
 
     Any signed-in user. Insights are personalized using the caller's attributes.

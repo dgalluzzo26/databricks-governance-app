@@ -90,9 +90,7 @@ def delete_category_approver(approver_id: str, admin: Admin, container: Containe
 
 
 @router.post("/access-requests", response_model=AccessRequest)
-def create_access_request(
-    body: CreateAccessRequestBody, user: User, container: Container
-) -> AccessRequest:
+def create_access_request(body: CreateAccessRequestBody, user: User, container: Container) -> AccessRequest:
     """Submit a new sensitivity access request for the caller.
 
     Any signed-in user.
@@ -121,9 +119,7 @@ def my_access_requests(user: User, container: Container) -> AccessRequestList:
 
 
 @router.post("/access-requests/{request_id}/cancel", response_model=AccessRequest)
-def cancel_access_request(
-    request_id: str, user: User, container: Container
-) -> AccessRequest:
+def cancel_access_request(request_id: str, user: User, container: Container) -> AccessRequest:
     """Cancel one of the caller's pending access requests.
 
     Any signed-in user (must be the requester).
@@ -203,9 +199,7 @@ def deny_access_request(
     return container.access_requests.deny_request(request_id, body, user)
 
 
-@router.post(
-    "/renewals/{assignment_id}/approve", response_model=IdentityAttributeAssignment
-)
+@router.post("/renewals/{assignment_id}/approve", response_model=IdentityAttributeAssignment)
 def approve_renewal(
     assignment_id: str, body: DecideAccessRequestBody, user: User, container: Container
 ) -> IdentityAttributeAssignment:

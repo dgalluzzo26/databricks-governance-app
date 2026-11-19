@@ -1,6 +1,6 @@
 """Unity Catalog governed tag policies as identity attribute vocabularies.
 
-Governed tag policies define the allowed values for tags such as ``sensitivity_category``,
+Governed tag policies define the allowed values for tags such as ``access_path``,
 ``sensitivity``, ``mask_rule``, and ``row_filter``. This service lists and reads them through
 the admin workspace client (cached), and appends new values when the app registers mask rules
 or row-filter dimensions so tag assignments and ABAC policies stay consistent.
@@ -64,6 +64,14 @@ class GovernedTagService:
         limit = max(1, min(limit, 200))
         truncated = len(tags) > limit
         return GovernedTagList(tags=tags[:limit], total=len(tags), truncated=truncated)
+
+    def list_all(self) -> list[GovernedTagSummary]:
+        """Every governed tag, sorted by key (cached).
+
+        Raises:
+            UpstreamError: If the tag policies cannot be listed.
+        """
+        return list(self._all_tags())
 
     def get_tag(self, tag_key: str) -> GovernedTagSummary:
         """Return one governed tag, preferring the cached list and falling back to a direct read.

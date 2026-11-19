@@ -23,9 +23,7 @@ class _FakePack:
 def test_except_principals_include_system_and_configured(container) -> None:  # noqa: ANN001
     mask = _FakePack()
     row = _FakePack()
-    service = PolicyExceptionService(
-        container.storage, _FakeWorkspace(), mask_rules=mask, row_filters=row
-    )
+    service = PolicyExceptionService(container.storage, _FakeWorkspace(), mask_rules=mask, row_filters=row)
     actor = _admin()
     service.upsert(
         UpsertPolicyExceptionRequest(

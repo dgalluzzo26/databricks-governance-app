@@ -769,7 +769,7 @@ export interface TableSearchResult {
 
 /** Governance tag values found on a column; each is `null` when the tag is absent. */
 export interface ColumnTagMap {
-  /** `sensitivity_category` tag (first segment of the required sensitivity path). */
+  /** `access_path` tag (first segment of the required sensitivity path). */
   sensitivityCategory: string | null;
   /** `sensitivity` tag (second segment of the required sensitivity path). */
   sensitivity: string | null;
@@ -788,7 +788,7 @@ export interface ColumnAccessInsight {
   dataType: string | null;
   tags: ColumnTagMap;
   accessState: ColumnAccessState;
-  /** `<sensitivity_category>.<sensitivity>` the user must hold to unmask; `null` when the column lacks those tags. */
+  /** `<access_path>.<sensitivity>` the user must hold to unmask; `null` when the column lacks those tags. */
   requiredSensitivityPath: string | null;
   /** Whether the user holds the required sensitivity path (or the column is untagged). */
   userHasAccess: boolean;
@@ -940,6 +940,10 @@ export interface AppSettings {
    * lists, enrolled catalogs) bypass the in-process cache. Intended for demos.
    */
   disableMetadataCache: boolean;
+  /** When true, subscriptions created by approvers wait for an app admin. */
+  subscriptionsRequireAdminApproval: boolean;
+  /** Longest allowed subscription window, in days. */
+  subscriptionMaxDays: number;
 }
 
 /** Settings plus constants the UI needs (`GET /data-access/settings`). */
@@ -1265,6 +1269,7 @@ export interface RecoveryOccupancy {
   approvers: number;
   maskRules: number;
   policyExceptions: number;
+  subscriptions: number;
   dataAccessConfigured: boolean;
   summary: string;
 }
@@ -1300,6 +1305,8 @@ export interface RecoveryApplyCounts {
   approvers: number;
   maskRules: number;
   policyExceptions: number;
+  subscriptions: number;
+  appSettings: number;
   dataAccess: number;
 }
 
@@ -1964,4 +1971,182 @@ export interface AccessNoAccessList {
   days: number;
   total: number;
   items: AccessNoAccessItem[];
+}
+
+/** Decision state of a subscription. */
+export type SubscriptionStatus = "PENDING_APPROVAL" | "APPROVED" | "DENIED" | "REVOKED";
+
+/** Status combined with the time window. */
+export type SubscriptionPhase =
+  | "PENDING_APPROVAL"
+  | "SCHEDULED"
+  | "ACTIVE"
+  | "EXPIRING"
+  | "EXPIRED"
+  | "DENIED"
+  | "REVOKED";
+
+/** Object types a subscription can grant on. */
+export type SecurableKind =
+  | "CATALOG"
+  | "SCHEMA"
+  | "TABLE"
+  | "VOLUME"
+  | "FUNCTION"
+  | "MODEL"
+  | "EXTERNAL_LOCATION"
+  | "WORKSPACE_FOLDER"
+  | "DASHBOARD"
+  | "GENIE_SPACE"
+  | "APP"
+  | "SQL_WAREHOUSE";
+
+/** Named privilege bundle; CUSTOM uses the explicit list. */
+export type PrivilegePreset = "READ" | "BUILD" | "VOLUME_READ_WRITE" | "ADMIN" | "CUSTOM";
+
+/** One governed-tag test in a tag-match resource. */
+export interface TagCondition {
+  tagKey: string;
+  values: string[];
+  /** PREFIX matches the value or anything under it; EXACT matches the value only. */
+  match: "PREFIX" | "EXACT";
+}
+
+/** What a subscription reaches and with which privileges. */
+export interface SubscriptionResource {
+  selector: "OBJECT" | "TAG_MATCH";
+  securableKind?: SecurableKind | null;
+  fullName?: string | null;
+  /** Display name for objects picked by ID (dashboards, Genie spaces, warehouses). */
+  label?: string | null;
+  conditions: TagCondition[];
+  levels: SecurableKind[];
+  preset: PrivilegePreset;
+  privileges: string[];
+}
+
+/** A principal covered by a subscription. */
+export interface SubscriptionSubject {
+  principalName: string;
+  principalType: PrincipalKind;
+}
+
+/** An Identity attribute value the subscription group holds while active. */
+export interface ConferredAttribute {
+  attributeKey: string;
+  attributeValue: string;
+}
+
+/** One grant the engine holds for a subscription group. */
+export interface SubscriptionGrant {
+  securableKind: SecurableKind;
+  fullName: string;
+  privilege: string;
+}
+
+/** Outcome of the last engine run for one subscription. */
+export interface SubscriptionSyncState {
+  syncedAt: string;
+  ok: boolean;
+  active: boolean;
+  matchedObjects: number;
+  grants: SubscriptionGrant[];
+  members: number;
+  grantsAdded: number;
+  grantsRevoked: number;
+  membersAdded: number;
+  membersRemoved: number;
+  errors: string[];
+}
+
+/** A time-boxed access bundle owned by one account group. */
+export interface Subscription {
+  subscriptionId: string;
+  name: string;
+  displayName: string;
+  description: string | null;
+  groupName: string;
+  status: SubscriptionStatus;
+  phase: SubscriptionPhase;
+  startsAt: string;
+  expiresAt: string;
+  reviewExempt: boolean;
+  subjects: SubscriptionSubject[];
+  resources: SubscriptionResource[];
+  attributes: ConferredAttribute[];
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  decidedBy: string | null;
+  decidedAt: string | null;
+  decisionNote: string | null;
+  revokedBy: string | null;
+  revokedAt: string | null;
+  lastSync: SubscriptionSyncState | null;
+}
+
+/** Body to create or edit a subscription. */
+export interface SubscriptionDraft {
+  name: string;
+  displayName: string;
+  description?: string | null;
+  startsAt?: string | null;
+  expiresAt: string;
+  reviewExempt: boolean;
+  subjects: SubscriptionSubject[];
+  resources: SubscriptionResource[];
+  attributes: ConferredAttribute[];
+}
+
+/** Subscriptions visible to the caller. */
+export interface SubscriptionList {
+  subscriptions: Subscription[];
+  total: number;
+}
+
+/** One object a draft resolves to. */
+export interface MatchedObject {
+  securableKind: SecurableKind;
+  fullName: string;
+  label?: string | null;
+  privileges: string[];
+  accessPath: string | null;
+  reviewed: boolean;
+}
+
+/** What a draft would reach right now. */
+export interface SubscriptionPreview {
+  groupName: string;
+  objects: MatchedObject[];
+  totalObjects: number;
+  skippedUnreviewed: number;
+  grantCount: number;
+  truncated: boolean;
+  warnings: string[];
+}
+
+/** Choices the wizard needs for the signed-in user. */
+export interface SubscriptionOptions {
+  canCreate: boolean;
+  isAdmin: boolean;
+  requiresApproval: boolean;
+  maxDays: number;
+  groupPrefix: string;
+  accessTagKey: string;
+  /** Access paths the caller may use; empty means any (admins). */
+  allowedPaths: string[];
+  tagKeys: string[];
+  /** Allowed values per governed tag key (lower-case keys). */
+  tagValues: Record<string, string[]>;
+  /** Valid privileges per object type. */
+  privileges: Record<string, string[]>;
+  /** Privileges each preset grants, per object type (ADMIN only for app admins). */
+  presets: Record<string, Record<string, string[]>>;
+}
+
+/** One object listed by the object picker. */
+export interface BrowseItem {
+  name: string;
+  comment: string;
+  label?: string;
 }

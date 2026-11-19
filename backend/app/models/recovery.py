@@ -130,6 +130,7 @@ class RecoveryOccupancy(ApiModel):
         approvers: Number of category / dimension approvers.
         mask_rules: Number of mask rules.
         policy_exceptions: Number of non-system policy exceptions.
+        subscriptions: Number of subscriptions.
         data_access_configured: True when a data-access settings blob is stored.
         summary: Short human-readable summary for the UI warning.
     """
@@ -140,6 +141,7 @@ class RecoveryOccupancy(ApiModel):
     approvers: int = 0
     mask_rules: int = 0
     policy_exceptions: int = 0
+    subscriptions: int = 0
     data_access_configured: bool = False
     summary: str = ""
 
@@ -200,6 +202,8 @@ class RecoveryApplyCounts(ApiModel):
     approvers: int = 0
     mask_rules: int = 0
     policy_exceptions: int = 0
+    subscriptions: int = 0
+    app_settings: int = 0
     data_access: int = 0
 
 

@@ -29,6 +29,9 @@ import { MaskRulesPage } from "@/pages/maskRules/MaskRulesPage";
 import { RowFiltersPage } from "@/pages/rowFilters/RowFiltersPage";
 import { RecoveryPage } from "@/pages/recovery/RecoveryPage";
 import { AppSettingsPage } from "@/pages/appSettings/AppSettingsPage";
+import { SubscriptionDetailPage } from "@/pages/subscriptions/SubscriptionDetailPage";
+import { SubscriptionWizardPage } from "@/pages/subscriptions/SubscriptionWizardPage";
+import { SubscriptionsPage } from "@/pages/subscriptions/SubscriptionsPage";
 
 /** Declarative route config mounted under {@link AppShell}. */
 export const routes: RouteObject[] = [
@@ -59,6 +62,12 @@ export const routes: RouteObject[] = [
               </RequireApprover>
             ),
           },
+          ...[
+            { path: "subscriptions", page: <SubscriptionsPage /> },
+            { path: "subscriptions/new", page: <SubscriptionWizardPage /> },
+            { path: "subscriptions/:subscriptionId", page: <SubscriptionDetailPage /> },
+            { path: "subscriptions/:subscriptionId/edit", page: <SubscriptionWizardPage /> },
+          ].map(({ path, page }) => ({ path, element: <RequireApprover>{page}</RequireApprover> })),
           { path: "help", element: <HelpPage /> },
           {
             path: "policies",

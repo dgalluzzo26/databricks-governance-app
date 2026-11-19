@@ -126,21 +126,13 @@ class AppConfig(BaseSettings):
     row_filter_tag_key: str = Field("row_filter", alias="ROW_FILTER_TAG_KEY")
     row_filter_policy_name: str = Field("rf_by_dimension", alias="ROW_FILTER_POLICY_NAME")
     mask_rule_tag_key: str = Field("mask_rule", alias="MASK_RULE_TAG_KEY")
-    mask_variant_policy_name: str = Field(
-        "mask_sensitivity_variant", alias="MASK_VARIANT_POLICY_NAME"
-    )
-    mask_geometry_policy_name: str = Field(
-        "mask_sensitivity_geometry", alias="MASK_GEOMETRY_POLICY_NAME"
-    )
-    mask_geography_policy_name: str = Field(
-        "mask_sensitivity_geography", alias="MASK_GEOGRAPHY_POLICY_NAME"
-    )
+    mask_variant_policy_name: str = Field("mask_sensitivity_variant", alias="MASK_VARIANT_POLICY_NAME")
+    mask_geometry_policy_name: str = Field("mask_sensitivity_geometry", alias="MASK_GEOMETRY_POLICY_NAME")
+    mask_geography_policy_name: str = Field("mask_sensitivity_geography", alias="MASK_GEOGRAPHY_POLICY_NAME")
     mask_handler_llm_endpoint: str = Field(
         "databricks-meta-llama-3-3-70b-instruct", alias="MASK_HANDLER_LLM_ENDPOINT"
     )
-    mask_handler_validation_secret: str | None = Field(
-        None, alias="MASK_HANDLER_VALIDATION_SECRET"
-    )
+    mask_handler_validation_secret: str | None = Field(None, alias="MASK_HANDLER_VALIDATION_SECRET")
 
     pg_host: str | None = Field(None, alias="PGHOST")
     pg_port: int = Field(5432, alias="PGPORT")

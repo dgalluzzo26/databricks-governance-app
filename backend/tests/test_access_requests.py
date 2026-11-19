@@ -32,7 +32,7 @@ def _seed_sensitivity(service: IdentityAttributeService, actor) -> None:  # noqa
         UpsertAttributeDefinitionRequest(
             key="sensitivity",
             description="masking",
-            governed_tag_keys=["sensitivity_category", "sensitivity"],
+            governed_tag_keys=["access_path", "sensitivity"],
         ),
         actor,
     )
@@ -246,9 +246,7 @@ def test_api_access_request_flow(client: TestClient, container) -> None:  # noqa
     _seed_sensitivity(identity, _admin())
     # Ensure container uses the faked governed tags for HTTP path too.
     container.identity_attributes._governed_tags = FakeGovernedTags()  # type: ignore[method-assign]
-    container.access_requests = AccessRequestService(
-        container.storage, container.identity_attributes
-    )
+    container.access_requests = AccessRequestService(container.storage, container.identity_attributes)
 
     admin = headers_for("admin@example.com")
     created_approver = client.put(
@@ -367,7 +365,7 @@ def test_data_access_approver_hierarchical_routing(container) -> None:  # noqa: 
         UpsertAttributeDefinitionRequest(
             key="data_access",
             description="DAC",
-            governed_tag_keys=["data_access_control"],
+            governed_tag_keys=["access_path"],
         ),
         actor,
     )

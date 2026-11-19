@@ -37,9 +37,7 @@ def enrollment_tag_from_storage(settings_get_all: Mapping[str, Any]) -> tuple[st
 
 def enrollment_when_clause(tag_key: str, tag_value: str) -> str:
     """Return an ABAC ``WHEN`` clause requiring the enrollment catalog tag."""
-    return (
-        f"WHEN has_tag_value({string_literal(tag_key)}, {string_literal(tag_value)})"
-    )
+    return f"WHEN has_tag_value({string_literal(tag_key)}, {string_literal(tag_value)})"
 
 
 def enrolled_catalogs_sql(tag_key: str, tag_value: str) -> str:
@@ -73,8 +71,4 @@ def admin_catalog_access_sql(catalog: str, principal: str) -> str:
         InvalidRequestError: If ``catalog`` or ``principal`` is not a safe identifier.
     """
     privileges = ", ".join(ADMIN_CATALOG_PRIVILEGES)
-    return (
-        f"GRANT {privileges} ON CATALOG {quote_identifier(catalog)} "
-        f"TO {quote_identifier(principal)}"
-    )
-
+    return f"GRANT {privileges} ON CATALOG {quote_identifier(catalog)} TO {quote_identifier(principal)}"

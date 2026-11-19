@@ -333,9 +333,7 @@ class _UnavailableAccessRequests(_Unavailable, AccessRequestRepository):
         """
         self._fail()
 
-    def has_pending_for(
-        self, *, requester_name: str, attribute_key: str, attribute_value: str
-    ) -> bool:
+    def has_pending_for(self, *, requester_name: str, attribute_key: str, attribute_value: str) -> bool:
         """Raise because no access-request store is configured.
 
         Args:
@@ -348,9 +346,7 @@ class _UnavailableAccessRequests(_Unavailable, AccessRequestRepository):
         """
         self._fail()
 
-    def dismiss_renewal(
-        self, assignment_id: str, expires_at: datetime, actor: str, at: datetime
-    ) -> None:
+    def dismiss_renewal(self, assignment_id: str, expires_at: datetime, actor: str, at: datetime) -> None:
         """Raise because no access-request store is configured.
 
         Args:

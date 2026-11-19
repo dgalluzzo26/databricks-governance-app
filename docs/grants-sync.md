@@ -19,8 +19,8 @@ UI: `/data-access` (admin only) · API: `/api/data-access/*`
 
 ## Mental model
 
-1. A table is **eligible** when it carries **both** the access tag (`data_access_control`) and
-   the review tag (`clr_review_status = reviewed`) **on the table itself**. Tags on the parent
+1. A table is **eligible** when it carries **both** the access tag (`access_path`) and
+   the review tag (`data_governance_status = ready`) **on the table itself**. Tags on the parent
    schema or catalog are **not** inherited onto the table.
 2. Each distinct access value becomes a managed account group: `finance.budget` →
    `dac_finance_budget`.
@@ -36,7 +36,7 @@ UI: `/data-access` (admin only) · API: `/api/data-access/*`
 
 ```mermaid
 flowchart LR
-  tags["Table tags: data_access_control + clr_review_status"] --> planner["Planner (pure)"]
+  tags["Table tags: access_path + data_governance_status"] --> planner["Planner (pure)"]
   assign["Identity data-access assignments"] --> planner
   grants["Current dac_* grants (information_schema)"] --> planner
   groups["Current dac_* account groups + members (Account SCIM)"] --> planner
@@ -54,8 +54,8 @@ Stored as JSON in the app settings store under `data_access`.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `access_tag_key` | `data_access_control` | Tag whose value names the group |
-| `review_tag_key` / `review_tag_value` | `clr_review_status` / `reviewed` | Must also be on the same object |
+| `access_tag_key` | `access_path` | Tag whose value names the group |
+| `review_tag_key` / `review_tag_value` | `data_governance_status` / `ready` | Must also be on the same object |
 | `group_prefix` | `dac_` | Managed-group prefix; only `dac_*` principals are ever revoked |
 | `hierarchy_separator` | `.` | Splits values into parents for nesting |
 | `enrollment_catalog_tag_key` / `enrollment_catalog_tag_value` | `data_access_controlled` / `true` | Catalog tag that enrolls a catalog; sync and Access Explorer only see tagged catalogs |
@@ -154,7 +154,7 @@ flowchart TD
   sys -->|no| obj["Group tags by object (catalog / schema / table)"]
   obj --> hasAccess{"Object has access tag?"}
   hasAccess -->|no| skip3["Not managed"]
-  hasAccess -->|yes| reviewed{"Review tag == reviewed on the same object?"}
+  hasAccess -->|yes| reviewed{"Review tag == ready on the same object?"}
   reviewed -->|no| unreviewed["Count as skipped_unreviewed"]
   reviewed -->|yes| eligible["Eligible object with access value"]
   eligible --> level{"Object level"}

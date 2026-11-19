@@ -38,9 +38,7 @@ class FakeSql:
 
     def __init__(self) -> None:
         self.executed: list[str] = []
-        self.policy_rows = [
-            {"match_columns": "has_tag('sensitivity_category') AND has_tag('sensitivity')"}
-        ]
+        self.policy_rows = [{"match_columns": "has_tag('access_path') AND has_tag('sensitivity')"}]
         self.apply_body = "apply_mask_rule full email"
         self.validate_rows: list[dict[str, Any]] = [
             {"input": "alice@gmail.com", "output": "***@gmail.com"},
@@ -133,7 +131,8 @@ def test_validate_and_save_custom_regenerates_udf(container) -> None:  # noqa: A
     sql.executed.clear()
     expr = "concat('ID-', sha2(lower(trim(v)), 256))"
     result = service.validate_handler(
-        MaskHandlerValidateRequest(expression=expr), actor  # type: ignore[arg-type]
+        MaskHandlerValidateRequest(expression=expr),
+        actor,  # type: ignore[arg-type]
     )
     assert result.ok is True
     assert result.validation_token
@@ -150,7 +149,6 @@ def test_validate_and_save_custom_regenerates_udf(container) -> None:  # noqa: A
     assert saved.kind == MaskRuleKind.CUSTOM
     assert saved.handler == "id_hash"
     assert any("id_hash" in s and "CREATE OR REPLACE FUNCTION" in s for s in sql.executed)
-
 
 
 def test_draft_handler_mocked_llm(container) -> None:  # noqa: ANN001
@@ -255,8 +253,6 @@ def test_ensure_pack_owns_geo_policies_with_enrollment_scope(container) -> None:
     assert not any("g GEOMETRY," in s or "g GEOGRAPHY," in s for s in functions)
 
 
-
-
 def test_ensure_pack_creates_auth_functions_before_policies(container) -> None:  # noqa: ANN001
     service, sql = _service(container)
     service.ensure_pack(_admin())  # type: ignore[arg-type]
@@ -264,9 +260,7 @@ def test_ensure_pack_creates_auth_functions_before_policies(container) -> None: 
     def first(predicate: str) -> int:
         return next(i for i, s in enumerate(sql.executed) if predicate in s)
 
-    has_sensitivity = next(
-        i for i, s in enumerate(sql.executed) if "`has_sensitivity`(required_path" in s
-    )
+    has_sensitivity = next(i for i, s in enumerate(sql.executed) if "`has_sensitivity`(required_path" in s)
     mask_variant = next(i for i, s in enumerate(sql.executed) if "`mask_variant`(" in s)
     variant_policy = first("POLICY mask_sensitivity_variant ")
     geo_policy = first("POLICY mask_sensitivity_geometry ")

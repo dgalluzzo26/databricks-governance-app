@@ -35,6 +35,8 @@ import type {
   TableQueryParams,
   TagChangeKind,
   TaskStatus,
+  SecurableKind,
+  SubscriptionDraft,
 } from "./types";
 
 /**
@@ -79,6 +81,11 @@ export const queryKeys = {
   helpDoc: (slug: string) => ["help", "docs", slug] as const,
   helpApiReference: ["help", "api-reference"] as const,
   policyExceptions: ["policy-exceptions"] as const,
+  subscriptions: ["subscriptions"] as const,
+  subscription: (id: string) => ["subscriptions", id] as const,
+  subscriptionOptions: ["subscriptions", "options"] as const,
+  subscriptionBrowse: (kind: string, parent: string | null) =>
+    ["subscriptions", "browse", kind, parent ?? ""] as const,
   dataAccessSettings: ["data-access", "settings"] as const,
   appSettings: ["app-settings"] as const,
   recoverySettings: ["recovery", "settings"] as const,
@@ -1817,5 +1824,108 @@ export function useRecoverFromGit() {
     onSuccess: () => {
       void client.invalidateQueries();
     },
+  });
+}
+
+/** Wizard choices for the signed-in user (`GET /subscriptions/options`). */
+export function useSubscriptionOptions() {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.subscriptionOptions,
+    queryFn: ({ signal }) => api.subscriptions.options(signal),
+  });
+}
+
+/** Subscriptions visible to the caller (`GET /subscriptions`). */
+export function useSubscriptions() {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.subscriptions,
+    queryFn: ({ signal }) => api.subscriptions.list(signal),
+  });
+}
+
+/** One subscription (`GET /subscriptions/{id}`). */
+export function useSubscription(subscriptionId: string | undefined) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.subscription(subscriptionId ?? ""),
+    queryFn: ({ signal }) => api.subscriptions.get(subscriptionId ?? "", signal),
+    enabled: Boolean(subscriptionId),
+  });
+}
+
+/**
+ * Object names for the picker (`GET /subscriptions/browse`).
+ *
+ * @param kind - Object type to list.
+ * @param parent - `catalog` or `catalog.schema` (folder path for workspace folders); null for catalogs.
+ * @param enabled - Skip until the parent is chosen.
+ */
+export function useSubscriptionBrowse(kind: SecurableKind, parent: string | null, enabled = true) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.subscriptionBrowse(kind, parent),
+    queryFn: ({ signal }) => api.subscriptions.browse(kind, parent, signal),
+    enabled,
+    staleTime: 60_000,
+  });
+}
+
+/** Preview what a draft reaches (`POST /subscriptions/preview`). */
+export function usePreviewSubscription() {
+  const api = useApi();
+  return useMutation({
+    meta: { busyMessage: "Matching objects…" },
+    mutationFn: (body: SubscriptionDraft) => api.subscriptions.preview(body),
+  });
+}
+
+function useInvalidateSubscriptions() {
+  const client = useQueryClient();
+  return () => {
+    void client.invalidateQueries({ queryKey: queryKeys.subscriptions });
+  };
+}
+
+/** Create or edit a subscription (`POST /subscriptions` or `PUT /subscriptions/{id}`). */
+export function useSaveSubscription() {
+  const api = useApi();
+  const invalidate = useInvalidateSubscriptions();
+  return useMutation({
+    meta: { busyMessage: "Saving subscription…" },
+    mutationFn: ({ id, body }: { id?: string; body: SubscriptionDraft }) =>
+      id ? api.subscriptions.update(id, body) : api.subscriptions.create(body),
+    onSuccess: invalidate,
+  });
+}
+
+/** Approve, deny, extend, revoke, or sync one subscription. */
+export function useSubscriptionAction() {
+  const api = useApi();
+  const invalidate = useInvalidateSubscriptions();
+  return useMutation({
+    meta: { busyMessage: "Updating subscription…" },
+    mutationFn: async (
+      action:
+        | { kind: "approve" | "deny"; id: string; note?: string }
+        | { kind: "extend"; id: string; expiresAt: string }
+        | { kind: "revoke" | "sync" | "delete"; id: string },
+    ) => {
+      switch (action.kind) {
+        case "approve":
+        case "deny":
+          return api.subscriptions.decide(action.id, action.kind === "approve", action.note);
+        case "extend":
+          return api.subscriptions.extend(action.id, action.expiresAt);
+        case "revoke":
+          return api.subscriptions.revoke(action.id);
+        case "sync":
+          return api.subscriptions.sync(action.id);
+        case "delete":
+          return api.subscriptions.delete(action.id);
+      }
+    },
+    onSuccess: invalidate,
   });
 }

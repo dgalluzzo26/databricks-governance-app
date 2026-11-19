@@ -86,7 +86,7 @@ def _require_identifier(value: str, label: str) -> str:
 
 
 _TAG_KEYS = (
-    "sensitivity_category",
+    "access_path",
     "sensitivity",
     "mask_rule",
     "data_type",
@@ -109,7 +109,7 @@ def has_sensitivity_access(held_paths: set[str], required_path: str) -> bool:
 
     Args:
         held_paths: Sensitivity paths the user holds (e.g. ``pii`` or ``pii.high``).
-        required_path: The column's ``sensitivity_category.sensitivity`` path.
+        required_path: The column's ``access_path.sensitivity`` path.
 
     Returns:
         True if any held path grants the required path; False for an empty required path.
@@ -373,7 +373,7 @@ class AccessExplorerService:
                 continue
             raw_tags = tags_by_col.get(col_name, {})
             tags = ColumnTagMap(
-                sensitivity_category=raw_tags.get("sensitivity_category"),
+                sensitivity_category=raw_tags.get("access_path"),
                 sensitivity=raw_tags.get("sensitivity"),
                 mask_rule=raw_tags.get("mask_rule"),
                 data_type=raw_tags.get("data_type"),
@@ -544,7 +544,7 @@ class AccessExplorerService:
             return None
         if (tags.get(review_key) or "").lower() != review_value:
             return None
-        # Identity key may differ from the UC tag (e.g. key=data_access, tag=data_access_control).
+        # Identity key may differ from the UC tag (e.g. key=data_access, tag=access_path).
         definition = self._definition_for_access_tag(access_key)
         attribute_key = (definition.key if definition is not None else access_key).lower()
         held_values = {v.lower() for v in held.get(attribute_key, set())}
@@ -709,7 +709,7 @@ class AccessExplorerService:
         for source in sources:
             raw = source_tags.get(source.table_full_name, {}).get(source.column_name, {})
             tags = ColumnTagMap(
-                sensitivity_category=raw.get("sensitivity_category"),
+                sensitivity_category=raw.get("access_path"),
                 sensitivity=raw.get("sensitivity"),
                 mask_rule=raw.get("mask_rule"),
                 data_type=raw.get("data_type"),
@@ -765,9 +765,9 @@ class AccessExplorerService:
         """Return the lower-cased data-access tag key, review tag key, and review value."""
         settings = self._data_access.get_settings().settings if self._data_access is not None else None
         return (
-            (settings.access_tag_key if settings else "data_access_control").lower(),
-            (settings.review_tag_key if settings else "clr_review_status").lower(),
-            (settings.review_tag_value if settings else "reviewed").strip().lower(),
+            (settings.access_tag_key if settings else "access_path").lower(),
+            (settings.review_tag_key if settings else "data_governance_status").lower(),
+            (settings.review_tag_value if settings else "ready").strip().lower(),
         )
 
     def _cached(self, key: tuple, loader: Callable[[], T]) -> T:
@@ -863,7 +863,7 @@ class AccessExplorerService:
     ) -> ColumnAccessInsight:
         """Classify one column against the metastore mask policies.
 
-        A column is governed only when it carries ``sensitivity_category``, ``sensitivity``,
+        A column is governed only when it carries ``access_path``, ``sensitivity``,
         and ``data_type`` tags. Geometry/geography columns fall under the geo policies (denied
         values become NULL); all other governed columns use the variant mask policy, whose
         denied presentation comes from the ``mask_rule`` tag (unknown or missing rules fall
@@ -895,7 +895,7 @@ class AccessExplorerService:
                 required_sensitivity_path=required,
                 user_has_access=True if not has_auth_tags else user_has,
                 notes=(
-                    "Missing sensitivity_category, sensitivity, or data_type tag — "
+                    "Missing access_path, sensitivity, or data_type tag — "
                     "not matched by the metastore mask policy."
                     if not (has_auth_tags and data_type)
                     else None

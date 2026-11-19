@@ -68,10 +68,10 @@ from backend.tests.test_identity_attributes import FakeGovernedTags
 NOW = datetime(2026, 11, 13, 12, 0, tzinfo=UTC)
 
 
-def _reviewed(catalog: str, schema: str, table: str, value: str, *, review: str = "reviewed") -> list[TagRow]:
+def _reviewed(catalog: str, schema: str, table: str, value: str, *, review: str = "ready") -> list[TagRow]:
     return [
-        TagRow("table", catalog, schema, table, "data_access_control", value),
-        TagRow("table", catalog, schema, table, "clr_review_status", review),
+        TagRow("table", catalog, schema, table, "access_path", value),
+        TagRow("table", catalog, schema, table, "data_governance_status", review),
     ]
 
 
@@ -282,9 +282,9 @@ def test_item_keys_are_case_insensitive() -> None:
 def test_snapshot_keeps_table_rows_with_the_access_tag_only() -> None:
     tags = [
         *_reviewed("cat", "fin", "budget", "finance.budget"),
-        *_reviewed("cat", "fin", "draft", "finance", review="pending"),
-        TagRow("table", "cat", "fin", "plain", "clr_review_status", "reviewed"),
-        TagRow("schema", "cat", "fin", None, "data_access_control", "finance"),
+        *_reviewed("cat", "fin", "draft", "finance", review="draft"),
+        TagRow("table", "cat", "fin", "plain", "data_governance_status", "ready"),
+        TagRow("schema", "cat", "fin", None, "access_path", "finance"),
         *_reviewed("system", "info", "t", "finance"),
     ]
     rows = snapshot_from_tags(DataAccessSettings(), tags)
@@ -933,14 +933,12 @@ def test_identity_service_notifies_listeners_and_isolates_failures(container) ->
     service.add_listener(_broken)
     service.add_listener(lambda event, assignment, actor: seen.append((event, assignment.attribute_value)))
     actor = SimpleNamespace(user_name="admin@example.com", is_admin=True, groups=["admins"])
-    service.upsert_definition(
-        UpsertAttributeDefinitionRequest(governed_tag_keys=["data_access_control"]), actor
-    )
+    service.upsert_definition(UpsertAttributeDefinitionRequest(governed_tag_keys=["access_path"]), actor)
     assigned = service.assign(
         AssignAttributeRequest(
             principal_name="analyst@example.com",
             principal_type=PrincipalKind.USER,
-            attribute_key="data_access_control",
+            attribute_key="access_path",
             attribute_value="finance",
         ),
         actor,
@@ -1000,14 +998,12 @@ def test_pending_routes_return_counts_items_and_status(client: TestClient, conta
     service = container.identity_attributes
     service._governed_tags = FakeGovernedTags()  # noqa: SLF001
     actor = SimpleNamespace(user_name="admin@example.com", is_admin=True, groups=["admins"])
-    service.upsert_definition(
-        UpsertAttributeDefinitionRequest(governed_tag_keys=["data_access_control"]), actor
-    )
+    service.upsert_definition(UpsertAttributeDefinitionRequest(governed_tag_keys=["access_path"]), actor)
     assigned = service.assign(
         AssignAttributeRequest(
             principal_name="analyst@example.com",
             principal_type=PrincipalKind.USER,
-            attribute_key="data_access_control",
+            attribute_key="access_path",
             attribute_value="finance",
         ),
         actor,

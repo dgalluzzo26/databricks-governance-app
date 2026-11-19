@@ -87,7 +87,7 @@ const myAttributes: AttributeAssignmentList =
   role === "user"
     ? {
         assignments: [
-          assignment("as-1", "data_access_control", "marketing", "2027-03-31T23:59:00Z"),
+          assignment("as-1", "access_path", "marketing", "2027-03-31T23:59:00Z"),
           assignment("as-2", "sensitivity", "sales.PII.Phone", "2027-01-31T23:59:00Z"),
           assignment("as-3", "state", "WA", null),
         ],
@@ -95,7 +95,7 @@ const myAttributes: AttributeAssignmentList =
       }
     : {
         assignments: [
-          assignment("as-1", "data_access_control", "finance", null),
+          assignment("as-1", "access_path", "finance", null),
           assignment("as-2", "sensitivity", "finance.budget", null),
         ],
         total: 2,
@@ -169,7 +169,7 @@ const financeOwners = [{ principalName: "finance-owners", principalType: "GROUP"
 const myRequests = {
   requests: [
     request("r1", user.userName, "sensitivity", "sales.PII.Name", "PENDING", "Q4 churn analysis on sales.crm.customers", salesOwners, "sales"),
-    request("r2", user.userName, "data_access_control", "marketing", "APPROVED", "Campaign attribution dashboard", salesOwners, "marketing"),
+    request("r2", user.userName, "access_path", "marketing", "APPROVED", "Campaign attribution dashboard", salesOwners, "marketing"),
     request("r3", user.userName, "state", "*", "DENIED", "Need all customers", [], null),
   ],
   total: 3,
@@ -188,7 +188,7 @@ const approvals: ApprovalInbox = {
     },
     {
       kind: "REQUEST",
-      request: request("a2", "sam.rivera@example.com", "data_access_control", "finance.budget", "PENDING", "Monthly variance review", financeOwners, "finance"),
+      request: request("a2", "sam.rivera@example.com", "access_path", "finance.budget", "PENDING", "Monthly variance review", financeOwners, "finance"),
       assignment: null,
       resolvedCategory: "finance",
       attributeValue: "finance.budget",
@@ -277,7 +277,7 @@ const insight: TableAccessInsight = {
   tableName: "customers",
   tableType: "MANAGED",
   summary:
-    "7 columns; 1 unmasked governed column; 2 still masked; row filter on state shows WA rows only. Table access needs data_access_control=sales.crm.",
+    "7 columns; 1 unmasked governed column; 2 still masked; row filter on state shows WA rows only. Table access needs access_path=sales.crm.",
   columns: [
     column("customer_id", "bigint", "not_governed", null, null, null),
     column("full_name", "string", "masked", "sales.PII.Name", "full", "Shown as ***** until you hold sales.PII.Name."),
@@ -299,7 +299,7 @@ const insight: TableAccessInsight = {
     notes: "You see rows where state = WA.",
   },
   suggestions: [
-    suggestion("data_access", "data_access_control", "sales.crm", [], salesOwners),
+    suggestion("data_access", "access_path", "sales.crm", [], salesOwners),
     suggestion("sensitivity", "sensitivity", "sales.PII.Name", ["full_name"], salesOwners),
     suggestion("sensitivity", "sensitivity", "sales.PII.Email", ["email"], salesOwners),
     suggestion("sensitivity", "sensitivity", "sales.PII.Phone", ["phone"], salesOwners, {

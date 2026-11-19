@@ -26,6 +26,7 @@ import { Alert, Badge, Card, ErrorAlert, PageHeader, SearchableSelect, Spinner, 
 import { DataTableHead } from "@/components/ui/DataTableHead";
 import { useTableView, type TableColumn } from "@/hooks/useTableView";
 import styles from "../identity/IdentityPage.module.css";
+import { isDataAccessDefinition } from "../identity/definitionRules";
 
 /**
  * Classify a definition for the attribute picker.
@@ -40,13 +41,7 @@ function definitionKind(
   accessTagKey: string,
 ): "sensitivity" | "data_access" | "row_filter" | "other" {
   if (item.key.toLowerCase() === "sensitivity") return "sensitivity";
-  const access = accessTagKey.toLowerCase();
-  if (
-    item.key.toLowerCase() === access ||
-    item.governedTagKeys.some((tag) => tag.toLowerCase() === access)
-  ) {
-    return "data_access";
-  }
+  if (isDataAccessDefinition(item, accessTagKey)) return "data_access";
   if (item.valueSource !== "governed_tags") return "row_filter";
   return "other";
 }
@@ -62,7 +57,7 @@ export function AttributeExplorerPage() {
   const [searchParams, setSearchParams] = useSearchParams();
 
   const accessTagKey =
-    dataAccessSettings.data?.settings.accessTagKey?.trim() || "data_access_control";
+    dataAccessSettings.data?.settings.accessTagKey?.trim() || "access_path";
 
   const [attributeKey, setAttributeKey] = useState(searchParams.get("key") ?? "");
   const [attributeValue, setAttributeValue] = useState(searchParams.get("value") ?? "");

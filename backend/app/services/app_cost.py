@@ -281,9 +281,7 @@ class AppCostService:
             by_day[record.usage_date][record.origin] += record.usd
 
         app_by_day = {d: totals["APPS"] for d, totals in by_day.items() if totals.get("APPS")}
-        lakebase_by_day = {
-            d: totals["LAKEBASE"] for d, totals in by_day.items() if totals.get("LAKEBASE")
-        }
+        lakebase_by_day = {d: totals["LAKEBASE"] for d, totals in by_day.items() if totals.get("LAKEBASE")}
         week_start = today - timedelta(days=6)
         sync_total = sync_usd(records, runs)
         daily: list[AppCostDay] = []

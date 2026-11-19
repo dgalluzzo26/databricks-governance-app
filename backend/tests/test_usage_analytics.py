@@ -19,31 +19,37 @@ class _FakeUsageSql:
         self.queries.append((statement, parameters))
         # Last run
         if "FROM `data_governance_app`.`usage`.`rollup_runs`" in statement:
-            return [{
-                "run_id": "r-123",
-                "status": "success",
-                "finished_at": "2026-11-17T06:04:00Z",
-                "data_as_of": "2026-11-16T22:00:00Z",
-                "window_start": "2026-08-19",
-                "window_end": "2026-11-17",
-                "read_events": "467",
-                "catalogs": "data_governance_demo,sandbox",
-            }]
+            return [
+                {
+                    "run_id": "r-123",
+                    "status": "success",
+                    "finished_at": "2026-11-17T06:04:00Z",
+                    "data_as_of": "2026-11-16T22:00:00Z",
+                    "window_start": "2026-08-19",
+                    "window_end": "2026-11-17",
+                    "read_events": "467",
+                    "catalogs": "data_governance_demo,sandbox",
+                }
+            ]
         # KPIs - tables
         if "coalesce(sum(reads), 0) AS total_reads" in statement:
-            return [{
-                "total_reads": "150",
-                "active_users": "12",
-                "tables_accessed": "8",
-            }]
+            return [
+                {
+                    "total_reads": "150",
+                    "active_users": "12",
+                    "tables_accessed": "8",
+                }
+            ]
         # KPIs - sensitive columns
         if "coalesce(sum(reads), 0) AS sensitive_reads" in statement:
-            return [{
-                "sensitive_reads": "80",
-                "clear_reads": "10",
-                "masked_reads": "65",
-                "exempt_reads": "5",
-            }]
+            return [
+                {
+                    "sensitive_reads": "80",
+                    "clear_reads": "10",
+                    "masked_reads": "65",
+                    "exempt_reads": "5",
+                }
+            ]
         # Daily trends
         if "WITH table_days AS" in statement:
             return [
@@ -64,59 +70,71 @@ class _FakeUsageSql:
             ]
         # Sensitive breakdown
         if "SELECT sensitivity_path," in statement and "GROUP BY sensitivity_path" in statement:
-            return [{
-                "sensitivity_path": "finance.budget.PII.Name",
-                "reads": "80",
-                "clear_reads": "10",
-                "masked_reads": "65",
-                "exempt_reads": "5",
-                "distinct_users": "4",
-                "distinct_tables": "2",
-            }]
+            return [
+                {
+                    "sensitivity_path": "finance.budget.PII.Name",
+                    "reads": "80",
+                    "clear_reads": "10",
+                    "masked_reads": "65",
+                    "exempt_reads": "5",
+                    "distinct_users": "4",
+                    "distinct_tables": "2",
+                }
+            ]
         # Table detail: user rows
         if "user_table_usage_daily`" in statement and ":table" in statement:
-            return [{
-                "user_name": "david.galluzzo@databricks.com",
-                "reads": "45",
-                "last_read_at": "2026-11-16T22:00:00Z",
-            }]
+            return [
+                {
+                    "user_name": "david.galluzzo@databricks.com",
+                    "reads": "45",
+                    "last_read_at": "2026-11-16T22:00:00Z",
+                }
+            ]
         # Table detail: column rows
         if "column_usage_daily`" in statement and ":table" in statement:
-            return [{
-                "column_name": "first_name",
-                "sensitivity_path": "public.PII.Name",
-                "access_mode": "masked",
-                "reads": "45",
-                "distinct_users": "1",
-                "last_read_at": "2026-11-16T22:00:00Z",
-            }]
+            return [
+                {
+                    "column_name": "first_name",
+                    "sensitivity_path": "public.PII.Name",
+                    "access_mode": "masked",
+                    "reads": "45",
+                    "distinct_users": "1",
+                    "last_read_at": "2026-11-16T22:00:00Z",
+                }
+            ]
         # Table detail: recent reads
         if "read_events`" in statement and ":table" in statement:
-            return [{
-                "event_time": "2026-11-16T22:00:00Z",
-                "user_name": "david.galluzzo@databricks.com",
-                "entity_type": "DBSQL_QUERY",
-                "direct_access": True,
-            }]
+            return [
+                {
+                    "event_time": "2026-11-16T22:00:00Z",
+                    "user_name": "david.galluzzo@databricks.com",
+                    "entity_type": "DBSQL_QUERY",
+                    "direct_access": True,
+                }
+            ]
         # Top tables
         if "table_full_name" in statement and "GROUP BY u.table_full_name" in statement:
-            return [{
-                "table_full_name": "data_governance_demo.people.employees",
-                "catalog_name": "data_governance_demo",
-                "schema_name": "people",
-                "table_name": "employees",
-                "reads": "120",
-                "distinct_users": "8",
-                "last_read_at": "2026-11-16T22:00:00Z",
-            }]
+            return [
+                {
+                    "table_full_name": "data_governance_demo.people.employees",
+                    "catalog_name": "data_governance_demo",
+                    "schema_name": "people",
+                    "table_name": "employees",
+                    "reads": "120",
+                    "distinct_users": "8",
+                    "last_read_at": "2026-11-16T22:00:00Z",
+                }
+            ]
         # Top users
         if "user_name" in statement and "GROUP BY user_name" in statement:
-            return [{
-                "user_name": "david.galluzzo@databricks.com",
-                "reads": "120",
-                "distinct_tables": "5",
-                "last_read_at": "2026-11-16T22:00:00Z",
-            }]
+            return [
+                {
+                    "user_name": "david.galluzzo@databricks.com",
+                    "reads": "120",
+                    "distinct_tables": "5",
+                    "last_read_at": "2026-11-16T22:00:00Z",
+                }
+            ]
         return []
 
     def execute(self, statement: str, parameters: dict[str, Any] | None = None) -> None:
@@ -207,6 +225,7 @@ def test_refresh_usage_job(client: TestClient, container: Any) -> None:
         def run_now(self, job_id: int, job_parameters: dict[str, Any]) -> Any:
             self.calls.append({"job_id": job_id, "params": job_parameters})
             from types import SimpleNamespace
+
             return SimpleNamespace(run_id="999888")
 
     container.usage_analytics._workspace = type(

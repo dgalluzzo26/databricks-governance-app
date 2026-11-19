@@ -142,7 +142,7 @@ export function DataAccessAccessSection() {
 
       <Alert tone="info" title="How to read these reports">
         Holders come from active <code>data_access</code> assignments (direct or via group), matched
-        to each table&apos;s <code>data_access_control</code> tag with the same hierarchical rule as
+        to each table&apos;s <code>access_path</code> tag with the same hierarchical rule as
         grants. Unused access is a holder with zero reads in the window. Reads without assigned
         access are readers who hold no matching grant (often owners, admins, or grants made outside
         the app)—reported, not judged. Column-level sensitivity holders are not included here.
@@ -157,7 +157,7 @@ export function DataAccessAccessSection() {
 
       {tablesQuery.data && (
         <div className={styles.kpiGrid}>
-          <Kpi label="Governed tables" value={tablesQuery.data.total} hint="With a data_access_control tag" />
+          <Kpi label="Governed tables" value={tablesQuery.data.total} hint="With an access_path tag" />
           <Kpi label="Holders (listed)" value={holders} hint="Across tables in this page" />
           <Kpi
             label="Unused holders"

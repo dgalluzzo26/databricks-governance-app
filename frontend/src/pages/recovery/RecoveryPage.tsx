@@ -328,8 +328,9 @@ function RecoverReport({ result }: { result: RecoveryApplyResult }) {
       <Alert tone="success" title="Recovered from Git">
         Applied {commit} from {result.source}: {counts.definitions} definitions, {counts.assignments}{" "}
         assignments, {counts.approvers} approvers, {counts.maskRules} mask rules,{" "}
-        {counts.policyExceptions} exceptions
-        {counts.dataAccess ? ", data-access settings" : ""}.
+        {counts.policyExceptions} exceptions, {counts.subscriptions} subscriptions
+        {counts.dataAccess ? ", data-access settings" : ""}
+        {counts.appSettings ? ", app settings" : ""}.
         {result.appHadState ? " Existing local rows were upserted/merged." : ""}
       </Alert>
       {result.warnings.length > 0 && (

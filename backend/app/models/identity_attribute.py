@@ -7,6 +7,7 @@ one or more governed tags; allowed values come from those tag policies.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from enum import StrEnum
 
@@ -14,6 +15,27 @@ from pydantic import Field, computed_field, field_validator, model_validator
 
 from backend.app.models.base import ApiModel
 from backend.app.models.principal import PrincipalKind
+
+SENSITIVITY_TAG_KEY = "sensitivity"
+
+
+def is_sensitivity_definition(key: str, governed_tag_keys: Iterable[str]) -> bool:
+    """Return True for the sensitivity definition: keyed ``sensitivity`` or bound to that tag."""
+    tags = {tag.strip().lower() for tag in governed_tag_keys}
+    return key.strip().lower() == SENSITIVITY_TAG_KEY or SENSITIVITY_TAG_KEY in tags
+
+
+def is_data_access_definition(key: str, governed_tag_keys: Iterable[str], access_tag_key: str) -> bool:
+    """Return True when a definition is the data-access definition for ``access_tag_key``.
+
+    The sensitivity definition composes ``access_path.sensitivity`` values, so it also binds
+    the access tag. It is never a data-access definition, even though it links that tag.
+    """
+    needle = access_tag_key.strip().lower()
+    tags = list(governed_tag_keys)
+    if not needle or is_sensitivity_definition(key, tags):
+        return False
+    return key.strip().lower() == needle or needle in {tag.strip().lower() for tag in tags}
 
 
 class AttributeSource(StrEnum):
@@ -24,11 +46,13 @@ class AttributeSource(StrEnum):
         ACCESS_REQUEST: Created when an access request was approved.
         IDENTITY_POLICY: Granted automatically by an identity policy; reserved, not currently
             produced by the backend.
+        SUBSCRIPTION: Conferred on a subscription group while the subscription is active.
     """
 
     MANUAL = "MANUAL"
     ACCESS_REQUEST = "ACCESS_REQUEST"
     IDENTITY_POLICY = "IDENTITY_POLICY"
+    SUBSCRIPTION = "SUBSCRIPTION"
 
 
 class ValueSource(StrEnum):

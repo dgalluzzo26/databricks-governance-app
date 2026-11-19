@@ -13,7 +13,7 @@ table and what to ask for.
 
 | Layer | What it controls | What you request |
 | --- | --- | --- |
-| **Data access** | Whether you can query the table at all | A `data_access_control` value such as `sales.crm` |
+| **Data access** | Whether you can query the table at all | An `access_path` value such as `sales.crm` |
 | **Sensitivity (masks)** | Whether sensitive columns show real values or masked ones | A sensitivity path such as `sales.PII.Name` |
 | **Row filter** | Which rows you see | A dimension value such as `state=WA`, or `state=*` for all rows |
 

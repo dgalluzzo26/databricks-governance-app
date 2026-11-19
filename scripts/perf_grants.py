@@ -2,7 +2,7 @@
 """Grants-sync performance test driver.
 
 Seeds one-column tables in ``data_access_control.perf_test`` tagged with existing
-``data_access_control`` values (all reviewed) and data-access Identity assignments for existing
+``access_path`` values (all reviewed) and data-access Identity assignments for existing
 account users and groups, written straight to Lakebase so the sync does all membership work.
 Runs the deployed sync Job and prints where each run spent its time.
 
@@ -61,7 +61,7 @@ JOB_NAME = "data-governance-app-data-access-sync"
 SECRET_SCOPE = "databricks-governance-app"
 CATALOG = "data_access_control"
 SCHEMA = "perf_test"
-ACCESS_TAG = "data_access_control"
+ACCESS_TAG = "access_path"
 REVIEW_TAG = "clr_review_status"
 ASSIGNMENT_PREFIX = "perf-"
 PERF_ACTOR = "perf-test"
@@ -301,7 +301,7 @@ def planned_assignments(
 def data_access_key(container: Any) -> str:
     definition = container.identity_attributes.find_data_access_definition(ACCESS_TAG)
     if definition is None:
-        raise RuntimeError("No Identity definition linked to the data_access_control tag")
+        raise RuntimeError("No Identity definition linked to the access_path tag")
     return definition.key
 
 

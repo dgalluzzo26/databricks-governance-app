@@ -98,7 +98,7 @@ def fast_waits(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _catalog() -> list[SimpleNamespace]:
     return [
-        _policy("sensitivity_category", ["PII", "Confidential"], "How sensitive the data is"),
+        _policy("access_path", ["PII", "Confidential"], "How sensitive the data is"),
         _policy("mask_rule", ["hash", "redact"]),
         _policy("row_filter", ["region_us", "region_eu"], "Row-level scoping"),
     ]
@@ -107,7 +107,7 @@ def _catalog() -> list[SimpleNamespace]:
 def test_list_tags_sorts_and_filters_by_key_description_or_value() -> None:
     service = _service(_FakeTagPolicies(_catalog()))
     everything = service.list_tags()
-    assert [tag.tag_key for tag in everything.tags] == ["mask_rule", "row_filter", "sensitivity_category"]
+    assert [tag.tag_key for tag in everything.tags] == ["access_path", "mask_rule", "row_filter"]
     assert everything.total == 3
     assert everything.truncated is False
 
@@ -116,7 +116,7 @@ def test_list_tags_sorts_and_filters_by_key_description_or_value() -> None:
     by_description = service.list_tags(q="scoping")
     assert [tag.tag_key for tag in by_description.tags] == ["row_filter"]
     by_value = service.list_tags(q="  confidential ")
-    assert [tag.tag_key for tag in by_value.tags] == ["sensitivity_category"]
+    assert [tag.tag_key for tag in by_value.tags] == ["access_path"]
     assert service.list_tags(q="nothing-matches").total == 0
 
 
@@ -159,7 +159,7 @@ def test_list_failure_surfaces_as_upstream_error() -> None:
 
 def test_values_for_keys_unions_values_in_first_seen_order() -> None:
     service = _service(_FakeTagPolicies(_catalog()))
-    assert service.values_for_keys(["sensitivity_category", "mask_rule"]) == [
+    assert service.values_for_keys(["access_path", "mask_rule"]) == [
         "PII",
         "Confidential",
         "hash",
@@ -167,7 +167,7 @@ def test_values_for_keys_unions_values_in_first_seen_order() -> None:
     ]
     assert service.values_for_keys([]) == []
     with pytest.raises(InvalidRequestError):
-        service.values_for_keys(["sensitivity_category", "missing"])
+        service.values_for_keys(["access_path", "missing"])
 
 
 def test_require_tags_preserves_order_and_fails_on_missing() -> None:
@@ -181,7 +181,7 @@ def test_require_tags_preserves_order_and_fails_on_missing() -> None:
 def test_ensure_values_is_a_no_op_when_values_already_exist() -> None:
     tag_policies = _FakeTagPolicies(_catalog())
     service = _service(tag_policies)
-    tag = service.ensure_values("sensitivity_category", ["pii", ""])
+    tag = service.ensure_values("access_path", ["pii", ""])
     assert tag.values == ["PII", "Confidential"]
     assert tag_policies.updates == []
 

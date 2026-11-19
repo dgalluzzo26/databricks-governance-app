@@ -61,14 +61,14 @@ RETURN EXISTS (
 
 
 def build_mask_variant_sql(function_fqn: str, has_sensitivity_fqn: str, apply_fqn: str) -> str:
-    """Return DDL for ``mask_variant(value, sensitivity_category, sensitivity, mask_rule)``.
+    """Return DDL for ``mask_variant(value, access_path, sensitivity, mask_rule)``.
 
     Returns the value when the caller holds ``category.sensitivity``; otherwise applies the
     registry mask rule via ``apply_mask_rule``. NULL values stay NULL.
     """
     return f"""CREATE OR REPLACE FUNCTION {function_fqn}(
   value VARIANT,
-  sensitivity_category STRING,
+  access_path STRING,
   sensitivity STRING,
   mask_rule STRING
 )
@@ -77,13 +77,13 @@ LANGUAGE SQL
 READS SQL DATA
 RETURN CASE
   WHEN value IS NULL THEN NULL::VARIANT
-  WHEN {has_sensitivity_fqn}(concat_ws('.', sensitivity_category, sensitivity)) THEN value
+  WHEN {has_sensitivity_fqn}(concat_ws('.', access_path, sensitivity)) THEN value
   ELSE {apply_fqn}(value, mask_rule)
 END"""
 
 
 def build_geo_mask_sql(kind: str, function_fqn: str, has_sensitivity_fqn: str) -> str:
-    """Return DDL for ``mask_<kind>_4326(g, sensitivity_category, sensitivity)``.
+    """Return DDL for ``mask_<kind>_4326(g, access_path, sensitivity)``.
 
     Returns the geometry/geography value when the caller holds the sensitivity path,
     otherwise ``NULL``.
@@ -96,13 +96,13 @@ def build_geo_mask_sql(kind: str, function_fqn: str, has_sensitivity_fqn: str) -
     typed = GEO_KINDS[kind]
     return f"""CREATE OR REPLACE FUNCTION {function_fqn}(
   g {typed},
-  sensitivity_category STRING,
+  access_path STRING,
   sensitivity STRING
 )
 RETURNS {typed}
 LANGUAGE SQL
 READS SQL DATA
 RETURN CASE
-  WHEN {has_sensitivity_fqn}(concat_ws('.', sensitivity_category, sensitivity)) THEN g
+  WHEN {has_sensitivity_fqn}(concat_ws('.', access_path, sensitivity)) THEN g
   ELSE NULL
 END"""

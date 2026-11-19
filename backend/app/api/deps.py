@@ -70,9 +70,7 @@ def get_current_user(ctx: Context, container: Container) -> CurrentUser:
     user = container.identity.current_user(ctx)
     if user.is_admin:
         return user.model_copy(update={"is_approver": True})
-    return user.model_copy(
-        update={"is_approver": container.access_requests.is_category_approver(user)}
-    )
+    return user.model_copy(update={"is_approver": container.access_requests.is_category_approver(user)})
 
 
 # Any signed-in user (with ``is_approver`` computed).

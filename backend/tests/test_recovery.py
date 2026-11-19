@@ -25,6 +25,15 @@ from backend.app.models.mask_rule import MaskRuleDefinition
 from backend.app.models.policy_exception import PolicyException
 from backend.app.models.principal import PrincipalKind
 from backend.app.models.recovery import RecoveryApplyRequest, RecoveryGitSettings
+from backend.app.models.subscription import (
+    ResourceSelector,
+    SecurableKind,
+    Subscription,
+    SubscriptionResource,
+    SubscriptionStatus,
+    SubscriptionSubject,
+    SubscriptionSyncState,
+)
 from backend.app.services.mask_rules import JOINABLE_SALT_KEY
 from backend.tests.conftest import headers_for
 from backend.tests.test_identity_attributes import _admin
@@ -108,6 +117,8 @@ def test_preview_files_are_stable_and_exclude_secrets(container: ServiceContaine
         "masking/rules.yaml",
         "masking/config.yaml",
         "exceptions/policy_exceptions.yaml",
+        "settings/app.yaml",
+        "subscriptions/subscriptions.yaml",
     ]
     all_text = "\n".join(files.values())
     assert "super-secret-salt" not in all_text
@@ -681,3 +692,59 @@ def test_scheduled_push_records_error_without_advancing_success(container: Servi
     _wire_push(container, _FakeSecrets({"git-token-dev": "tok"}), publisher_ok)
     assert container.recovery.run_scheduled_push_if_due(now=now + timedelta(minutes=5)) is not None
     assert container.recovery.get_settings().last_scheduled_error is None
+
+
+def _subscription(name: str, subscription_id: str, *, synced: bool) -> Subscription:
+    now = datetime(2026, 11, 1, tzinfo=UTC)
+    return Subscription(
+        subscription_id=subscription_id,
+        name=name,
+        display_name=name.replace("_", " ").title(),
+        group_name=f"dac_subscription_{name}",
+        status=SubscriptionStatus.APPROVED,
+        starts_at=now,
+        expires_at=now + timedelta(days=30),
+        subjects=[SubscriptionSubject(principal_name="ana@example.com", principal_type=PrincipalKind.USER)],
+        resources=[
+            SubscriptionResource(
+                selector=ResourceSelector.OBJECT,
+                securable_kind=SecurableKind.SCHEMA,
+                full_name="dga_people.employees",
+            )
+        ],
+        created_by="admin@example.com",
+        created_at=now,
+        updated_at=now,
+        last_sync=SubscriptionSyncState(synced_at=now, active=True, matched_objects=1) if synced else None,
+    )
+
+
+def test_subscriptions_and_app_settings_round_trip(container: ServiceContainer) -> None:
+    container.storage.subscriptions.save_subscription(_subscription("ia_build", "sub-src", synced=True))
+    container.storage.settings.put_many(
+        {"app_runtime": {"subscriptions_require_admin_approval": False, "subscription_max_days": 90}}, "t"
+    )
+    files = _files(container.recovery.build_preview(_admin()))  # type: ignore[arg-type]
+
+    exported = yaml.safe_load(files["subscriptions/subscriptions.yaml"])
+    assert exported["count"] == 1
+    assert exported["subscriptions"][0]["name"] == "ia_build"
+    assert "last_sync" not in exported["subscriptions"][0]
+    assert yaml.safe_load(files["settings/app.yaml"])["app_settings"]["subscription_max_days"] == 90
+
+    container.storage.subscriptions.delete_subscription("sub-src")
+    container.storage.subscriptions.save_subscription(_subscription("ia_build", "sub-local", synced=True))
+    container.storage.settings.put_many({"app_runtime": {}}, "t")
+    _configure_git(container)
+    pulled = {path: content for path, content in files.items()}
+    _wire_push(container, _FakeSecrets({"git-token-dev": "tok"}), _FakePublisher(pull_files=pulled))
+
+    result = container.recovery.recover(_admin(), RecoveryApplyRequest(confirm=True))  # type: ignore[arg-type]
+
+    assert result.counts.subscriptions == 1
+    assert result.counts.app_settings == 1
+    assert any("subscription" in w.lower() for w in result.warnings)
+    restored = container.storage.subscriptions.list_subscriptions()
+    assert [(s.subscription_id, s.name) for s in restored] == [("sub-local", "ia_build")]
+    assert restored[0].last_sync is not None
+    assert container.storage.settings.get_all()["app_runtime"]["subscription_max_days"] == 90

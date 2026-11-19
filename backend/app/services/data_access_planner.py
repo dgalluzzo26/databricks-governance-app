@@ -157,6 +157,35 @@ def is_managed_group(name: str, prefix: str) -> bool:
     return bool(needle and head and needle.startswith(head))
 
 
+SUBSCRIPTION_GROUP_SEGMENT = "subscription_"
+
+
+def subscription_group_prefix(prefix: str) -> str:
+    """Reserved prefix for subscription groups (``dac_subscription_``).
+
+    Subscription groups share the managed prefix so they stay hidden from principal
+    pickers, but the subscription engine owns their members and grants. Data Access sync
+    must never plan, revoke, or prune them.
+
+    Args:
+        prefix: Data Access ``group_prefix`` setting.
+    """
+    head = managed_group_prefix(prefix)
+    return f"{head}{SUBSCRIPTION_GROUP_SEGMENT}" if head else ""
+
+
+def is_subscription_group(name: str, prefix: str) -> bool:
+    """Return True when ``name`` is a subscription group (``dac_subscription_*``).
+
+    Args:
+        name: Group display name.
+        prefix: Data Access ``group_prefix`` setting.
+    """
+    needle = (name or "").strip().lower()
+    head = subscription_group_prefix(prefix)
+    return bool(needle and head and needle.startswith(head))
+
+
 def group_name(prefix: str, value: str) -> str | None:
     """Build a managed group name from an access-tag value.
 
@@ -264,7 +293,7 @@ def plan_data_access(
     group_to_value: dict[str, str] = {}
     for value in values:
         name = group_name(settings.group_prefix, value)
-        if name is None:
+        if name is None or is_subscription_group(name, settings.group_prefix):
             invalid_values.append(value)
             continue
         other = group_to_value.get(name.lower())
@@ -325,6 +354,8 @@ def plan_data_access(
     prefix_match = prefix if prefix.endswith("_") else f"{prefix}_"
     for grant in actual_grants:
         if not grant.principal.lower().startswith(prefix_match):
+            continue
+        if is_subscription_group(grant.principal, settings.group_prefix):
             continue
         key = (
             grant.securable_type.lower(),
@@ -496,8 +527,13 @@ def _membership_changes(
                 in nested_parents
             ):
                 continue
-            if member_type == "GROUP" and member.principal_name.lower().startswith(managed_prefix):
-                # Other managed-group nesting edges are left alone.
+            if (
+                member_type == "GROUP"
+                and member.principal_name.lower().startswith(managed_prefix)
+                and not is_subscription_group(member.principal_name, settings.group_prefix)
+            ):
+                # Other managed-group nesting edges are left alone. Subscription groups join
+                # dac_* groups through Identity assignments, so they are pruned like any member.
                 continue
             if (group.name.lower(), member.principal_name.lower()) in desired:
                 continue

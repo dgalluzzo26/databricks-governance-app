@@ -67,7 +67,7 @@ def test_my_access_snapshot_includes_groups_and_inherited(client: TestClient, co
     identity.upsert_definition(
         UpsertAttributeDefinitionRequest(
             key="sensitivity",
-            governed_tag_keys=["sensitivity_category", "sensitivity"],
+            governed_tag_keys=["access_path", "sensitivity"],
         ),
         actor,
     )
@@ -143,7 +143,7 @@ def test_my_access_resources_requires_held_attribute(client: TestClient, contain
     identity.upsert_definition(
         UpsertAttributeDefinitionRequest(
             key="sensitivity",
-            governed_tag_keys=["sensitivity_category", "sensitivity"],
+            governed_tag_keys=["access_path", "sensitivity"],
         ),
         actor,
     )

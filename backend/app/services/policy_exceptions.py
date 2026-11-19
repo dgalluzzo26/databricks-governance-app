@@ -61,9 +61,7 @@ class PolicyExceptionService:
         system = self._system_exceptions()
         # Hide configured duplicates of system SPs so the UI doesn't double-count.
         system_names = {item.principal_name.lower() for item in system}
-        configured = [
-            item for item in configured if item.principal_name.lower() not in system_names
-        ]
+        configured = [item for item in configured if item.principal_name.lower() not in system_names]
         items = [*system, *configured]
         return PolicyExceptionList(
             exceptions=items,
@@ -95,12 +93,8 @@ class PolicyExceptionService:
             PrincipalKind.SERVICE_PRINCIPAL,
         }:
             raise InvalidRequestError("Exceptions must be USER, GROUP, or SERVICE_PRINCIPAL")
-        if body.principal_name.lower() in {
-            p.lower() for p in self.system_principal_names()
-        }:
-            raise InvalidRequestError(
-                f"'{body.principal_name}' is already a built-in system exception"
-            )
+        if body.principal_name.lower() in {p.lower() for p in self.system_principal_names()}:
+            raise InvalidRequestError(f"'{body.principal_name}' is already a built-in system exception")
         saved = self._storage.policy_exceptions.upsert_exception(
             PolicyException(
                 exception_id=str(uuid.uuid4()),

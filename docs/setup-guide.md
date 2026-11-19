@@ -125,7 +125,10 @@ In order:
 5. **Admin SP permissions** — Lakebase / catalog grants for the Account Admin SP
 6. **Usage analytics** — `{app_catalog}.usage` schema and system-table grants when allowed
 
-On metastores without Default Storage or a root location, set `catalog_managed_location`.
+`./scripts/deploy.sh` creates the app catalog via SQL before the bundle deploy so app
+telemetry destinations resolve on first create (Default Storage metastores cannot use the
+catalogs REST API without a storage root). On metastores without Default Storage or a root
+location, set `catalog_managed_location`.
 
 ### Main bundle variables
 
@@ -150,12 +153,12 @@ Deploy does **not** create customer/demo tables. Use the scripts under `scripts/
 
 ### 4a. Seed the demo catalog
 
-Creates catalog **`data_governance_demo`**, FEMA-domain schemas, tables with sample rows, and
-cross-domain views.
+Creates one catalog per FEMA domain (`dga_<domain>`, 12 total), one schema per subdomain (112 total),
+and two dummy tables per schema (`records` with sensitive columns, `summary` with aggregates).
 
-**Default (also tags):** applies the demo tag set and extends governed tag policies
-(`data_access_control`, `clr_review_status`, `sensitivity_category`, `sensitivity`), plus column
-tags for masks and row filters:
+It also creates or extends the governed tag policies (`access_path`, `sensitivity`,
+`data_governance_status`, `data_access_controlled`) and tags every catalog, schema, table, and sensitive
+column:
 
 ```bash
 .venv/bin/python scripts/seed_data_governance_demo.py \
@@ -163,22 +166,19 @@ tags for masks and row filters:
   --warehouse-id <sql-warehouse-id>
 ```
 
-**Other environments / custom tag keys:** create objects only, then tag yourself:
+Limit to some domains while you pilot, or preview the plan without touching the workspace:
 
 ```bash
-.venv/bin/python scripts/seed_data_governance_demo.py \
-  --profile "$PROFILE" \
-  --warehouse-id <sql-warehouse-id> \
-  --no-tags
+.venv/bin/python scripts/seed_data_governance_demo.py --dry-run
+.venv/bin/python scripts/seed_data_governance_demo.py --profile "$PROFILE" --domain people --domain finance
 ```
 
-`--no-tags` skips tag-policy create/update and every `SET TAGS` on catalog, schema, table,
-column, and view. Use it when this workspace’s access/review tags are not the demo defaults.
+Safe to re-run: catalogs, schemas, and tables use `IF NOT EXISTS`; empty tables get rows once; tags
+are re-applied on every run. The full tree takes several minutes (`--workers` sets parallel schema
+builds).
 
-Safe to re-run: catalogs/schemas/tables use `IF NOT EXISTS`; empty tables get rows once.
-
-With the default (tagged) mode, the **access tag key** is hard-coded as `data_access_control`.
-Only the **catalog name** is `data_governance_demo`.
+The tag keys are the app defaults (`access_path`, `sensitivity`, `data_governance_status`,
+`data_access_controlled`) and are not configurable in the seed script.
 
 ### 4b. Enroll catalogs in the governance perimeter
 
@@ -190,11 +190,11 @@ Sync and Access Explorer only see catalogs tagged `data_access_controlled=true`.
   --warehouse-id <sql-warehouse-id>
 ```
 
-Edit the `CATALOGS` tuple in that script for the catalogs you want (include
-`data_governance_demo` after seeding). Or tag by hand:
+Edit the `CATALOGS` tuple in that script for the catalogs you want (the twelve `dga_<domain>`
+catalogs are listed by default). Or tag by hand:
 
 ```sql
-ALTER CATALOG `data_governance_demo` SET TAGS ('data_access_controlled' = 'true');
+ALTER CATALOG `dga_finance` SET TAGS ('data_access_controlled' = 'true');
 ```
 
 When the app first sees an enrolled catalog, it grants the Account Admin SP `MANAGE`,
@@ -204,10 +204,10 @@ When the app first sees an enrolled catalog, it grants the Account Admin SP `MAN
 
 | Tag key | Role |
 | --- | --- |
-| `data_access_control` | Table access path (`finance`, `finance.budget`, …) |
-| `clr_review_status` | Must be `reviewed` on the **table** for grants eligibility |
+| `access_path` | Access scope on tables, schemas, catalogs, and sensitive columns (`finance`, `finance.budget`, …). On a sensitive column it is the table's path. |
+| `data_governance_status` | Must be `ready` on the **table** for grants eligibility |
 | `data_access_controlled` | Catalog enrollment (`true`) |
-| `sensitivity_category` + `sensitivity` | Mask required path |
+| `access_path` + `sensitivity` | Mask required path (`finance.budget.PII.Name`) |
 | `mask_rule` / `data_type` | Which mask handler to apply (pack sync maintains values) |
 | `row_filter` | Dimension key on filtered columns (pack sync maintains values) |
 
@@ -224,9 +224,10 @@ Do these as an app admin after deploy + seed/enroll.
 
 Create exactly one of each:
 
-1. **Sensitivity** — key `sensitivity`, governed tags `sensitivity_category` + `sensitivity`
+1. **Sensitivity** — key `sensitivity`, governed tags `access_path` + `sensitivity` (values compose
+   as `access_path.sensitivity`)
 2. **Data access** — key `data_access` (recommended), governed tags must include
-   `data_access_control`
+   `access_path`
 
 Allowed values come from the governed tag policies (including paths the seed script added).
 
@@ -252,9 +253,9 @@ Add principals that should sit on the pack `EXCEPT` list (unmasked / unfiltered)
 
 On **Data Access**:
 
-1. Confirm **Access tag** is `data_access_control` (read-only in the form; owned with the
+1. Confirm **Access tag** is `access_path` (read-only in the form; owned with the
    Identity data-access definition).
-2. Confirm review tag/value (`clr_review_status` / `reviewed`), group prefix (`dac_`), and
+2. Confirm review tag/value (`data_governance_status` / `ready`), group prefix (`dac_`), and
    enrollment tag (`data_access_controlled` / `true`).
 3. Open readiness. For a first **dry-run** you need credentials, warehouse, tag read, and group
    list. For **apply** you also need the sensitivity and data-access definitions and grant
@@ -267,7 +268,7 @@ On **Data Access**:
 1. **Dry-run** from Data Access (or the sync Job in dry-run mode). Inspect the plan: groups to
    create, grants to add/revoke, membership changes.
 2. Assign data-access attribute values to a test user (Identity → Assignments) that match a
-   reviewed table path in `data_governance_demo`.
+   reviewed table path such as `finance.budget` in catalog `dga_finance`.
 3. **Apply** when readiness is green. Membership for new approvals is applied immediately;
    table `GRANT`/`REVOKE` follows the sync Job.
 
@@ -308,7 +309,7 @@ Then open **Data access → Analytics** (usage / access / sync tabs).
 | --- | --- | --- |
 | `scripts/deploy.sh` | Every environment / release | Build UI, deploy bundle, setup job, start app |
 | `scripts/dev.sh` | Local development | API `:8000`, Vite UI `:5173`, in-memory or remote storage |
-| `scripts/seed_data_governance_demo.py` | After deploy, for a demo | Catalog `data_governance_demo` + tables/views; add `--no-tags` to skip tagging |
+| `scripts/seed_data_governance_demo.py` | After deploy, for a demo | `dga_<domain>` catalogs (12), subdomain schemas (112), dummy tables, and tags; `--domain` / `--dry-run` to limit or preview |
 | `scripts/enroll_governance_catalogs.py` | After catalogs exist | Enrollment tag policy + tag catalogs in its `CATALOGS` list |
 | `scripts/catalog_policies.py` | Optional fallback | Apply mask/row-filter policies at **catalog** scope if metastore ABAC is unavailable |
 | `scripts/perf_grants.py` | Load / scale testing | 2.5k–5k tables in `….perf_test`, assignments, timed sync runs |
@@ -321,8 +322,8 @@ demo or test data.
 ### Catalog policy backup (optional)
 
 ```bash
-.venv/bin/python scripts/catalog_policies.py apply --catalog data_governance_demo
-.venv/bin/python scripts/catalog_policies.py status --catalog data_governance_demo
+.venv/bin/python scripts/catalog_policies.py apply --catalog dga_finance
+.venv/bin/python scripts/catalog_policies.py status --catalog dga_finance
 ```
 
 ### Grants sync performance harness (optional)

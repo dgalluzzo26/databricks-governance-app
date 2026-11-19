@@ -60,9 +60,7 @@ class AttributeExplorerService:
         self._sql = sql
         self._row_filters = row_filters
 
-    def analyze(
-        self, body: AnalyzeAttributeRequest, actor: CurrentUser
-    ) -> AttributeExplorerResult:
+    def analyze(self, body: AnalyzeAttributeRequest, actor: CurrentUser) -> AttributeExplorerResult:
         """Return holders and affected resources for one attribute path.
 
         Row-filter dimensions accept an empty ``attribute_value`` and return every
@@ -116,9 +114,7 @@ class AttributeExplorerService:
         ):
             raise ForbiddenError("You are not an approver for this attribute path")
 
-        separator = (
-            settings.hierarchy_separator if kind == AttributeExplorerKind.DATA_ACCESS else "."
-        )
+        separator = settings.hierarchy_separator if kind == AttributeExplorerKind.DATA_ACCESS else "."
 
         holders = self._holders(key, value, separator)
         tables: list[UnlockedTable] = []
@@ -138,7 +134,7 @@ class AttributeExplorerService:
         elif kind == AttributeExplorerKind.SENSITIVITY:
             tables = self._sensitivity_resources(value)
             note = (
-                "Sensitivity unmasks columns whose sensitivity_category.sensitivity path "
+                "Sensitivity unmasks columns whose access_path.sensitivity path "
                 "matches this value (or a descendant). It does not create dac_* table grants."
             )
         elif kind == AttributeExplorerKind.ROW_FILTER:
@@ -169,9 +165,7 @@ class AttributeExplorerService:
         resolved = settings if settings is not None else self._data_access._settings()  # noqa: SLF001
         return self._classify(key, resolved, value_source)
 
-    def resources_for(
-        self, kind: AttributeExplorerKind, key: str, value: str
-    ) -> list[UnlockedTable]:
+    def resources_for(self, kind: AttributeExplorerKind, key: str, value: str) -> list[UnlockedTable]:
         """Return affected tables/columns for one attribute path.
 
         Args:
@@ -274,14 +268,10 @@ class AttributeExplorerService:
                     assignment_id=item.assignment_id,
                 )
             )
-        out.sort(
-            key=lambda h: (h.match.value, h.principal_name.lower(), h.attribute_value.lower())
-        )
+        out.sort(key=lambda h: (h.match.value, h.principal_name.lower(), h.attribute_value.lower()))
         return out
 
-    def _tables(
-        self, settings: DataAccessSettings, value: str, separator: str
-    ) -> list[UnlockedTable]:
+    def _tables(self, settings: DataAccessSettings, value: str, separator: str) -> list[UnlockedTable]:
         """Reviewed tables tagged with ``value`` or a descendant path."""
         access_key = settings.access_tag_key.lower()
         review_key = settings.review_tag_key.lower()
@@ -330,7 +320,7 @@ class AttributeExplorerService:
             rows = self._sql.query(
                 "SELECT catalog_name, schema_name, table_name, column_name, tag_name, tag_value "
                 "FROM system.information_schema.column_tags "
-                "WHERE lower(tag_name) IN ('sensitivity_category', 'sensitivity') "
+                "WHERE lower(tag_name) IN ('access_path', 'sensitivity') "
                 f"LIMIT {_SENSITIVITY_TAG_LIMIT}"
             )
         except Exception as exc:  # noqa: BLE001 — inventory is best-effort for analyze
@@ -352,7 +342,7 @@ class AttributeExplorerService:
 
         out: list[UnlockedTable] = []
         for (catalog, schema, table, column), tags in by_column.items():
-            category = tags.get("sensitivity_category", "").strip()
+            category = tags.get("access_path", "").strip()
             sensitivity = tags.get("sensitivity", "").strip()
             if not category or not sensitivity:
                 continue

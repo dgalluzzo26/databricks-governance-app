@@ -22,6 +22,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any, Protocol
 
 from backend.app.clients.sql import quote_identifier, string_literal
+from backend.app.models.identity_attribute import is_data_access_definition
 from backend.app.services.catalog_enrollment import enrolled_catalogs_sql
 
 logger = logging.getLogger(__name__)
@@ -31,7 +32,7 @@ DEFAULT_BACKFILL_DAYS = 90
 DEFAULT_LOOKBACK_DAYS = 3
 EVENT_RETENTION_DAYS = 90
 SUMMARY_RETENTION_DAYS = 400
-DEFAULT_ACCESS_TAG_KEY = "data_access_control"
+DEFAULT_ACCESS_TAG_KEY = "access_path"
 _INSERT_BATCH = 200
 _GROUP_INSERT_BATCH = 1000
 
@@ -145,7 +146,7 @@ COMMENT 'Attributes each user held on the snapshot date, directly or through a g
         f"""CREATE TABLE IF NOT EXISTS {t("governed_table_snapshot")} (
   snapshot_date DATE, table_full_name STRING, catalog_name STRING, schema_name STRING,
   table_name STRING, tag_value STRING
-) COMMENT 'Enrolled tables carrying a data_access_control tag, with the tag value (path)'""",
+) COMMENT 'Enrolled tables carrying an access_path tag, with the tag value (path)'""",
         f"""CREATE TABLE IF NOT EXISTS {t("table_access_snapshot")} (
   snapshot_date DATE, table_full_name STRING, user_name STRING, via_type STRING,
   via_principal STRING, held_value STRING
@@ -256,11 +257,11 @@ WITH reads AS (
 ),
 tags AS (
   SELECT concat_ws('.', catalog_name, schema_name, table_name) AS table_full_name, column_name,
-    max(CASE WHEN tag_name = 'sensitivity_category' THEN tag_value END) AS sensitivity_category,
+    max(CASE WHEN tag_name = 'access_path' THEN tag_value END) AS sensitivity_category,
     max(CASE WHEN tag_name = 'sensitivity' THEN tag_value END) AS sensitivity
   FROM system.information_schema.column_tags
   WHERE {catalog_filter("catalog_name", catalogs)}
-    AND tag_name IN ('sensitivity_category', 'sensitivity')
+    AND tag_name IN ('access_path', 'sensitivity')
   GROUP BY 1, 2
 ),
 {_principals_cte(tables, column_users)},
@@ -328,7 +329,7 @@ def access_holder_sql(
 ) -> list[str]:
     """Rebuild the governed-table and current table-holder snapshots.
 
-    A holder is a USER or GROUP assignment whose value covers the table's ``data_access_control``
+    A holder is a USER or GROUP assignment whose value covers the table's ``access_path``
     tag value: equal to it, or a dotted prefix of it (``finance`` covers ``finance.budget``).
     Wildcard (``*``) assignments are excluded because they do not name a single path.
     Group holders expand to the members captured in ``group_member_snapshot``.
@@ -581,8 +582,9 @@ WHERE upper(a.principal_type) = 'USER' AND {_active_assignments()}"""
                 tags = json.loads(raw) if raw else []
             except ValueError:
                 tags = [raw]
-            if self._access_tag_key in [str(tag) for tag in tags]:
-                keys.add(str(row.get("attribute_key") or ""))
+            attribute_key = str(row.get("attribute_key") or "")
+            if is_data_access_definition(attribute_key, [str(tag) for tag in tags], self._access_tag_key):
+                keys.add(attribute_key)
         return sorted(key for key in keys if key)
 
     def _refresh_group_members(self, attribute_keys: list[str], today: date) -> int:

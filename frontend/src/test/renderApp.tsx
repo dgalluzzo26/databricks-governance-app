@@ -64,6 +64,9 @@ import type {
   DataAccessReadiness,
   DataAccessRun,
   AppSettings,
+  Subscription,
+  SubscriptionDraft,
+  SubscriptionOptions,
   DataAccessSettings,
   DataAccessSettingsView,
   DirectoryPrincipalList,
@@ -140,6 +143,7 @@ export const testRecoveryImportPreview: RecoveryImportPreview = {
     approvers: 0,
     maskRules: 0,
     policyExceptions: 0,
+    subscriptions: 0,
     dataAccessConfigured: false,
     summary: "empty",
   },
@@ -161,6 +165,8 @@ export const testRecoveryApplyResult: RecoveryApplyResult = {
     approvers: 1,
     maskRules: 1,
     policyExceptions: 1,
+    subscriptions: 1,
+    appSettings: 1,
     dataAccess: 1,
   },
   warnings: ["Re-run identity UC sync, mask-rule sync, and data-access apply so Unity Catalog matches."],
@@ -169,9 +175,9 @@ export const testRecoveryApplyResult: RecoveryApplyResult = {
 
 export const testDataAccessSettings: DataAccessSettingsView = {
   settings: {
-    accessTagKey: "data_access_control",
-    reviewTagKey: "clr_review_status",
-    reviewTagValue: "reviewed",
+    accessTagKey: "access_path",
+    reviewTagKey: "data_governance_status",
+    reviewTagValue: "ready",
     groupPrefix: "dac_",
     hierarchySeparator: ".",
     enrollmentCatalogTagKey: "data_access_controlled",
@@ -196,6 +202,87 @@ export const testDataAccessSettings: DataAccessSettingsView = {
 
 export const testAppSettings: AppSettings = {
   disableMetadataCache: false,
+  subscriptionsRequireAdminApproval: true,
+  subscriptionMaxDays: 365,
+};
+
+export const testSubscriptionOptions: SubscriptionOptions = {
+  canCreate: true,
+  isAdmin: true,
+  requiresApproval: false,
+  maxDays: 365,
+  groupPrefix: "dac_subscription_",
+  accessTagKey: "access_path",
+  allowedPaths: [],
+  tagKeys: ["access_path", "region", "sensitivity"],
+  tagValues: { access_path: ["people", "people.ia"], region: ["east", "west"] },
+  privileges: {
+    CATALOG: ["USE CATALOG", "APPLY TAG", "SELECT", "ALL PRIVILEGES", "MANAGE"],
+    SCHEMA: ["USE SCHEMA", "SELECT", "MODIFY", "CREATE TABLE"],
+    TABLE: ["APPLY TAG", "SELECT", "MODIFY", "ALL PRIVILEGES", "MANAGE"],
+    VOLUME: ["READ VOLUME", "WRITE VOLUME"],
+    FUNCTION: ["EXECUTE"],
+    MODEL: ["EXECUTE"],
+    EXTERNAL_LOCATION: ["READ FILES", "WRITE FILES"],
+    WORKSPACE_FOLDER: ["CAN_READ", "CAN_RUN", "CAN_EDIT", "CAN_MANAGE"],
+    DASHBOARD: ["CAN_READ", "CAN_RUN", "CAN_EDIT", "CAN_MANAGE"],
+    GENIE_SPACE: ["CAN_READ", "CAN_RUN", "CAN_EDIT", "CAN_MANAGE"],
+    APP: ["CAN_USE", "CAN_MANAGE"],
+    SQL_WAREHOUSE: ["CAN_VIEW", "CAN_MONITOR", "CAN_USE", "CAN_MANAGE"],
+  },
+  presets: {
+    READ: { SCHEMA: ["SELECT"], TABLE: ["SELECT"], VOLUME: ["READ VOLUME"], DASHBOARD: ["CAN_RUN"], APP: ["CAN_USE"] },
+    BUILD: { SCHEMA: ["SELECT", "MODIFY", "CREATE TABLE"], TABLE: ["APPLY TAG", "SELECT", "MODIFY"], DASHBOARD: ["CAN_EDIT"] },
+    VOLUME_READ_WRITE: { VOLUME: ["READ VOLUME", "WRITE VOLUME"] },
+    ADMIN: { CATALOG: ["ALL PRIVILEGES", "MANAGE"], TABLE: ["ALL PRIVILEGES", "MANAGE"], DASHBOARD: ["CAN_MANAGE"] },
+  },
+};
+
+export const testSubscription: Subscription = {
+  subscriptionId: "sub-1",
+  name: "ia_engineers",
+  displayName: "IA engineers",
+  description: "Build access for the IA engineering team",
+  groupName: "dac_subscription_ia_engineers",
+  status: "APPROVED",
+  phase: "ACTIVE",
+  startsAt: "2026-11-01T00:00:00Z",
+  expiresAt: "2099-01-01T00:00:00Z",
+  reviewExempt: false,
+  subjects: [{ principalName: "ana.lopez@example.com", principalType: "USER" }],
+  resources: [
+    {
+      selector: "TAG_MATCH",
+      securableKind: null,
+      fullName: null,
+      conditions: [{ tagKey: "access_path", values: ["people.ia"], match: "PREFIX" }],
+      levels: ["TABLE"],
+      preset: "READ",
+      privileges: [],
+    },
+  ],
+  attributes: [],
+  createdBy: "admin@example.com",
+  createdAt: "2026-11-01T00:00:00Z",
+  updatedAt: "2026-11-01T00:00:00Z",
+  decidedBy: null,
+  decidedAt: null,
+  decisionNote: null,
+  revokedBy: null,
+  revokedAt: null,
+  lastSync: {
+    syncedAt: "2026-11-18T00:00:00Z",
+    ok: true,
+    active: true,
+    matchedObjects: 1,
+    grants: [{ securableKind: "TABLE", fullName: "dga_people.ia.claims", privilege: "SELECT" }],
+    members: 1,
+    grantsAdded: 1,
+    grantsRevoked: 0,
+    membersAdded: 1,
+    membersRemoved: 0,
+    errors: [],
+  },
 };
 
 export const testUsageOverview: UsageOverview = {
@@ -358,7 +445,7 @@ export const testDataAccessReadiness: DataAccessReadiness = {
       label: "Data-access definition",
       ok: true,
       requiredFor: "setup",
-      detail: "Configured as 'data_access' → tag 'data_access_control'",
+      detail: "Configured as 'data_access' → tag 'access_path'",
     },
   ],
 };
@@ -521,7 +608,7 @@ export const testGovernedTags: GovernedTagList = {
       valueCount: 1,
     },
     {
-      tagKey: "sensitivity_category",
+      tagKey: "access_path",
       description: "Business sensitivity category",
       values: ["public", "finance", "finance.budget"],
       valueCount: 3,
@@ -532,14 +619,8 @@ export const testGovernedTags: GovernedTagList = {
       values: ["PII", "PII.Name"],
       valueCount: 2,
     },
-    {
-      tagKey: "data_access_control",
-      description: "Tagged-level data access values",
-      values: ["finance", "finance.budget", "finance.contracts"],
-      valueCount: 3,
-    },
   ],
-  total: 5,
+  total: 4,
   truncated: false,
 };
 
@@ -560,7 +641,7 @@ export const testDefinitions: AttributeDefinitionList = {
     {
       key: "sensitivity",
       description: "used to control access to masking",
-      governedTagKeys: ["sensitivity_category", "sensitivity"],
+      governedTagKeys: ["access_path", "sensitivity"],
       valueSource: "governed_tags",
       valueSql: null,
       allowedValues: [
@@ -1313,7 +1394,7 @@ export const testDataAccessGrantsPage: DataAccessViewPage = {
       fullName: "main.sales.orders",
       principal: "dac_finance_readers",
       privilege: "SELECT",
-      reason: "data_access_control=finance",
+      reason: "access_path=finance",
     },
   ],
   total: 1,
@@ -1455,6 +1536,8 @@ export function fakeServices(
     activity?: ActivityFeed | Error;
     performanceRequests?: RequestPage | Error;
     performanceTasks?: TaskPage | Error;
+    subscriptions?: Subscription[];
+    subscriptionOptions?: SubscriptionOptions;
   } = {},
 ): ApiServices {
   const governedTags = overrides.governedTags ?? testGovernedTags;
@@ -2190,6 +2273,35 @@ export function fakeServices(
         maskPackSynced: true,
         rowFilterPackSynced: true,
       }),
+    },
+    subscriptions: {
+      options: async () => overrides.subscriptionOptions ?? testSubscriptionOptions,
+      list: async () => {
+        const subscriptions = overrides.subscriptions ?? [testSubscription];
+        return { subscriptions, total: subscriptions.length };
+      },
+      get: async (id: string) => {
+        const found = (overrides.subscriptions ?? [testSubscription]).find((s) => s.subscriptionId === id);
+        if (!found) throw new Error("not found");
+        return found;
+      },
+      preview: async () => ({
+        groupName: "dac_subscription_x",
+        objects: [],
+        totalObjects: 0,
+        skippedUnreviewed: 0,
+        grantCount: 0,
+        truncated: false,
+        warnings: [],
+      }),
+      browse: async () => ({ items: [] }),
+      create: async (body: SubscriptionDraft) => ({ ...testSubscription, ...body, subscriptionId: "sub-new" }),
+      update: async (id: string, body: SubscriptionDraft) => ({ ...testSubscription, ...body, subscriptionId: id }),
+      decide: async () => testSubscription,
+      extend: async () => testSubscription,
+      revoke: async () => testSubscription,
+      sync: async () => testSubscription,
+      delete: async () => undefined,
     },
   } as unknown as ApiServices;
 }

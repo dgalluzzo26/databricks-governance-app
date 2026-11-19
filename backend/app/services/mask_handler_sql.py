@@ -168,9 +168,7 @@ def sanitize_expression(expression: str) -> str:
             if name not in _ALLOWED_FUNCS and name not in _ALLOWED_IDENTS:
                 raise InvalidRequestError(f"Function '{name}' is not allowed in mask expressions")
         elif name not in _ALLOWED_IDENTS and name not in _ALLOWED_FUNCS:
-            raise InvalidRequestError(
-                f"Identifier '{name}' is not allowed; use 'v' for the column value"
-            )
+            raise InvalidRequestError(f"Identifier '{name}' is not allowed; use 'v' for the column value")
     return text
 
 
@@ -323,9 +321,7 @@ def build_apply_mask_rule_sql(
         elif rule.handler in BUILTIN_HANDLERS and rule.handler not in seen_handlers:
             seen_handlers.add(rule.handler)
             params_lit = _sql_str(json.dumps(rule.params or {}))
-            body = builtin_branch_sql(
-                rule.handler, params_json_expr=params_lit, salt_expr=salt_expr
-            )
+            body = builtin_branch_sql(rule.handler, params_json_expr=params_lit, salt_expr=salt_expr)
             branches.append(f"WHEN {resolved} = {_sql_str(rule.handler)} THEN {body}")
 
     for builtin in ("full", "joinable", "email", "phone", "keep_last_n"):

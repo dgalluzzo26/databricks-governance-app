@@ -60,11 +60,7 @@ def _writes(sql: _Sql) -> list[str]:
 def test_full_sync_overwrites_each_table_in_one_statement() -> None:
     sql = _Sql()
     source = _source(
-        [
-            AttributeDefinition(
-                key="data_access", governed_tag_keys=["data_access_control"], allowed_values=["x"]
-            )
-        ],
+        [AttributeDefinition(key="data_access", governed_tag_keys=["access_path"], allowed_values=["x"])],
         [
             _assignment(1, principal="o'brien@example.com", revoked_at=NOW, revoked_by="admin"),
             _assignment(2),
@@ -78,7 +74,7 @@ def test_full_sync_overwrites_each_table_in_one_statement() -> None:
     assert definitions.startswith(
         "INSERT OVERWRITE `cat`.`app`.`identity_attribute_definitions` (attribute_key"
     )
-    assert "'[]'" in definitions and "'[\"data_access_control\"]'" in definitions
+    assert "'[]'" in definitions and "'[\"access_path\"]'" in definitions
     assert assignments.startswith("INSERT OVERWRITE `cat`.`app`.`identity_attributes` (assignment_id")
     assert "o\\'brien@example.com" in assignments or "o''brien@example.com" in assignments
     assert "CAST('2026-11-13T12:00:00+00:00' AS TIMESTAMP)" in assignments

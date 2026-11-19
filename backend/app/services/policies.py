@@ -291,9 +291,7 @@ class PolicyService:
             detail.created_at = getattr(info, "created_at", None)
             detail.updated_at = getattr(info, "updated_at", None)
             detail.updated_by = getattr(info, "updated_by", None)
-            detail.to_principals = list(
-                getattr(info, "to_principals", None) or detail.to_principals
-            )
+            detail.to_principals = list(getattr(info, "to_principals", None) or detail.to_principals)
             detail.except_principals = list(
                 getattr(info, "except_principals", None) or detail.except_principals
             )
@@ -459,9 +457,7 @@ class PolicyService:
 
         when_text = (policy.when_condition or "").strip() or None
         match_texts = [
-            condition
-            for item in policy.match_columns
-            if (condition := (item.condition or "").strip())
+            condition for item in policy.match_columns if (condition := (item.condition or "").strip())
         ]
         if not when_text and not match_texts and not policy.governed_tags:
             return (
@@ -507,10 +503,7 @@ class PolicyService:
                 matched_tag_key=None if row.get("tag_name") is None else str(row.get("tag_name")),
                 matched_tag_value=None if row.get("tag_value") is None else str(row.get("tag_value")),
             )
-            key = (
-                f"{asset.asset_type}:{asset.full_name}:"
-                f"{asset.matched_tag_key}:{asset.matched_tag_value}"
-            )
+            key = f"{asset.asset_type}:{asset.full_name}:{asset.matched_tag_key}:{asset.matched_tag_value}"
             if key in seen:
                 continue
             seen.add(key)
@@ -519,9 +512,8 @@ class PolicyService:
         truncated = len(assets) > _ASSET_LIMIT
         assets = assets[:_ASSET_LIMIT]
         if match_nodes:
-            note = (
-                "Columns in scope whose tags satisfy the policy MATCH COLUMNS condition"
-                + (" on tables that also satisfy WHEN." if when_node is not None else ".")
+            note = "Columns in scope whose tags satisfy the policy MATCH COLUMNS condition" + (
+                " on tables that also satisfy WHEN." if when_node is not None else "."
             )
         elif when_node is not None:
             note = (

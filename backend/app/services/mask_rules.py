@@ -126,8 +126,7 @@ class MaskRuleService:
     def config_table(self) -> str:
         """Quoted FQN of the UC masking config table (holds the joinable salt)."""
         return ".".join(
-            quote_identifier(p)
-            for p in (self._config.app_catalog, self._config.app_schema, "masking_config")
+            quote_identifier(p) for p in (self._config.app_catalog, self._config.app_schema, "masking_config")
         )
 
     @property
@@ -197,9 +196,7 @@ class MaskRuleService:
         expression: str | None = None
         if request.kind == MaskRuleKind.CUSTOM:
             expression = sanitize_expression(request.expression or "")
-            self._require_validation_token(
-                expression, actor.user_name, request.validation_token or ""
-            )
+            self._require_validation_token(expression, actor.user_name, request.validation_token or "")
             validated_at = now
         rule = MaskRuleDefinition(
             rule_key=request.rule_key,
@@ -288,9 +285,7 @@ class MaskRuleService:
                 )
             )
         if not self._storage.mask_rules.get_config(JOINABLE_SALT_KEY):
-            self._storage.mask_rules.put_config(
-                JOINABLE_SALT_KEY, secrets.token_hex(32), actor.user_name
-            )
+            self._storage.mask_rules.put_config(JOINABLE_SALT_KEY, secrets.token_hex(32), actor.user_name)
         with step("Add defaults to mask_rule tag values"):
             self._governed_tags.ensure_values(self.tag_key, [key for key, *_ in DEFAULT_RULES])
         self.sync_to_uc()
@@ -318,9 +313,7 @@ class MaskRuleService:
         """
         current = self._storage.mask_rules.get_config(JOINABLE_SALT_KEY)
         if current is None or rotate:
-            self._storage.mask_rules.put_config(
-                JOINABLE_SALT_KEY, secrets.token_hex(32), actor.user_name
-            )
+            self._storage.mask_rules.put_config(JOINABLE_SALT_KEY, secrets.token_hex(32), actor.user_name)
             self.sync_to_uc()
             self.regenerate_apply_mask_rule()
             self._audit(
@@ -356,10 +349,7 @@ class MaskRuleService:
             samples_in = list(DEFAULT_SAMPLES)
         values_sql = ", ".join(f"({string_literal(s)})" for s in samples_in)
         expr_sql = substitute_v(expression, "v")
-        sql = (
-            f"SELECT v AS input, cast(({expr_sql}) AS STRING) AS output "
-            f"FROM VALUES {values_sql} AS t(v)"
-        )
+        sql = f"SELECT v AS input, cast(({expr_sql}) AS STRING) AS output FROM VALUES {values_sql} AS t(v)"
         samples: list[MaskHandlerSampleResult] = []
         try:
             rows = self._sql.query(sql)
@@ -373,14 +363,10 @@ class MaskRuleService:
                     )
                     out = None if not one else one[0].get("output")
                     samples.append(
-                        MaskHandlerSampleResult(
-                            input=sample, output=None if out is None else str(out)
-                        )
+                        MaskHandlerSampleResult(input=sample, output=None if out is None else str(out))
                     )
                 except Exception as one_exc:  # noqa: BLE001
-                    samples.append(
-                        MaskHandlerSampleResult(input=sample, error=str(one_exc))
-                    )
+                    samples.append(MaskHandlerSampleResult(input=sample, error=str(one_exc)))
             return MaskHandlerValidateResult(
                 ok=False, expression=expression, samples=samples, validation_token=None
             )
@@ -498,13 +484,13 @@ class MaskRuleService:
                    validated_at, updated_by, updated_at)
                 VALUES (
                   {string_literal(rule.rule_key)},
-                  {string_literal(rule.description or '')},
+                  {string_literal(rule.description or "")},
                   {string_literal(rule.kind.value)},
                   {string_literal(rule.handler)},
-                  {string_literal(rule.expression or '')},
+                  {string_literal(rule.expression or "")},
                   {string_literal(json.dumps(rule.params))},
                   {validated_sql},
-                  {string_literal(rule.updated_by or '')},
+                  {string_literal(rule.updated_by or "")},
                   current_timestamp()
                 )
                 """
@@ -677,12 +663,8 @@ class MaskRuleService:
         except_clause = ""
         principals = self._except_principals()
         if principals:
-            except_clause = "\nEXCEPT " + ", ".join(
-                f"`{p.replace('`', '')}`" for p in principals
-            )
-        enrollment_key, enrollment_value = enrollment_tag_from_storage(
-            self._storage.settings.get_all()
-        )
+            except_clause = "\nEXCEPT " + ", ".join(f"`{p.replace('`', '')}`" for p in principals)
+        enrollment_key, enrollment_value = enrollment_tag_from_storage(self._storage.settings.get_all())
         # Enrollment may be an ungoverned catalog tag when tag-policy quota is exhausted.
         try:
             self._governed_tags.ensure_values(enrollment_key, [enrollment_value])
@@ -700,7 +682,7 @@ class MaskRuleService:
         """Recreate the metastore column-mask policy for non-geo sensitivity-tagged columns.
 
         Applies ``mask_variant`` to ``account users`` (minus EXCEPT principals) on columns
-        tagged with ``sensitivity_category``, ``sensitivity``, and a non-geo ``data_type``,
+        tagged with ``access_path``, ``sensitivity``, and a non-geo ``data_type``,
         only within catalogs carrying the enrollment tag.
         """
         name = self._config.mask_variant_policy_name
@@ -714,7 +696,7 @@ class MaskRuleService:
             FOR TABLES
             {when_clause}
             MATCH COLUMNS (
-              has_tag('sensitivity_category')
+              has_tag('access_path')
               AND has_tag('sensitivity')
               AND has_tag('data_type')
               AND NOT has_tag_value('data_type', 'geometry')
@@ -722,7 +704,7 @@ class MaskRuleService:
             ) AS c
             ON COLUMN c
             USING COLUMNS (
-              get_column_tag_value(c, 'sensitivity_category'),
+              get_column_tag_value(c, 'access_path'),
               get_column_tag_value(c, 'sensitivity'),
               get_column_tag_value(c, 'mask_rule')
             )
@@ -732,16 +714,12 @@ class MaskRuleService:
     @property
     def has_sensitivity_function_name(self) -> str:
         """Quoted FQN of the ``has_sensitivity`` authorization UDF."""
-        return abac_udfs.fqn(
-            self._config.app_catalog, self._config.abac_function_schema, "has_sensitivity"
-        )
+        return abac_udfs.fqn(self._config.app_catalog, self._config.abac_function_schema, "has_sensitivity")
 
     @property
     def identity_mirror_table(self) -> str:
         """Quoted FQN of the UC identity-attribute mirror read by ``has_sensitivity``."""
-        return abac_udfs.fqn(
-            self._config.app_catalog, self._config.app_schema, "identity_attributes"
-        )
+        return abac_udfs.fqn(self._config.app_catalog, self._config.app_schema, "identity_attributes")
 
     @step("Create auth helper functions")
     def _ensure_auth_functions(self) -> None:
@@ -781,7 +759,7 @@ class MaskRuleService:
     def _recreate_geo_policies(self) -> None:
         """Recreate the geometry and geography metastore column-mask policies.
 
-        Matches columns tagged with ``sensitivity_category``, ``sensitivity`` and the
+        Matches columns tagged with ``access_path``, ``sensitivity`` and the
         corresponding ``data_type``; denied callers (``account users`` minus EXCEPT
         principals) get ``NULL``. Scoped to enrolled catalogs like the variant policy.
         """
@@ -799,13 +777,13 @@ class MaskRuleService:
                 FOR TABLES
                 {when_clause}
                 MATCH COLUMNS (
-                  has_tag('sensitivity_category')
+                  has_tag('access_path')
                   AND has_tag('sensitivity')
                   AND has_tag_value('data_type', '{kind}')
                 ) AS c
                 ON COLUMN c
                 USING COLUMNS (
-                  get_column_tag_value(c, 'sensitivity_category'),
+                  get_column_tag_value(c, 'access_path'),
                   get_column_tag_value(c, 'sensitivity')
                 )
                 """
@@ -849,9 +827,7 @@ class MaskRuleService:
             ("validated_at", "TIMESTAMP"),
         ):
             with contextlib.suppress(Exception):
-                self._mirror_sql.execute(
-                    f"ALTER TABLE {self.definitions_table} ADD COLUMNS ({col} {typ})"
-                )
+                self._mirror_sql.execute(f"ALTER TABLE {self.definitions_table} ADD COLUMNS ({col} {typ})")
         self._mirror_sql.execute(
             f"""
             CREATE TABLE IF NOT EXISTS {self.config_table} (
@@ -922,9 +898,7 @@ class MaskRuleService:
         if expires < int(time.time()):
             raise InvalidRequestError("validation_token expired; validate the expression again")
         payload = f"{expires}:{actor}:{expression}"
-        expected = hmac.new(
-            self._validation_secret(), payload.encode("utf-8"), hashlib.sha256
-        ).hexdigest()
+        expected = hmac.new(self._validation_secret(), payload.encode("utf-8"), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(expected, digest):
             raise InvalidRequestError(
                 "validation_token does not match this expression; validate again before saving"

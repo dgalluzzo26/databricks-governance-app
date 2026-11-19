@@ -33,8 +33,8 @@ class FakeGovernedTags:
                 values=["finance", "finance.budget", "finance.contracts"],
                 value_count=3,
             ),
-            "sensitivity_category": GovernedTagSummary(
-                tag_key="sensitivity_category",
+            "access_path": GovernedTagSummary(
+                tag_key="access_path",
                 description="Business category hierarchy",
                 values=["public", "finance", "finance.budget"],
                 value_count=3,
@@ -44,12 +44,6 @@ class FakeGovernedTags:
                 description="Shared PII hierarchy",
                 values=["PII", "PII.Name", "PII.SSN"],
                 value_count=3,
-            ),
-            "data_access_control": GovernedTagSummary(
-                tag_key="data_access_control",
-                description="Tagged-level data access",
-                values=["finance", "finance.budget"],
-                value_count=2,
             ),
         }
 
@@ -174,11 +168,11 @@ def test_sensitivity_composes_category_and_leaf(container) -> None:  # noqa: ANN
         UpsertAttributeDefinitionRequest(
             key="sensitivity",
             description="used to control access to masking",
-            governed_tag_keys=["sensitivity_category", "sensitivity"],
+            governed_tag_keys=["access_path", "sensitivity"],
         ),
         actor,  # type: ignore[arg-type]
     )
-    assert definition.governed_tag_keys == ["sensitivity_category", "sensitivity"]
+    assert definition.governed_tag_keys == ["access_path", "sensitivity"]
     assert "public" in definition.allowed_values
     assert "finance.budget" in definition.allowed_values
     assert "public.PII.Name" in definition.allowed_values
@@ -266,7 +260,7 @@ def test_rejects_second_data_access_definition(container) -> None:  # noqa: ANN0
     first = service.upsert_definition(
         UpsertAttributeDefinitionRequest(
             key="data_access",
-            governed_tag_keys=["data_access_control"],
+            governed_tag_keys=["access_path"],
         ),
         actor,  # type: ignore[arg-type]
     )
@@ -277,7 +271,7 @@ def test_rejects_second_data_access_definition(container) -> None:  # noqa: ANN0
         service.upsert_definition(
             UpsertAttributeDefinitionRequest(
                 key="data_access_other",
-                governed_tag_keys=["data_access_control"],
+                governed_tag_keys=["access_path"],
             ),
             actor,  # type: ignore[arg-type]
         )
@@ -287,7 +281,7 @@ def test_rejects_second_data_access_definition(container) -> None:  # noqa: ANN0
         UpsertAttributeDefinitionRequest(
             key="data_access",
             description="updated",
-            governed_tag_keys=["data_access_control"],
+            governed_tag_keys=["access_path"],
         ),
         actor,  # type: ignore[arg-type]
     )
@@ -300,7 +294,7 @@ def test_data_access_definition_must_keep_access_tag(container) -> None:  # noqa
     service.upsert_definition(
         UpsertAttributeDefinitionRequest(
             key="data_access",
-            governed_tag_keys=["data_access_control"],
+            governed_tag_keys=["access_path"],
         ),
         actor,  # type: ignore[arg-type]
     )
@@ -321,7 +315,7 @@ def test_find_sensitivity_definition(container) -> None:  # noqa: ANN001
     service.upsert_definition(
         UpsertAttributeDefinitionRequest(
             key="sensitivity",
-            governed_tag_keys=["sensitivity_category", "sensitivity"],
+            governed_tag_keys=["access_path", "sensitivity"],
         ),
         actor,  # type: ignore[arg-type]
     )
@@ -330,9 +324,7 @@ def test_find_sensitivity_definition(container) -> None:  # noqa: ANN001
     assert found.key == "sensitivity"
 
 
-def test_approver_can_revoke_assignment_for_their_path(
-    client: TestClient, container
-) -> None:  # noqa: ANN001
+def test_approver_can_revoke_assignment_for_their_path(client: TestClient, container) -> None:  # noqa: ANN001
     """Path approvers may revoke; unrelated users may not."""
     from backend.app.models.access_request import UpsertCategoryApproverRequest
     from backend.app.services.access_requests import AccessRequestService
@@ -357,7 +349,7 @@ def test_approver_can_revoke_assignment_for_their_path(
     identity.upsert_definition(
         UpsertAttributeDefinitionRequest(
             key="sensitivity",
-            governed_tag_keys=["sensitivity_category", "sensitivity"],
+            governed_tag_keys=["access_path", "sensitivity"],
         ),
         actor,  # type: ignore[arg-type]
     )
@@ -419,7 +411,7 @@ def _seed_sensitivity_and_finance_approver(container) -> None:  # noqa: ANN001
     identity.upsert_definition(
         UpsertAttributeDefinitionRequest(
             key="sensitivity",
-            governed_tag_keys=["sensitivity_category", "sensitivity"],
+            governed_tag_keys=["access_path", "sensitivity"],
         ),
         actor,  # type: ignore[arg-type]
     )
@@ -482,9 +474,7 @@ def test_admin_bulk_assign_creates_cartesian_product(client: TestClient, contain
     assert listed["total"] >= 4
 
 
-def test_bulk_assign_skips_already_held_and_reports_partial_failure(
-    client: TestClient, container
-) -> None:  # noqa: ANN001
+def test_bulk_assign_skips_already_held_and_reports_partial_failure(client: TestClient, container) -> None:  # noqa: ANN001
     """Idempotent re-grants are skipped; invalid values fail without rolling back successes."""
     _service(container)
     admin = headers_for("admin@example.com")
@@ -553,8 +543,7 @@ def test_bulk_assign_enforces_caps(client: TestClient, container) -> None:  # no
         headers=admin,
         json={
             "principals": [
-                {"principalName": f"user{i}@example.com", "principalType": "USER"}
-                for i in range(51)
+                {"principalName": f"user{i}@example.com", "principalType": "USER"} for i in range(51)
             ],
             "attributes": [{"attributeKey": "dga_domain", "attributeValue": "finance"}],
         },
@@ -566,13 +555,9 @@ def test_bulk_assign_enforces_caps(client: TestClient, container) -> None:  # no
         headers=admin,
         json={
             "principals": [
-                {"principalName": f"user{i}@example.com", "principalType": "USER"}
-                for i in range(50)
+                {"principalName": f"user{i}@example.com", "principalType": "USER"} for i in range(50)
             ],
-            "attributes": [
-                {"attributeKey": "dga_domain", "attributeValue": "finance"}
-                for _ in range(11)
-            ],
+            "attributes": [{"attributeKey": "dga_domain", "attributeValue": "finance"} for _ in range(11)],
         },
     )
     assert too_many_grants.status_code == 422

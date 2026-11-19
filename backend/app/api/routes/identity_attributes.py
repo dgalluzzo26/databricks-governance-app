@@ -247,9 +247,7 @@ def assign_attribute(
 
 
 @router.post("/assignments/bulk", response_model=BulkAssignResult)
-def bulk_assign_attributes(
-    body: BulkAssignRequest, user: User, container: Container
-) -> BulkAssignResult:
+def bulk_assign_attributes(body: BulkAssignRequest, user: User, container: Container) -> BulkAssignResult:
     """Assign many principals × many attribute values in one submit.
 
     Justification and expiry are shared. Each grant is still created and audited as an
@@ -283,9 +281,7 @@ def bulk_assign_attributes(
 
 
 @router.post("/assignments/{assignment_id}/revoke", response_model=IdentityAttributeAssignment)
-def revoke_assignment(
-    assignment_id: str, user: User, container: Container
-) -> IdentityAttributeAssignment:
+def revoke_assignment(assignment_id: str, user: User, container: Container) -> IdentityAttributeAssignment:
     """Revoke an identity attribute assignment.
 
     App admins may revoke any assignment. Category / data-access / dimension approvers may

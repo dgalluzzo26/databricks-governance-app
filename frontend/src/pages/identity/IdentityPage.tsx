@@ -56,6 +56,7 @@ import { DataTableHead } from "@/components/ui/DataTableHead";
 import { useTableView, type TableColumn } from "@/hooks/useTableView";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import styles from "./IdentityPage.module.css";
+import { isDataAccessDefinition } from "./definitionRules";
 
 /**
  * Identifier of a top-level tab on the identity page, as stored in the `?tab=` search parameter.
@@ -916,22 +917,18 @@ function MyRequestsTable({
  */
 function CategoryApproversPanel() {
   const { data, isPending, error } = useCategoryApprovers();
-  const tags = useGovernedTags("sensitivity_category");
+  const tags = useGovernedTags("access_path");
   const definitions = useAttributeDefinitions();
   const dataAccessSettings = useDataAccessSettings();
   const dimensions = useRowFilterDimensions();
   const upsert = useUpsertCategoryApprover();
   const remove = useDeleteCategoryApprover();
-  const categoryTag = tags.data?.tags.find((tag) => tag.tagKey === "sensitivity_category");
+  const categoryTag = tags.data?.tags.find((tag) => tag.tagKey === "access_path");
   const accessTagKey =
-    dataAccessSettings.data?.settings.accessTagKey?.trim().toLowerCase() || "data_access_control";
-  const dataAccessDef = (definitions.data?.definitions ?? []).find((item) => {
-    const key = item.key.toLowerCase();
-    return (
-      key === accessTagKey ||
-      item.governedTagKeys.some((tag) => tag.toLowerCase() === accessTagKey)
-    );
-  });
+    dataAccessSettings.data?.settings.accessTagKey?.trim().toLowerCase() || "access_path";
+  const dataAccessDef = (definitions.data?.definitions ?? []).find((item) =>
+    isDataAccessDefinition(item, accessTagKey),
+  );
   const dataAccessPaths = (dataAccessDef?.allowedValues ?? []).filter((value) => value && value !== "*");
   const [scope, setScope] = useState<"sensitivity" | "data_access" | "row_filter">("sensitivity");
   const [categoryPath, setCategoryPath] = useState("");
@@ -1597,7 +1594,7 @@ type DefinitionsView = "existing" | "create";
 type DefinitionPurpose = "sensitivity" | "data_access";
 
 const SENSITIVITY_KEY = "sensitivity";
-const SENSITIVITY_TAGS = ["sensitivity_category", "sensitivity"];
+const SENSITIVITY_TAGS = ["access_path", "sensitivity"];
 const DEFAULT_DATA_ACCESS_KEY = "data_access";
 
 /**
@@ -1747,13 +1744,7 @@ function definitionPurpose(
   accessTagKey: string,
 ): "sensitivity" | "data_access" | "row_filter" | "other" {
   if (item.key.toLowerCase() === SENSITIVITY_KEY) return "sensitivity";
-  const access = accessTagKey.toLowerCase();
-  if (
-    item.key.toLowerCase() === access ||
-    item.governedTagKeys.some((tag) => tag.toLowerCase() === access)
-  ) {
-    return "data_access";
-  }
+  if (isDataAccessDefinition(item, accessTagKey)) return "data_access";
   if (item.valueSource !== "governed_tags") return "row_filter";
   return "other";
 }
@@ -1774,7 +1765,7 @@ function DefinitionsPanel() {
   const remove = useDeleteAttributeDefinition();
 
   const accessTagKey =
-    dataAccessSettings.data?.settings.accessTagKey?.trim() || "data_access_control";
+    dataAccessSettings.data?.settings.accessTagKey?.trim() || "access_path";
 
   const [view, setView] = useState<DefinitionsView>("existing");
   const [purpose, setPurpose] = useState<DefinitionPurpose>("sensitivity");
@@ -1786,11 +1777,7 @@ function DefinitionsPanel() {
   const tags = useGovernedTags(tagSearch.trim() || undefined);
 
   const sensitivityDef = data?.definitions.find((item) => item.key.toLowerCase() === SENSITIVITY_KEY);
-  const dataAccessDef = data?.definitions.find(
-    (item) =>
-      item.key.toLowerCase() === accessTagKey.toLowerCase() ||
-      item.governedTagKeys.some((tag) => tag.toLowerCase() === accessTagKey.toLowerCase()),
-  );
+  const dataAccessDef = data?.definitions.find((item) => isDataAccessDefinition(item, accessTagKey));
   const purposeAlreadyExists =
     !editingKey && (purpose === "sensitivity" ? Boolean(sensitivityDef) : Boolean(dataAccessDef));
 
@@ -2040,7 +2027,7 @@ function DefinitionsPanel() {
                 Governed tags
                 {purpose === "data_access"
                   ? ` (must include ${accessTagKey})`
-                  : " (sensitivity_category + sensitivity recommended)"}
+                  : " (access_path + sensitivity recommended)"}
               </span>
               <input
                 className={styles.input}

@@ -47,6 +47,28 @@ resources:
               - "--admin-secret-scope=${var.admin_secret_scope}"
               - "--lakebase-project-id=${var.lakebase_project_id}"
               - "--lakebase-database-id=${var.lakebase_database_id}"
+        # Subscriptions run after the grants sync (same schedule and Run now), whatever its
+        # outcome, so start and end times are enforced even when the sync fails.
+        - task_key: subscriptions
+          depends_on:
+            - task_key: sync
+          run_if: ALL_DONE
+          environment_key: default
+          max_retries: 1
+          min_retry_interval_millis: 60000
+          spark_python_task:
+            python_file: ../backend/jobs/run_subscription_sync.py
+            parameters:
+              - "--trigger={{job.parameters.trigger}}"
+              - "--actor={{job.parameters.actor}}"
+              - "--warehouse-id=${resources.sql_warehouses.app_warehouse.id}"
+              - "--storage-backend=${var.storage_backend}"
+              - "--app-catalog=${var.app_catalog}"
+              - "--app-schema=${var.app_schema}"
+              - "--admin-group=${var.admin_group}"
+              - "--admin-secret-scope=${var.admin_secret_scope}"
+              - "--lakebase-project-id=${var.lakebase_project_id}"
+              - "--lakebase-database-id=${var.lakebase_database_id}"
       environments:
         - environment_key: default
           spec:

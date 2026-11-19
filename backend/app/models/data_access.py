@@ -66,7 +66,7 @@ class DataAccessSettings(ApiModel):
     Attributes:
         access_tag_key: Governed tag whose values map to ``dac_*`` groups.
         review_tag_key: Tag that must also be present on the same object.
-        review_tag_value: Required value of ``review_tag_key`` (e.g. ``reviewed``).
+        review_tag_value: Required value of ``review_tag_key`` (e.g. ``ready``).
         group_prefix: Prefix for managed group names; values are slugified after it.
         hierarchy_separator: Splits an access value into parent prefixes for nested groups.
         enrollment_catalog_tag_key: Catalog tag that enrolls a catalog in the governance perimeter.
@@ -80,9 +80,9 @@ class DataAccessSettings(ApiModel):
         dry_run: Preferred mode for the settings form (legacy; schedule uses schedule_mode).
     """
 
-    access_tag_key: str = "data_access_control"
-    review_tag_key: str = "clr_review_status"
-    review_tag_value: str = "reviewed"
+    access_tag_key: str = "access_path"
+    review_tag_key: str = "data_governance_status"
+    review_tag_value: str = "ready"
     group_prefix: str = "dac_"
     hierarchy_separator: str = "."
     enrollment_catalog_tag_key: str = "data_access_controlled"
@@ -105,6 +105,11 @@ class DataAccessSettings(ApiModel):
     warehouse_max_clusters: int = Field(default=8, ge=1, le=10)
     # Ceiling after the grants phase, and the cluster count used for grant concurrency.
     warehouse_baseline_clusters: int = Field(default=4, ge=1, le=10)
+    # dac_* and dac_subscription_* groups are assigned to this workspace with at least these
+    # entitlements so account-level members can open it; empty leaves workspace access alone.
+    workspace_entitlements: list[str] = Field(
+        default_factory=lambda: ["workspace-access", "databricks-sql-access"]
+    )
 
     @field_validator(
         "access_tag_key",

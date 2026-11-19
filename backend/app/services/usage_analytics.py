@@ -148,7 +148,7 @@ class UsageAnalyticsService:
         user_rows = self._sql.query(
             f"""
             SELECT user_name, sum(reads) AS reads, max(last_read_at) AS last_read_at
-            FROM {self._tables.fqn('user_table_usage_daily')}
+            FROM {self._tables.fqn("user_table_usage_daily")}
             WHERE table_full_name = :table
               AND event_date >= date_sub(current_date(), :days)
             GROUP BY user_name
@@ -173,7 +173,7 @@ class UsageAnalyticsService:
                    sum(reads) AS reads,
                    count(distinct user_name) AS distinct_users,
                    max(last_read_at) AS last_read_at
-            FROM {self._tables.fqn('column_usage_daily')}
+            FROM {self._tables.fqn("column_usage_daily")}
             WHERE table_full_name = :table
               AND event_date >= date_sub(current_date(), :days)
             GROUP BY column_name
@@ -196,7 +196,7 @@ class UsageAnalyticsService:
         recent_rows = self._sql.query(
             f"""
             SELECT event_time, user_name, entity_type, direct_access
-            FROM {self._tables.fqn('read_events')}
+            FROM {self._tables.fqn("read_events")}
             WHERE table_full_name = :table
               AND event_date >= date_sub(current_date(), :days)
             ORDER BY event_time DESC
@@ -270,39 +270,45 @@ class UsageAnalyticsService:
         if normalized == "tables":
             writer.writerow(["Table", "Catalog", "Schema", "Name", "Reads", "Distinct Users", "Last Read At"])
             for t in self._load_top_tables(window, limit=500):
-                writer.writerow([
-                    t.table_full_name,
-                    t.catalog_name,
-                    t.schema_name,
-                    t.table_name,
-                    t.reads,
-                    t.distinct_users,
-                    t.last_read_at or "",
-                ])
+                writer.writerow(
+                    [
+                        t.table_full_name,
+                        t.catalog_name,
+                        t.schema_name,
+                        t.table_name,
+                        t.reads,
+                        t.distinct_users,
+                        t.last_read_at or "",
+                    ]
+                )
         elif normalized == "users":
             writer.writerow(["User", "Reads", "Distinct Tables", "Last Read At"])
             for u in self._load_top_users(window, limit=500):
                 writer.writerow([u.user_name, u.reads, u.distinct_tables, u.last_read_at or ""])
         elif normalized == "sensitive":
-            writer.writerow([
-                "Sensitivity Path",
-                "Reads",
-                "Clear Reads",
-                "Masked Reads",
-                "Exempt Reads",
-                "Distinct Users",
-                "Distinct Tables",
-            ])
+            writer.writerow(
+                [
+                    "Sensitivity Path",
+                    "Reads",
+                    "Clear Reads",
+                    "Masked Reads",
+                    "Exempt Reads",
+                    "Distinct Users",
+                    "Distinct Tables",
+                ]
+            )
             for s in self._load_sensitive_breakdown(window):
-                writer.writerow([
-                    s.sensitivity_path,
-                    s.reads,
-                    s.clear_reads,
-                    s.masked_reads,
-                    s.exempt_reads,
-                    s.distinct_users,
-                    s.distinct_tables,
-                ])
+                writer.writerow(
+                    [
+                        s.sensitivity_path,
+                        s.reads,
+                        s.clear_reads,
+                        s.masked_reads,
+                        s.exempt_reads,
+                        s.distinct_users,
+                        s.distinct_tables,
+                    ]
+                )
         else:
             msg = f"Unknown export kind '{kind}'. Expected 'tables', 'users', or 'sensitive'."
             raise InvalidRequestError(msg)
@@ -313,7 +319,7 @@ class UsageAnalyticsService:
         rows = self._sql.query(
             f"""
             SELECT run_id, status, finished_at, data_as_of, window_start, window_end, read_events, catalogs
-            FROM {self._tables.fqn('rollup_runs')}
+            FROM {self._tables.fqn("rollup_runs")}
             ORDER BY started_at DESC
             LIMIT 1
             """
@@ -341,7 +347,7 @@ class UsageAnalyticsService:
             SELECT coalesce(sum(reads), 0) AS total_reads,
                    count(distinct user_name) AS active_users,
                    count(distinct table_full_name) AS tables_accessed
-            FROM {self._tables.fqn('user_table_usage_daily')}
+            FROM {self._tables.fqn("user_table_usage_daily")}
             WHERE event_date >= date_sub(current_date(), :days)
             """,
             params,
@@ -356,7 +362,7 @@ class UsageAnalyticsService:
                    coalesce(sum(case when access_mode = 'clear' then reads else 0 end), 0) AS clear_reads,
                    coalesce(sum(case when access_mode = 'masked' then reads else 0 end), 0) AS masked_reads,
                    coalesce(sum(case when access_mode = 'exempt' then reads else 0 end), 0) AS exempt_reads
-            FROM {self._tables.fqn('column_usage_daily')}
+            FROM {self._tables.fqn("column_usage_daily")}
             WHERE event_date >= date_sub(current_date(), :days)
               AND access_mode <> 'not_sensitive'
             """,
@@ -383,7 +389,7 @@ class UsageAnalyticsService:
             f"""
             WITH table_days AS (
               SELECT event_date, sum(reads) AS reads, count(distinct user_name) AS users
-              FROM {self._tables.fqn('user_table_usage_daily')}
+              FROM {self._tables.fqn("user_table_usage_daily")}
               WHERE event_date >= date_sub(current_date(), :days)
               GROUP BY event_date
             ),
@@ -391,7 +397,7 @@ class UsageAnalyticsService:
               SELECT event_date,
                 sum(case when access_mode = 'clear' then reads else 0 end) AS clear_reads,
                 sum(case when access_mode = 'masked' then reads else 0 end) AS masked_reads
-              FROM {self._tables.fqn('column_usage_daily')}
+              FROM {self._tables.fqn("column_usage_daily")}
               WHERE event_date >= date_sub(current_date(), :days)
                 AND access_mode <> 'not_sensitive'
               GROUP BY event_date
@@ -433,7 +439,7 @@ class UsageAnalyticsService:
                    sum(u.reads) AS reads,
                    count(distinct u.user_name) AS distinct_users,
                    max(u.last_read_at) AS last_read_at
-            FROM {self._tables.fqn('user_table_usage_daily')} u
+            FROM {self._tables.fqn("user_table_usage_daily")} u
             WHERE u.event_date >= date_sub(current_date(), :days)
               {search_clause}
             GROUP BY u.table_full_name, u.catalog_name
@@ -470,7 +476,7 @@ class UsageAnalyticsService:
                    sum(reads) AS reads,
                    count(distinct table_full_name) AS distinct_tables,
                    max(last_read_at) AS last_read_at
-            FROM {self._tables.fqn('user_table_usage_daily')} u
+            FROM {self._tables.fqn("user_table_usage_daily")} u
             WHERE event_date >= date_sub(current_date(), :days)
               {search_clause}
             GROUP BY user_name
@@ -500,7 +506,7 @@ class UsageAnalyticsService:
                    sum(case when access_mode = 'exempt' then reads else 0 end) AS exempt_reads,
                    count(distinct user_name) AS distinct_users,
                    count(distinct table_full_name) AS distinct_tables
-            FROM {self._tables.fqn('column_usage_daily')}
+            FROM {self._tables.fqn("column_usage_daily")}
             WHERE event_date >= date_sub(current_date(), :days)
               AND access_mode <> 'not_sensitive'
               AND sensitivity_path IS NOT NULL

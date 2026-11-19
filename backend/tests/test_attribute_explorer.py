@@ -43,7 +43,7 @@ def _seed_data_access(container) -> None:  # noqa: ANN001
         UpsertAttributeDefinitionRequest(
             key="data_access",
             description="DAC",
-            governed_tag_keys=["data_access_control"],
+            governed_tag_keys=["access_path"],
         ),
         actor,
     )
@@ -68,10 +68,10 @@ def _seed_data_access(container) -> None:  # noqa: ANN001
         actor,
     )
     container.data_access._tag_loader = lambda _settings: [  # noqa: SLF001
-        TagRow("table", "sandbox", "finance", "budget", "data_access_control", "finance.budget"),
-        TagRow("table", "sandbox", "finance", "budget", "clr_review_status", "reviewed"),
-        TagRow("table", "sandbox", "finance", "forecast", "data_access_control", "finance"),
-        TagRow("table", "sandbox", "finance", "forecast", "clr_review_status", "reviewed"),
+        TagRow("table", "sandbox", "finance", "budget", "access_path", "finance.budget"),
+        TagRow("table", "sandbox", "finance", "budget", "data_governance_status", "ready"),
+        TagRow("table", "sandbox", "finance", "forecast", "access_path", "finance"),
+        TagRow("table", "sandbox", "finance", "forecast", "data_governance_status", "ready"),
     ]
 
 
@@ -190,16 +190,14 @@ def test_attribute_explorer_row_filter_principals_overview(client: TestClient, c
     assert tables[0]["match"] == "exact"
 
 
-def test_attribute_explorer_sensitivity_lists_matching_columns(
-    client: TestClient, container
-) -> None:
+def test_attribute_explorer_sensitivity_lists_matching_columns(client: TestClient, container) -> None:
     identity = _service(container)
     actor = _admin()
     identity.upsert_definition(
         UpsertAttributeDefinitionRequest(
             key="sensitivity",
             description="Sensitivity",
-            governed_tag_keys=["sensitivity_category", "sensitivity"],
+            governed_tag_keys=["access_path", "sensitivity"],
         ),
         actor,
     )
@@ -220,7 +218,7 @@ def test_attribute_explorer_sensitivity_lists_matching_columns(
                 "schema_name": "default",
                 "table_name": "customers",
                 "column_name": "email",
-                "tag_name": "sensitivity_category",
+                "tag_name": "access_path",
                 "tag_value": "public",
             },
             {
@@ -236,7 +234,7 @@ def test_attribute_explorer_sensitivity_lists_matching_columns(
                 "schema_name": "default",
                 "table_name": "customers",
                 "column_name": "phone",
-                "tag_name": "sensitivity_category",
+                "tag_name": "access_path",
                 "tag_value": "public",
             },
             {
@@ -252,7 +250,7 @@ def test_attribute_explorer_sensitivity_lists_matching_columns(
                 "schema_name": "hr",
                 "table_name": "employees",
                 "column_name": "ssn",
-                "tag_name": "sensitivity_category",
+                "tag_name": "access_path",
                 "tag_value": "hr",
             },
             {

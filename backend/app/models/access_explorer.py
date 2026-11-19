@@ -32,7 +32,7 @@ class SuggestedAttributeKind(StrEnum):
     Attributes:
         SENSITIVITY: A ``sensitivity`` path that would unmask columns.
         ROW_FILTER: A row-filter dimension value that would reveal rows.
-        DATA_ACCESS: A ``data_access_control`` (or configured) value for tagged-level grants.
+        DATA_ACCESS: An ``access_path`` (or configured) value for tagged-level grants.
     """
 
     SENSITIVITY = "sensitivity"
@@ -99,7 +99,7 @@ class ColumnTagMap(ApiModel):
     """Governance tag values on a column; None when the tag is not set.
 
     Attributes:
-        sensitivity_category: ``sensitivity_category`` tag (category part of the path).
+        sensitivity_category: ``access_path`` tag (path part of the required sensitivity path).
         sensitivity: ``sensitivity`` tag (level within the category).
         mask_rule: ``mask_rule`` tag selecting how denied values look.
         data_type: ``data_type`` tag used by the mask policies to pick a masking function.
@@ -121,7 +121,7 @@ class ColumnAccessInsight(ApiModel):
         data_type: SQL type of the column, or None when unknown.
         tags: Governance tag values on the column.
         access_state: What the user sees.
-        required_sensitivity_path: ``<sensitivity_category>.<sensitivity>`` path needed to
+        required_sensitivity_path: ``<access_path>.<sensitivity>`` path needed to
             unmask; None when either tag is missing.
         user_has_access: True when the user holds that path or a parent of it (also True for
             columns without sensitivity tags).

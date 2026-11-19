@@ -90,6 +90,7 @@ from backend.app.services.data_access_planner import (
     AssignmentRow,
     TagRow,
     group_name,
+    is_subscription_group,
     plan_data_access,
     truncate_plan,
 )
@@ -108,8 +109,10 @@ from backend.app.services.data_access_status import compute_access_status, is_pr
 from backend.app.services.identity_attributes import ASSIGNMENT_ASSIGNED, IdentityAttributeService
 from backend.app.services.table_query import TableQuery, sort_and_filter
 from backend.app.services.warehouse_scaling import WarehouseScaler
+from backend.app.services.workspace_access import WorkspaceGroupAccess
 
 logger = logging.getLogger(__name__)
+
 
 def collapse_membership_by_principal_id(
     changes: list[tuple[str, str, MembershipChange]],
@@ -345,9 +348,7 @@ class DataAccessService:
                 try:
                     self._sql.execute(admin_catalog_access_sql(catalog, principal))
                 except (NotConfiguredError, DatabricksError, UpstreamError, InvalidRequestError) as exc:
-                    logger.warning(
-                        "Could not grant Admin SP access on enrolled catalog %s: %s", catalog, exc
-                    )
+                    logger.warning("Could not grant Admin SP access on enrolled catalog %s: %s", catalog, exc)
                     continue
                 self._ensured_catalogs.add(catalog.lower())
                 logger.info(
@@ -1410,9 +1411,7 @@ class DataAccessService:
             if missing_error and not state.is_orphaned(
                 assignment.principal_name, assignment.principal_type.value
             ):
-                state.upsert_orphan(
-                    assignment.principal_name, assignment.principal_type.value, missing_error
-                )
+                state.upsert_orphan(assignment.principal_name, assignment.principal_type.value, missing_error)
         return [
             compute_access_status(
                 a,
@@ -1595,6 +1594,7 @@ class DataAccessService:
         )
         enrolled = self.list_enrolled_catalogs(settings, fresh=True)
         catalog_filter = self._catalog_sql(settings, "catalog_name", enrolled)
+
         def query(label: str, sql: str) -> list[dict[str, Any]]:
             with timed_call(label):
                 return self._sql.query(sql)
@@ -1858,7 +1858,7 @@ class DataAccessService:
             escaped = prefix.replace('"', '\\"')
             for group in self._account_scim_list_groups(filter_expr=f'displayName sw "{escaped}"'):
                 name = group.get("displayName")
-                if name:
+                if name and not is_subscription_group(str(name), prefix):
                     names.add(str(name))
         except DatabricksError as exc:
             logger.warning("Listing managed account groups failed: %s", exc)
@@ -1968,6 +1968,13 @@ class DataAccessService:
         )
         with phase("apply.groups"):
             group_ids = self._ensure_groups(plan.groups, errors, failures)
+        with phase("apply.workspace_access"):
+            planned = {g.name.lower() for g in plan.groups}
+            WorkspaceGroupAccess(lambda: self._factory.admin().api_client).ensure(
+                {name: gid for name, gid in group_ids.items() if name in planned},
+                settings.workspace_entitlements,
+                errors,
+            )
         with phase("apply.nest"):
             self._nest_groups(plan.groups, group_ids, errors, failures)
         with phase("apply.membership"):

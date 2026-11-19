@@ -4,9 +4,9 @@
 Creates/extends the governed tag policy ``data_access_controlled`` (value ``true``) and tags
 the catalogs listed in ``CATALOGS`` (edit for your workspace).
 
-Default catalogs:
-
-  * data_governance_demo  (from ``scripts/seed_data_governance_demo.py``)
+Default catalogs are the twelve ``dga_<domain>`` catalogs from
+``scripts/seed_data_governance_demo.py``. The seed script already enrolls them; use this
+script to re-apply enrollment after a catalog is recreated.
 
 Usage:
   python scripts/enroll_governance_catalogs.py --profile dbc-16303671-e52d --warehouse-id dd0a656c3ddc883e
@@ -24,7 +24,18 @@ from typing import Any
 TAG_KEY = "data_access_controlled"
 TAG_VALUE = "true"
 CATALOGS = (
-    "data_governance_demo",
+    "dga_people",
+    "dga_incidents",
+    "dga_finance",
+    "dga_assets",
+    "dga_authorities",
+    "dga_communications",
+    "dga_external_coordination",
+    "dga_organizations",
+    "dga_assessments",
+    "dga_information_technology",
+    "dga_threats_and_hazards",
+    "dga_training_and_exercises",
 )
 
 

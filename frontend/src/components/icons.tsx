@@ -113,6 +113,15 @@ export const DataAccessIcon = (p: IconProps) => (
   </Icon>
 );
 
+/** Subscriptions nav icon (a clock-badged key card). */
+export const SubscriptionIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <rect x="2.5" y="4" width="8" height="8.5" rx="1" />
+    <circle cx="11.5" cy="5" r="2.5" />
+    <path d="M11.5 4v1l.7.6M4.5 8h4M4.5 10.5h2.5" />
+  </Icon>
+);
+
 /** Analytics / charts nav icon. */
 export const AnalyticsIcon = (p: IconProps) => (
   <Icon {...p}>

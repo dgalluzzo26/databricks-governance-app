@@ -73,7 +73,7 @@ export function DataAccessPage() {
     <div className={styles.stack}>
       <PageHeader
         title="Data access"
-        description="Plans one nested group per data_access_control value and SELECT only on reviewed tagged tables (plus USE CATALOG/SCHEMA). Schema/catalog tags still seed parent groups for nesting."
+        description="Plans one nested group per access_path value and SELECT only on reviewed tagged tables (plus USE CATALOG/SCHEMA). Schema/catalog tags still seed parent groups for nesting."
       />
 
       <div className={styles.tabs} role="tablist" aria-label="Data access views">

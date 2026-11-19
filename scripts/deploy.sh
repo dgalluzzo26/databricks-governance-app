@@ -43,6 +43,25 @@ step "Building frontend"
 step "Validating bundle (target: $TARGET)"
 databricks bundle validate -t "$TARGET" ${BUNDLE_ARGS[@]+"${BUNDLE_ARGS[@]}"}
 
+# App telemetry points at {app_catalog}.{app_schema}.otel_*; on Default Storage
+# metastores the catalogs API cannot create that catalog, but SQL can. Do it before
+# bundle deploy so the app resource can be created without a manual UI step.
+step "Ensuring app catalog exists"
+ENSURE_ARGS=()
+i=0
+while [[ $i -lt ${#BUNDLE_ARGS[@]} ]]; do
+  if [[ "${BUNDLE_ARGS[$i]}" == "--var" ]]; then
+    ENSURE_ARGS+=("--var" "${BUNDLE_ARGS[$((i + 1))]}")
+    i=$((i + 2))
+  elif [[ "${BUNDLE_ARGS[$i]}" == --var=* ]]; then
+    ENSURE_ARGS+=("--var" "${BUNDLE_ARGS[$i]#--var=}")
+    i=$((i + 1))
+  else
+    i=$((i + 1))
+  fi
+done
+python3 scripts/ensure_app_catalog.py -t "$TARGET" ${ENSURE_ARGS[@]+"${ENSURE_ARGS[@]}"}
+
 step "Deploying bundle"
 databricks bundle deploy -t "$TARGET" ${BUNDLE_ARGS[@]+"${BUNDLE_ARGS[@]}"}
 

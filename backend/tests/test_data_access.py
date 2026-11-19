@@ -47,8 +47,8 @@ def _tag(level: str, catalog: str, schema: str | None, table: str | None, key: s
 
 def _reviewed(level: str, catalog: str, schema: str | None, table: str | None, value: str) -> list[TagRow]:
     return [
-        _tag(level, catalog, schema, table, "data_access_control", value),
-        _tag(level, catalog, schema, table, "clr_review_status", "reviewed"),
+        _tag(level, catalog, schema, table, "access_path", value),
+        _tag(level, catalog, schema, table, "data_governance_status", "ready"),
     ]
 
 
@@ -106,7 +106,7 @@ def test_plan_marks_existing_nests_from_actual_members() -> None:
 
 
 def test_plan_skips_unreviewed_objects() -> None:
-    tags = [_tag("table", "sandbox", "finance", "secrets", "data_access_control", "finance")]
+    tags = [_tag("table", "sandbox", "finance", "secrets", "access_path", "finance")]
     plan = plan_data_access(DataAccessSettings(), tags, [], set())
     assert plan.summary.eligible_objects == 0
     assert plan.summary.skipped_unreviewed == 1
@@ -321,7 +321,7 @@ def test_settings_round_trip_allows_dry_run_flag(client: TestClient) -> None:
     admin = headers_for("admin@example.com")
     body = client.get("/api/data-access/settings", headers=admin).json()
     assert body["minIntervalMinutes"] == 5
-    assert body["settings"]["accessTagKey"] == "data_access_control"
+    assert body["settings"]["accessTagKey"] == "access_path"
     assert body["settings"]["enrollmentCatalogTagKey"] == "data_access_controlled"
     assert body["settings"]["enrollmentCatalogTagValue"] == "true"
     assert body["applyAvailable"] is True
@@ -610,9 +610,7 @@ class _Factory:
 class _Identity:
     """Identity service stand-in for setup checks."""
 
-    def __init__(
-        self, *, sensitivity=None, data_access=None, access_tag: str = "data_access_control"
-    ) -> None:  # noqa: ANN001
+    def __init__(self, *, sensitivity=None, data_access=None, access_tag: str = "access_path") -> None:  # noqa: ANN001
         self._sensitivity = sensitivity
         self._data_access = data_access
         self._access_tag = access_tag
@@ -794,7 +792,11 @@ def test_put_settings_without_tuning_fields_keeps_them(client: TestClient) -> No
     partial = client.put(
         "/api/data-access/settings",
         headers=admin,
-        json={"intervalMinutes": 20, "enrollmentCatalogTagKey": "data_access_controlled", "enrollmentCatalogTagValue": "true"},
+        json={
+            "intervalMinutes": 20,
+            "enrollmentCatalogTagKey": "data_access_controlled",
+            "enrollmentCatalogTagValue": "true",
+        },
     )
     assert partial.status_code == 200
     saved = partial.json()["settings"]
@@ -865,7 +867,7 @@ def test_readiness_healthy_with_identity_definitions() -> None:
     assert _check(readiness, "create_groups").ok is True
     details = {c.id: c.detail for c in readiness.setup_checks}
     assert details["sensitivity_definition"] == "Configured as 'sensitivity'"
-    assert details["data_access_definition"] == "Configured as 'data_access' → tag 'data_access_control'"
+    assert details["data_access_definition"] == "Configured as 'data_access' → tag 'access_path'"
 
 
 def test_readiness_setup_checks_report_missing_definitions() -> None:
@@ -875,7 +877,7 @@ def test_readiness_setup_checks_report_missing_definitions() -> None:
     details = {c.id: c.detail for c in readiness.setup_checks}
     assert details["sensitivity_definition"] == "Create Identity definition with key 'sensitivity'"
     assert details["data_access_definition"] == (
-        "Create Identity definition linked to governed tag 'data_access_control'"
+        "Create Identity definition linked to governed tag 'access_path'"
     )
 
 
@@ -1184,13 +1186,13 @@ def test_load_tags_builds_catalog_schema_and_table_rows() -> None:
         {
             "ORDER BY catalog_name": [{"catalog_name": "sandbox"}],
             "system.information_schema.catalog_tags": [
-                {"catalog_name": "sandbox", "tag_name": "data_access_control", "tag_value": "finance"}
+                {"catalog_name": "sandbox", "tag_name": "access_path", "tag_value": "finance"}
             ],
             "system.information_schema.schema_tags": [
                 {
                     "catalog_name": "sandbox",
                     "schema_name": "finance",
-                    "tag_name": "clr_review_status",
+                    "tag_name": "data_governance_status",
                     "tag_value": None,
                 }
             ],
@@ -1199,7 +1201,7 @@ def test_load_tags_builds_catalog_schema_and_table_rows() -> None:
                     "catalog_name": "sandbox",
                     "schema_name": "finance",
                     "table_name": "budget",
-                    "tag_name": "data_access_control",
+                    "tag_name": "access_path",
                     "tag_value": "finance",
                 }
             ],
@@ -1208,16 +1210,16 @@ def test_load_tags_builds_catalog_schema_and_table_rows() -> None:
     svc = _service(sql=sql)
     tags = svc._load_tags(DataAccessSettings())  # noqa: SLF001
     assert tags == [
-        TagRow("catalog", "sandbox", None, None, "data_access_control", "finance"),
-        TagRow("schema", "sandbox", "finance", None, "clr_review_status", ""),
-        TagRow("table", "sandbox", "finance", "budget", "data_access_control", "finance"),
+        TagRow("catalog", "sandbox", None, None, "access_path", "finance"),
+        TagRow("schema", "sandbox", "finance", None, "data_governance_status", ""),
+        TagRow("table", "sandbox", "finance", "budget", "access_path", "finance"),
     ]
     assert any("IN ('sandbox')" in statement for statement in sql.statements)
 
 
 def test_load_tags_public_delegates_to_tag_loader() -> None:
     svc = _service()
-    _loaders(svc, tags=[TagRow("catalog", "sandbox", None, None, "data_access_control", "finance")])
+    _loaders(svc, tags=[TagRow("catalog", "sandbox", None, None, "access_path", "finance")])
     assert svc.load_tags_public()[0].catalog == "sandbox"
 
 
@@ -1587,9 +1589,22 @@ def test_resolve_principal_records_lookup_exceptions() -> None:
 def test_apply_plan_creates_nests_members_and_grants() -> None:
     created: list[str] = []
     patches: list[tuple[str, list[dict[str, Any]]]] = []
+    assigned: list[str] = []
+    entitled: list[tuple[str, list[str]]] = []
 
     def _handler(method, path, query, body):  # noqa: ANN001, ANN202
         del query
+        if path == "/api/2.0/preview/permissionassignments":
+            return {"permission_assignments": [{"principal": {"principal_id": "g-parent"}}]}
+        if path.startswith("/api/2.0/preview/permissionassignments/principals/"):
+            assigned.append(path.rsplit("/", 1)[-1])
+            return {}
+        if path == "/api/2.0/preview/scim/v2/Groups":
+            return {"Resources": [{"id": "g-parent", "entitlements": [{"value": "workspace-access"}]}]}
+        if path.startswith("/api/2.0/preview/scim/v2/Groups/"):
+            values = [v["value"] for v in body["Operations"][0]["value"]]
+            entitled.append((path.rsplit("/", 1)[-1], values))
+            return {}
         if method == "GET" and path.endswith("/Users"):
             return {"Resources": []}
         if method == "GET":
@@ -1652,6 +1667,10 @@ def test_apply_plan_creates_nests_members_and_grants() -> None:
     result = svc._apply_plan_impl(DataAccessSettings(), plan)  # noqa: SLF001
 
     assert created == ["dac_finance_budget", "dac_orphan"]
+    # Already-assigned groups are left alone; every group ends up with the minimum entitlements.
+    assert sorted(set(assigned)) == ["g-child"]
+    assert ("g-parent", ["databricks-sql-access"]) in entitled
+    assert ("g-child", ["databricks-sql-access", "workspace-access"]) in entitled
     assert (
         "/api/2.0/account/scim/v2/Groups/g-child",
         [{"op": "add", "path": "members", "value": [{"value": "g-parent"}]}],

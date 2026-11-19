@@ -47,7 +47,7 @@ class ExplorerSql(FakeSql):
         self.tags = [
             {
                 "column_name": "s_name",
-                "tag_name": "sensitivity_category",
+                "tag_name": "access_path",
                 "tag_value": "finance.budget",
             },
             {"column_name": "s_name", "tag_name": "sensitivity", "tag_value": "PII.Name"},
@@ -55,7 +55,7 @@ class ExplorerSql(FakeSql):
             {"column_name": "s_name", "tag_name": "mask_rule", "tag_value": "full"},
             {
                 "column_name": "s_open",
-                "tag_name": "sensitivity_category",
+                "tag_name": "access_path",
                 "tag_value": "finance.budget",
             },
             {"column_name": "s_open", "tag_name": "sensitivity", "tag_value": "PII.Name"},
@@ -195,7 +195,7 @@ def test_view_inherits_masks_and_row_filters_from_lineage(container) -> None:  #
     ]
     sql.source_tags = {
         "src_people": [
-            {"column_name": "first_name", "tag_name": "sensitivity_category", "tag_value": "finance.budget"},
+            {"column_name": "first_name", "tag_name": "access_path", "tag_value": "finance.budget"},
             {"column_name": "first_name", "tag_name": "sensitivity", "tag_value": "PII.Name"},
             {"column_name": "first_name", "tag_name": "data_type", "tag_value": "string"},
             {"column_name": "first_name", "tag_name": "mask_rule", "tag_value": "full"},
@@ -411,15 +411,15 @@ def test_sensitivity_leaves_only_and_admin_routing(container) -> None:  # noqa: 
     service, sql = _explorer(container)
     # Related paths → leaf suggestions only (no broader hierarchy parents)
     sql.tags = [
-        {"column_name": "a", "tag_name": "sensitivity_category", "tag_value": "finance.budget"},
+        {"column_name": "a", "tag_name": "access_path", "tag_value": "finance.budget"},
         {"column_name": "a", "tag_name": "sensitivity", "tag_value": "PII.Name"},
         {"column_name": "a", "tag_name": "data_type", "tag_value": "string"},
         {"column_name": "a", "tag_name": "mask_rule", "tag_value": "full"},
-        {"column_name": "b", "tag_name": "sensitivity_category", "tag_value": "finance.budget"},
+        {"column_name": "b", "tag_name": "access_path", "tag_value": "finance.budget"},
         {"column_name": "b", "tag_name": "sensitivity", "tag_value": "PII.SSN"},
         {"column_name": "b", "tag_name": "data_type", "tag_value": "string"},
         {"column_name": "b", "tag_name": "mask_rule", "tag_value": "full"},
-        {"column_name": "c", "tag_name": "sensitivity_category", "tag_value": "public"},
+        {"column_name": "c", "tag_name": "access_path", "tag_value": "public"},
         {"column_name": "c", "tag_name": "sensitivity", "tag_value": "PII.Name"},
         {"column_name": "c", "tag_name": "data_type", "tag_value": "string"},
         {"column_name": "c", "tag_name": "mask_rule", "tag_value": "full"},
@@ -508,8 +508,8 @@ def test_row_filter_only_table_suggests_dimension(container) -> None:  # noqa: A
 def test_analyze_table_suggests_data_access(container) -> None:  # noqa: ANN001
     service, sql = _explorer(container)
     sql.table_tags = [
-        {"tag_name": "data_access_control", "tag_value": "finance"},
-        {"tag_name": "clr_review_status", "tag_value": "reviewed"},
+        {"tag_name": "access_path", "tag_value": "finance"},
+        {"tag_name": "data_governance_status", "tag_value": "ready"},
     ]
     actor = _admin()
     container.identity_attributes.upsert_definition(
@@ -524,7 +524,7 @@ def test_analyze_table_suggests_data_access(container) -> None:  # noqa: ANN001
     stored = container.storage.identity_attributes.get_definition("data_access")
     assert stored is not None
     container.storage.identity_attributes.upsert_definition(
-        stored.model_copy(update={"governed_tag_keys": ["data_access_control"]})
+        stored.model_copy(update={"governed_tag_keys": ["access_path"]})
     )
     user = CurrentUser(
         user_name="analyst@example.com",
@@ -547,8 +547,8 @@ def test_analyze_table_dac_already_held_is_flagged(container) -> None:  # noqa: 
     """A value the user already holds is flagged so the UI can say "Already held"."""
     service, sql = _explorer(container)
     sql.table_tags = [
-        {"tag_name": "data_access_control", "tag_value": "finance"},
-        {"tag_name": "clr_review_status", "tag_value": "reviewed"},
+        {"tag_name": "access_path", "tag_value": "finance"},
+        {"tag_name": "data_governance_status", "tag_value": "ready"},
     ]
     actor = _admin()
     container.identity_attributes.upsert_definition(
@@ -563,7 +563,7 @@ def test_analyze_table_dac_already_held_is_flagged(container) -> None:  # noqa: 
     stored = container.storage.identity_attributes.get_definition("data_access")
     assert stored is not None
     container.storage.identity_attributes.upsert_definition(
-        stored.model_copy(update={"governed_tag_keys": ["data_access_control"]})
+        stored.model_copy(update={"governed_tag_keys": ["access_path"]})
     )
     container.identity_attributes.assign(
         AssignAttributeRequest(
@@ -595,8 +595,8 @@ def test_analyze_table_dac_without_definition_does_not_fail(container) -> None: 
     """Tagged objects must still analyze when no Identity attribute maps the access tag."""
     service, sql = _explorer(container)
     sql.table_tags = [
-        {"tag_name": "data_access_control", "tag_value": "finance.budget"},
-        {"tag_name": "clr_review_status", "tag_value": "reviewed"},
+        {"tag_name": "access_path", "tag_value": "finance.budget"},
+        {"tag_name": "data_governance_status", "tag_value": "ready"},
     ]
     user = CurrentUser(
         user_name="analyst@example.com",
@@ -666,8 +666,8 @@ class _RestTags:
     def list(self, entity_type: str, entity_name: str) -> list[Any]:
         assert entity_type == "tables"
         return [
-            type("T", (), {"tag_key": "data_access_control", "tag_value": "finance"})(),
-            type("T", (), {"tag_key": "clr_review_status", "tag_value": "reviewed"})(),
+            type("T", (), {"tag_key": "access_path", "tag_value": "finance"})(),
+            type("T", (), {"tag_key": "data_governance_status", "tag_value": "ready"})(),
             type("T", (), {"tag_key": "unrelated", "tag_value": "x"})(),
         ]
 
@@ -712,7 +712,7 @@ def test_analyze_table_reads_table_and_table_tags_from_rest(container) -> None: 
     )
     stored = container.storage.identity_attributes.get_definition("data_access")
     container.storage.identity_attributes.upsert_definition(
-        stored.model_copy(update={"governed_tag_keys": ["data_access_control"]})
+        stored.model_copy(update={"governed_tag_keys": ["access_path"]})
     )
 
     insight = service.analyze_table(AnalyzeTableRequest(full_name="demo.default.customers"), _analyst())
@@ -740,7 +740,7 @@ def test_analyze_reads_approver_routing_once_for_many_governed_columns(container
         row
         for i in range(12)
         for row in (
-            {"column_name": f"c{i}", "tag_name": "sensitivity_category", "tag_value": "finance.budget"},
+            {"column_name": f"c{i}", "tag_name": "access_path", "tag_value": "finance.budget"},
             {"column_name": f"c{i}", "tag_name": "sensitivity", "tag_value": f"PII.Field{i}"},
             {"column_name": f"c{i}", "tag_name": "data_type", "tag_value": "string"},
         )

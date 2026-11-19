@@ -33,7 +33,7 @@ An admin assigns you (or your group) to one or more of these:
 | Approver type | Covers | Example |
 | --- | --- | --- |
 | **Sensitivity category** | Sensitivity paths under a category prefix | `finance` covers `finance.budget.PII.Name` |
-| **Data-access path** | `data_access_control` values under a path | `finance` covers `finance.budget` |
+| **Data-access path** | `access_path` values under a path | `finance` covers `finance.budget` |
 | **Row-filter dimension** | Every value of one dimension | `state` covers `state=CA` and `state=*` |
 
 The most specific match wins. If `finance.budget` has its own approver, its requests go there

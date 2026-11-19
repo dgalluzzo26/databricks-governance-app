@@ -166,9 +166,7 @@ class IdentityUcSync:
                 chunk = rows[start : start + _OVERWRITE_CHUNK]
                 step_detail(f"{start + len(chunk)} of {len(rows)} rows staged")
                 self._sql.execute(f"INSERT INTO {staging.fqn} ({columns}) VALUES {', '.join(chunk)}")
-            self._sql.execute(
-                f"INSERT OVERWRITE {table.fqn} ({columns}) SELECT {columns} FROM {staging.fqn}"
-            )
+            self._sql.execute(f"INSERT OVERWRITE {table.fqn} ({columns}) SELECT {columns} FROM {staging.fqn}")
         finally:
             self._sql.execute(f"DROP TABLE IF EXISTS {staging.fqn}")
 
@@ -196,34 +194,42 @@ def _timestamp(value: datetime | None) -> str:
 
 def _definition_row(definition: AttributeDefinition) -> str:
     now = datetime.now(UTC)
-    return "(" + ", ".join(
-        (
-            _text(definition.key),
-            _text(definition.description),
-            _text(json.dumps(definition.governed_tag_keys)),
-            _text(json.dumps([])),
-            _text(definition.created_by),
-            _timestamp(definition.created_at or now),
-            _text(definition.updated_by),
-            _timestamp(definition.updated_at or now),
+    return (
+        "("
+        + ", ".join(
+            (
+                _text(definition.key),
+                _text(definition.description),
+                _text(json.dumps(definition.governed_tag_keys)),
+                _text(json.dumps([])),
+                _text(definition.created_by),
+                _timestamp(definition.created_at or now),
+                _text(definition.updated_by),
+                _timestamp(definition.updated_at or now),
+            )
         )
-    ) + ")"
+        + ")"
+    )
 
 
 def _assignment_row(assignment: IdentityAttributeAssignment) -> str:
-    return "(" + ", ".join(
-        (
-            _text(assignment.assignment_id),
-            _text(assignment.principal_name),
-            _text(assignment.principal_type.value),
-            _text(assignment.attribute_key),
-            _text(assignment.attribute_value),
-            _text(assignment.source.value),
-            _text(assignment.granted_by),
-            _text(assignment.justification),
-            _timestamp(assignment.expires_at),
-            _timestamp(assignment.created_at),
-            _timestamp(assignment.revoked_at),
-            _text(assignment.revoked_by),
+    return (
+        "("
+        + ", ".join(
+            (
+                _text(assignment.assignment_id),
+                _text(assignment.principal_name),
+                _text(assignment.principal_type.value),
+                _text(assignment.attribute_key),
+                _text(assignment.attribute_value),
+                _text(assignment.source.value),
+                _text(assignment.granted_by),
+                _text(assignment.justification),
+                _timestamp(assignment.expires_at),
+                _timestamp(assignment.created_at),
+                _timestamp(assignment.revoked_at),
+                _text(assignment.revoked_by),
+            )
         )
-    ) + ")"
+        + ")"
+    )

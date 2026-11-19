@@ -45,6 +45,7 @@ from backend.app.models.mask_rule import MaskRuleDefinition, MaskRuleKind
 from backend.app.models.performance import RequestMetric
 from backend.app.models.policy_exception import PolicyException
 from backend.app.models.principal import PrincipalKind
+from backend.app.models.subscription import Subscription
 from backend.app.models.task import TaskRecord
 from backend.app.repositories.base import (
     STALE_TASK_MESSAGE,
@@ -66,6 +67,7 @@ from backend.app.repositories.data_access_state import (
     DataAccessStateRepository,
 )
 from backend.app.repositories.lakebase_views import VIEW_DEFINITIONS, drop_statements
+from backend.app.repositories.subscriptions import SubscriptionRepository
 from backend.app.services.table_query import SqlColumn, TableQuery, filter_sql, order_sql
 
 logger = logging.getLogger(__name__)
@@ -265,6 +267,18 @@ CREATE UNIQUE INDEX IF NOT EXISTS policy_exceptions_uniq
   ON {schema}.policy_exceptions (lower(principal_name), principal_type);
 CREATE INDEX IF NOT EXISTS policy_exceptions_principal_idx
   ON {schema}.policy_exceptions (principal_type, lower(principal_name));
+
+CREATE TABLE IF NOT EXISTS {schema}.subscriptions (
+  subscription_id TEXT PRIMARY KEY,
+  name            TEXT NOT NULL,
+  status          TEXT NOT NULL,
+  created_by      TEXT NOT NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  doc             JSONB NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS subscriptions_name_uniq
+  ON {schema}.subscriptions (lower(name));
 
 CREATE TABLE IF NOT EXISTS {schema}.request_metrics (
   metric_id        BIGSERIAL PRIMARY KEY,
@@ -1614,6 +1628,74 @@ class LakebaseCategoryApproverRepository(CategoryApproverRepository):
         )
 
 
+class LakebaseSubscriptionRepository(SubscriptionRepository):
+    """Lakebase store for subscriptions: one JSONB document per row, name unique.
+
+    Args:
+        pg: Schema-scoped query helper.
+    """
+
+    def __init__(self, pg: _Pg) -> None:
+        self._pg = pg
+
+    def list_subscriptions(self) -> list[Subscription]:
+        """List every subscription, newest first."""
+        rows = self._pg.fetch("SELECT doc FROM {schema}.subscriptions ORDER BY created_at DESC")
+        return [Subscription.model_validate(r["doc"]) for r in rows]
+
+    def get_subscription(self, subscription_id: str) -> Subscription | None:
+        """Fetch one subscription by id, or None."""
+        rows = self._pg.fetch(
+            "SELECT doc FROM {schema}.subscriptions WHERE subscription_id = %(id)s",
+            {"id": subscription_id},
+        )
+        return Subscription.model_validate(rows[0]["doc"]) if rows else None
+
+    def get_by_name(self, name: str) -> Subscription | None:
+        """Fetch one subscription by name (case-insensitive), or None."""
+        rows = self._pg.fetch(
+            "SELECT doc FROM {schema}.subscriptions WHERE lower(name) = lower(%(name)s)",
+            {"name": name.strip()},
+        )
+        return Subscription.model_validate(rows[0]["doc"]) if rows else None
+
+    def save_subscription(self, subscription: Subscription) -> Subscription:
+        """Insert or replace a subscription keyed by ``subscription_id``."""
+        self._pg.run(
+            """
+            INSERT INTO {schema}.subscriptions (
+              subscription_id, name, status, created_by, created_at, updated_at, doc
+            ) VALUES (
+              %(id)s, %(name)s, %(status)s, %(created_by)s, %(created_at)s, %(updated_at)s, %(doc)s
+            )
+            ON CONFLICT (subscription_id) DO UPDATE SET
+              status = EXCLUDED.status,
+              updated_at = EXCLUDED.updated_at,
+              doc = EXCLUDED.doc
+            """,
+            {
+                "id": subscription.subscription_id,
+                "name": subscription.name,
+                "status": subscription.status.value,
+                "created_by": subscription.created_by,
+                "created_at": subscription.created_at,
+                "updated_at": subscription.updated_at,
+                "doc": Jsonb(subscription.model_dump(mode="json")),
+            },
+        )
+        return subscription
+
+    def delete_subscription(self, subscription_id: str) -> bool:
+        """Delete a subscription; True when a row was removed."""
+        if self.get_subscription(subscription_id) is None:
+            return False
+        self._pg.run(
+            "DELETE FROM {schema}.subscriptions WHERE subscription_id = %(id)s",
+            {"id": subscription_id},
+        )
+        return True
+
+
 class LakebasePolicyExceptionRepository(PolicyExceptionRepository):
     """Lakebase store for global ABAC policy exceptions.
 
@@ -2161,11 +2243,17 @@ class LakebaseStorageProvider(StorageProvider):
         self._tasks = LakebaseTaskRepository(self._pg)
         self._data_access_views = LakebaseDataAccessViews(self._pg)
         self._data_access_state = LakebaseDataAccessStateRepository(self._pg)
+        self._subscriptions = LakebaseSubscriptionRepository(self._pg)
 
     @property
     def data_access_state(self) -> DataAccessStateRepository:
         """Return the persisted outstanding-work, tag snapshot, and membership event store."""
         return self._data_access_state
+
+    @property
+    def subscriptions(self) -> SubscriptionRepository:
+        """Return the persisted subscription store."""
+        return self._subscriptions
 
     @property
     def settings(self) -> SettingsRepository:

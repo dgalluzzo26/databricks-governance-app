@@ -2,7 +2,7 @@
 
 Reads the rollup snapshots in ``{app_catalog}.usage``:
 
-- ``governed_table_snapshot``: enrolled tables carrying a ``data_access_control`` tag.
+- ``governed_table_snapshot``: enrolled tables carrying an ``access_path`` tag.
 - ``table_access_snapshot``: (table, user) holders, direct or through a group, with the grant behind it.
 - ``user_table_usage_daily``: reads per user per table per day (the usage window).
 

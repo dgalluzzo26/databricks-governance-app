@@ -50,7 +50,7 @@ class CategoryApprover(ApiModel):
         approver_id: Unique identifier of the approver entry.
         attribute_key: ``sensitivity`` for category routing, or a row-filter dimension key
             for dimension-scoped approvers.
-        category_path: For sensitivity, the ``sensitivity_category`` path prefix. For a
+        category_path: For sensitivity, the ``access_path`` path prefix. For a
             row-filter dimension, the dimension key (exact match).
         principal_name: User name or group name of the approver.
         principal_type: ``USER`` or ``GROUP``.
@@ -79,9 +79,7 @@ class UpsertCategoryApproverRequest(ApiModel):
         principal_type: Kind of principal; the service accepts only ``USER`` or ``GROUP``.
     """
 
-    attribute_key: str = Field(
-        default=SENSITIVITY_ATTRIBUTE_KEY, min_length=1, max_length=128
-    )
+    attribute_key: str = Field(default=SENSITIVITY_ATTRIBUTE_KEY, min_length=1, max_length=128)
     category_path: str = Field(min_length=1, max_length=256)
     principal_name: str = Field(min_length=1, max_length=256)
     principal_type: PrincipalKind
@@ -200,9 +198,7 @@ class CreateAccessRequestBody(ApiModel):
         justification: Business justification; stripped, 1-2000 chars.
     """
 
-    attribute_key: str = Field(
-        default=SENSITIVITY_ATTRIBUTE_KEY, min_length=1, max_length=128
-    )
+    attribute_key: str = Field(default=SENSITIVITY_ATTRIBUTE_KEY, min_length=1, max_length=128)
     attribute_value: str = Field(min_length=1, max_length=512)
     requested_expires_at: datetime
     justification: str = Field(min_length=1, max_length=2000)

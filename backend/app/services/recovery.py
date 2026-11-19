@@ -45,6 +45,7 @@ from backend.app.models.recovery import (
     RecoveryPreview,
     RecoveryPushResult,
 )
+from backend.app.models.subscription import Subscription
 from backend.app.models.user import CurrentUser
 from backend.app.repositories.base import StorageProvider
 from backend.app.services.mask_rules import JOINABLE_SALT_KEY
@@ -57,6 +58,7 @@ SETTINGS_KEY = "recovery_git"
 SCHEDULE_STATE_KEY = "recovery_git_schedule"
 LOCK_KEY = "recovery_git_lock"
 DATA_ACCESS_SETTINGS_KEY = "data_access"
+APP_SETTINGS_KEY = "app_runtime"
 REDACTED = "<redacted>"
 _SECRET_KEY_HINT = re.compile(r"secret|token|password|credential", re.IGNORECASE)
 
@@ -90,6 +92,8 @@ EXPECTED_FILES = (
     "masking/rules.yaml",
     "masking/config.yaml",
     "exceptions/policy_exceptions.yaml",
+    "settings/app.yaml",
+    "subscriptions/subscriptions.yaml",
 )
 
 
@@ -416,6 +420,11 @@ class RecoveryService:
         warnings.append(
             "Re-run identity UC sync, mask-rule sync, and data-access apply so Unity Catalog matches."
         )
+        if counts.subscriptions:
+            warnings.append(
+                "Recovered subscriptions keep their status and time window. Run the data-access sync "
+                "job (or Sync now on each subscription) to recreate their groups, members and grants here."
+            )
         salt_snapshot = parsed.get("masking/config.yaml") or {}
         salt_was_configured = bool((salt_snapshot.get("joinable_salt") or {}).get("configured"))
         if salt_was_configured and not self._storage.mask_rules.get_config(JOINABLE_SALT_KEY):
@@ -487,6 +496,7 @@ class RecoveryService:
         policy_exceptions = len(
             [e for e in self._storage.policy_exceptions.list_exceptions() if not e.system]
         )
+        subscriptions = len(self._storage.subscriptions.list_subscriptions())
         data_access = self._storage.settings.get_all().get(DATA_ACCESS_SETTINGS_KEY)
         data_access_configured = isinstance(data_access, dict) and bool(data_access)
         parts: list[str] = []
@@ -500,6 +510,8 @@ class RecoveryService:
             parts.append(f"{mask_rules} mask rule{'s' if mask_rules != 1 else ''}")
         if policy_exceptions:
             parts.append(f"{policy_exceptions} policy exception{'s' if policy_exceptions != 1 else ''}")
+        if subscriptions:
+            parts.append(f"{subscriptions} subscription{'s' if subscriptions != 1 else ''}")
         if data_access_configured:
             parts.append("data-access settings present")
         app_has_state = bool(parts)
@@ -510,6 +522,7 @@ class RecoveryService:
             approvers=approvers,
             mask_rules=mask_rules,
             policy_exceptions=policy_exceptions,
+            subscriptions=subscriptions,
             data_access_configured=data_access_configured,
             summary=", ".join(parts) if parts else "empty",
         )
@@ -599,6 +612,16 @@ class RecoveryService:
                 self._storage.policy_exceptions.upsert_exception(exception)
                 counts.policy_exceptions += 1
 
+            for item in self._items(parsed, "subscriptions/subscriptions.yaml", "subscriptions"):
+                self._restore_subscription(Subscription.model_validate(item))
+                counts.subscriptions += 1
+
+            app_file = parsed.get("settings/app.yaml") or {}
+            app_settings = app_file.get("app_settings")
+            if isinstance(app_settings, dict) and app_settings:
+                self._storage.settings.put_many({APP_SETTINGS_KEY: _strip_redacted(app_settings)}, "recovery")
+                counts.app_settings = 1
+
             data_access_file = parsed.get("settings/data_access.yaml") or {}
             data_access = data_access_file.get("data_access")
             if isinstance(data_access, dict) and data_access:
@@ -609,6 +632,24 @@ class RecoveryService:
         except ValidationError as exc:
             raise InvalidRequestError(f"Snapshot failed validation: {exc.errors()[0]['msg']}") from exc
         return counts
+
+    def _restore_subscription(self, snapshot: Subscription) -> None:
+        """Upsert one subscription, keeping the local ID when one with the same name exists.
+
+        ``last_sync`` describes grants in the source workspace, so it is never restored; the
+        next subscription sync rebuilds the group, members and grants here.
+        """
+        repo = self._storage.subscriptions
+        local = repo.get_by_name(snapshot.name)
+        subscription_id = local.subscription_id if local is not None else snapshot.subscription_id
+        repo.save_subscription(
+            snapshot.model_copy(
+                update={
+                    "subscription_id": subscription_id,
+                    "last_sync": local.last_sync if local is not None else None,
+                }
+            )
+        )
 
     @staticmethod
     def _items(parsed: dict[str, Any], path: str, key: str) -> list[dict[str, Any]]:
@@ -740,7 +781,10 @@ class RecoveryService:
             key=lambda e: e.principal_name,
         )
         salt_configured = bool(self._storage.mask_rules.get_config(JOINABLE_SALT_KEY))
-        data_access = self._storage.settings.get_all().get(DATA_ACCESS_SETTINGS_KEY) or {}
+        all_settings = self._storage.settings.get_all()
+        data_access = all_settings.get(DATA_ACCESS_SETTINGS_KEY) or {}
+        app_settings = all_settings.get(APP_SETTINGS_KEY) or {}
+        subscriptions = sorted(self._storage.subscriptions.list_subscriptions(), key=lambda s: s.name)
 
         def envelope(name: str, items: list[dict[str, Any]]) -> dict[str, Any]:
             return {"version": FORMAT_VERSION, "count": len(items), name: items}
@@ -766,6 +810,8 @@ class RecoveryService:
                 "masking/rules.yaml",
                 "masking/config.yaml",
                 "exceptions/policy_exceptions.yaml",
+                "settings/app.yaml",
+                "subscriptions/subscriptions.yaml",
             ],
         }
         raw_files: list[tuple[str, int, dict[str, Any]]] = [
@@ -803,6 +849,15 @@ class RecoveryService:
                 "exceptions/policy_exceptions.yaml",
                 len(exceptions),
                 envelope("policy_exceptions", [_dump(e) for e in exceptions]),
+            ),
+            ("settings/app.yaml", 0, {"version": FORMAT_VERSION, "app_settings": _redact(app_settings)}),
+            (
+                "subscriptions/subscriptions.yaml",
+                len(subscriptions),
+                envelope(
+                    "subscriptions",
+                    [s.model_dump(mode="json", exclude={"last_sync", "phase"}) for s in subscriptions],
+                ),
             ),
         ]
         files = [

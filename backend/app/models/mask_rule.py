@@ -167,9 +167,7 @@ class UpsertMaskRuleRequest(ApiModel):
 
         handler = self.handler or self.rule_key
         if handler not in BUILTIN_HANDLERS:
-            raise ValueError(
-                f"Unknown builtin handler '{handler}'. Use kind=custom for SQL expressions."
-            )
+            raise ValueError(f"Unknown builtin handler '{handler}'. Use kind=custom for SQL expressions.")
         self.handler = handler
         self.expression = None
         if handler == MaskHandler.KEEP_LAST_N.value:

@@ -120,9 +120,7 @@ def parse_tag_condition(expression: str) -> _Node:
     for match in tokens:
         consumed = match.end()
     if text[consumed:].strip():
-        raise InvalidRequestError(
-            f"Unsupported tag condition syntax near: {text[consumed:].strip()[:40]!r}"
-        )
+        raise InvalidRequestError(f"Unsupported tag condition syntax near: {text[consumed:].strip()[:40]!r}")
     parser = _Parser([match for match in tokens])
     node = parser.parse_or()
     if parser.pos != len(parser.tokens):
@@ -149,10 +147,7 @@ def having_sql(node: _Node) -> str:
     if isinstance(node, _HasTag):
         return f"bool_or(tag_name = {string_literal(node.key)})"
     if isinstance(node, _HasTagValue):
-        return (
-            f"bool_or(tag_name = {string_literal(node.key)} "
-            f"AND tag_value = {string_literal(node.value)})"
-        )
+        return f"bool_or(tag_name = {string_literal(node.key)} AND tag_value = {string_literal(node.value)})"
     if isinstance(node, _Not):
         return f"NOT ({having_sql(node.inner)})"  # type: ignore[arg-type]
     if isinstance(node, _And):

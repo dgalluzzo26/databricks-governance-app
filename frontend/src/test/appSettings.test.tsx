@@ -20,7 +20,26 @@ describe("App settings", () => {
     await user.selectOptions(select, "off");
     await user.click(screen.getByRole("button", { name: "Save" }));
 
-    expect(save).toHaveBeenCalledWith({ disableMetadataCache: true });
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ disableMetadataCache: true }));
+  });
+
+  it("saves the subscription approval switch and maximum length", async () => {
+    const user = userEvent.setup();
+    const services = fakeServices();
+    const save = vi.spyOn(services.appSettings, "save");
+    renderApp("/app-settings", services);
+
+    await user.selectOptions(await screen.findByLabelText("Approver-created subscriptions"), "direct");
+    const days = screen.getByLabelText("Longest subscription (days)");
+    await user.clear(days);
+    await user.type(days, "90");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(save).toHaveBeenCalledWith({
+      disableMetadataCache: false,
+      subscriptionsRequireAdminApproval: false,
+      subscriptionMaxDays: 90,
+    });
   });
 
   it("is not on the Data access page anymore", async () => {

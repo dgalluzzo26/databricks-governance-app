@@ -107,6 +107,14 @@ import type {
   TreeSchemaList,
   TreeTableList,
   TableQueryParams,
+  BrowseItem,
+  SecurableKind,
+  Subscription,
+  SubscriptionDraft,
+  SubscriptionList,
+  SubscriptionOptions,
+  SubscriptionPreview,
+  SubscriptionSyncState,
 } from "./types";
 
 /**
@@ -1255,6 +1263,80 @@ export class PolicyExceptionsApi {
   }
 }
 
+/** Time-boxed access subscriptions (`/api/subscriptions`, admins and approvers). */
+export class SubscriptionsApi {
+  /** @param http - Shared HTTP client. */
+  constructor(private readonly http: HttpClient) {}
+
+  /** `GET /subscriptions/options` — wizard choices for the signed-in user. */
+  options(signal?: AbortSignal): Promise<SubscriptionOptions> {
+    return this.http.get<SubscriptionOptions>("/subscriptions/options", signal);
+  }
+
+  /** `GET /subscriptions` — all for admins, own for approvers. */
+  list(signal?: AbortSignal): Promise<SubscriptionList> {
+    return this.http.get<SubscriptionList>("/subscriptions", signal);
+  }
+
+  /** `GET /subscriptions/{id}`. */
+  get(subscriptionId: string, signal?: AbortSignal): Promise<Subscription> {
+    return this.http.get<Subscription>(`/subscriptions/${encodeURIComponent(subscriptionId)}`, signal);
+  }
+
+  /** `POST /subscriptions/preview` — objects and grants a draft reaches now. */
+  preview(body: SubscriptionDraft): Promise<SubscriptionPreview> {
+    return this.http.post<SubscriptionPreview>("/subscriptions/preview", body);
+  }
+
+  /** `GET /subscriptions/browse` — object names for the picker. */
+  browse(kind: SecurableKind, parent: string | null, signal?: AbortSignal): Promise<{ items: BrowseItem[] }> {
+    return this.http.get<{ items: BrowseItem[] }>(
+      `/subscriptions/browse${toQuery({ kind, parent: parent ?? undefined })}`,
+      signal,
+    );
+  }
+
+  /** `POST /subscriptions` — create (admins' apply at once). */
+  create(body: SubscriptionDraft): Promise<Subscription> {
+    return this.http.post<Subscription>("/subscriptions", body);
+  }
+
+  /** `PUT /subscriptions/{id}` — edit. */
+  update(subscriptionId: string, body: SubscriptionDraft): Promise<Subscription> {
+    return this.http.put<Subscription>(`/subscriptions/${encodeURIComponent(subscriptionId)}`, body);
+  }
+
+  /** `POST /subscriptions/{id}/decision` — approve or deny (admins). */
+  decide(subscriptionId: string, approve: boolean, note?: string): Promise<Subscription> {
+    return this.http.post<Subscription>(`/subscriptions/${encodeURIComponent(subscriptionId)}/decision`, {
+      approve,
+      note: note ?? null,
+    });
+  }
+
+  /** `POST /subscriptions/{id}/extend` — move the end time. */
+  extend(subscriptionId: string, expiresAt: string): Promise<Subscription> {
+    return this.http.post<Subscription>(`/subscriptions/${encodeURIComponent(subscriptionId)}/extend`, {
+      expiresAt,
+    });
+  }
+
+  /** `POST /subscriptions/{id}/revoke` — end now and strip access. */
+  revoke(subscriptionId: string): Promise<Subscription> {
+    return this.http.post<Subscription>(`/subscriptions/${encodeURIComponent(subscriptionId)}/revoke`);
+  }
+
+  /** `POST /subscriptions/{id}/sync` — reconcile now. */
+  sync(subscriptionId: string): Promise<SubscriptionSyncState> {
+    return this.http.post<SubscriptionSyncState>(`/subscriptions/${encodeURIComponent(subscriptionId)}/sync`);
+  }
+
+  /** `DELETE /subscriptions/{id}` — delete one that no longer holds access (admins). */
+  delete(subscriptionId: string): Promise<void> {
+    return this.http.delete<void>(`/subscriptions/${encodeURIComponent(subscriptionId)}`);
+  }
+}
+
 /** The full set of API services exposed to components via `useApi()`. */
 /** Recovery export preview and Git target settings (`/api/recovery`, admin only). */
 export class RecoveryApi {
@@ -1520,6 +1602,7 @@ export interface ApiServices {
   recovery: RecoveryApi;
   performance: PerformanceApi;
   activity: ActivityApi;
+  subscriptions: SubscriptionsApi;
 }
 
 /**
@@ -1547,5 +1630,6 @@ export function createApiServices(http: HttpClient = new HttpClient()): ApiServi
     attributeExplorer: new AttributeExplorerApi(http),
     help: new HelpApi(http),
     policyExceptions: new PolicyExceptionsApi(http),
+    subscriptions: new SubscriptionsApi(http),
   };
 }

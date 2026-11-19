@@ -3,7 +3,7 @@
 
 Builds a scaled copy of ``abac_type_test`` (source has only 2 rows). Discovers every
 column from the source, clears sensitivity tags on the bench table, then re-applies
-``sensitivity`` + ``sensitivity_category`` (+ ``mask_rule`` / ``data_type``) one column
+``sensitivity`` + ``access_path`` (+ ``mask_rule`` / ``data_type``) one column
 at a time so the metastore mask policies match progressively more columns.
 """
 
@@ -179,7 +179,7 @@ def discover_columns(w: WorkspaceClient) -> list[ColSpec]:
             ColSpec(
                 name=name,
                 mask_rule=tags.get("mask_rule") or default_rule,
-                category=tags.get("sensitivity_category") or "finance.budget",
+                category=tags.get("access_path") or "finance.budget",
                 sensitivity=tags.get("sensitivity") or "PII.Name",
                 data_type=tags.get("data_type") or default_dtype,
             )
@@ -195,14 +195,14 @@ def unset_mask_tags(w: WorkspaceClient, columns: list[str]) -> None:
             execute(
                 w,
                 f"ALTER TABLE {BENCH} ALTER COLUMN {qident(col)} "
-                f"UNSET TAGS ('sensitivity', 'sensitivity_category', 'mask_rule', 'data_type')",
+                f"UNSET TAGS ('sensitivity', 'access_path', 'mask_rule', 'data_type')",
             )
         except RuntimeError:
             try:
                 execute(
                     w,
                     f"ALTER TABLE {BENCH} ALTER COLUMN {qident(col)} "
-                    f"UNSET TAGS ('sensitivity', 'sensitivity_category')",
+                    f"UNSET TAGS ('sensitivity', 'access_path')",
                 )
             except RuntimeError as exc:
                 log(f"  warn: could not unset tags on {col}: {exc}")
@@ -213,7 +213,7 @@ def set_mask_tags(w: WorkspaceClient, spec: ColSpec) -> None:
         w,
         f"ALTER TABLE {BENCH} ALTER COLUMN {qident(spec.name)} SET TAGS ("
         f"'sensitivity' = '{spec.sensitivity}', "
-        f"'sensitivity_category' = '{spec.category}', "
+        f"'access_path' = '{spec.category}', "
         f"'mask_rule' = '{spec.mask_rule}', "
         f"'data_type' = '{spec.data_type}')",
     )

@@ -603,9 +603,7 @@ class RowFilterService:
                 return definition
         raise NotFoundError(f"Row filter dimension '{key}' was not found")
 
-    def _attachment_rows(
-        self, dims: list[str], *, table: tuple[str, str, str] | None = None
-    ) -> list[dict]:
+    def _attachment_rows(self, dims: list[str], *, table: tuple[str, str, str] | None = None) -> list[dict]:
         """Query column tags carrying any of ``dims``, optionally for a single table."""
         if not dims:
             return []

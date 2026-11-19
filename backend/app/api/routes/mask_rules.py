@@ -173,9 +173,7 @@ def rotate_salt(admin: Admin, container: Container) -> MaskingConfigStatus:
 
 
 @router.post("/handlers/draft", response_model=MaskHandlerDraft)
-def draft_handler(
-    body: MaskHandlerDraftRequest, admin: Admin, container: Container
-) -> MaskHandlerDraft:
+def draft_handler(body: MaskHandlerDraftRequest, admin: Admin, container: Container) -> MaskHandlerDraft:
     """Draft SQL/handler code for a custom mask rule.
 
     Requires app admin.

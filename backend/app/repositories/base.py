@@ -28,6 +28,10 @@ from backend.app.repositories.data_access_state import (
     DataAccessStateRepository,
     InMemoryDataAccessStateRepository,
 )
+from backend.app.repositories.subscriptions import (
+    InMemorySubscriptionRepository,
+    SubscriptionRepository,
+)
 from backend.app.services.table_query import TableQuery
 
 
@@ -815,6 +819,19 @@ class StorageProvider(ABC):
         if repo is None:
             repo = InMemoryDataAccessStateRepository()
             self._data_access_state_fallback = repo
+        return repo
+
+    @property
+    def subscriptions(self) -> SubscriptionRepository:
+        """Subscription repository; process-local unless a backend persists it.
+
+        Returns:
+            Repository used by the subscription service and engine.
+        """
+        repo = getattr(self, "_subscriptions_fallback", None)
+        if repo is None:
+            repo = InMemorySubscriptionRepository()
+            self._subscriptions_fallback = repo
         return repo
 
     @property

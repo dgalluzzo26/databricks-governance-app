@@ -83,7 +83,7 @@ describe("Identity attributes", () => {
     await user.selectOptions(screen.getByRole("combobox", { name: "Definition purpose" }), "data_access");
     expect(screen.getByRole("textbox", { name: "Attribute key" })).toHaveValue("data_access");
     expect(screen.queryByText("Already configured")).not.toBeInTheDocument();
-    expect(await screen.findByRole("checkbox", { name: "Select data_access_control" })).toBeChecked();
+    expect(await screen.findByRole("checkbox", { name: "Select access_path" })).toBeChecked();
     expect(screen.getByRole("button", { name: "Create definition" })).toBeEnabled();
   });
 

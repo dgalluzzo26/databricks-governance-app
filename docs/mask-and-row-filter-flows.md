@@ -34,7 +34,7 @@ Code owners:
 
 Authorization and presentation are separate:
 
-1. **Who may see a clear value?** Column tags `sensitivity_category` + `sensitivity` plus the
+1. **Who may see a clear value?** Column tags `access_path` + `sensitivity` plus the
    caller’s `sensitivity` identity attribute (via `has_sensitivity`).
 2. **How does a denied value look?** Column tag `mask_rule` → registry → `apply_mask_rule`.
 3. **Which rows are visible?** Column tag `row_filter=<dimension>` → `has_row_access(row, dim)`.
@@ -65,12 +65,12 @@ flowchart TD
 
 | Tag | Role |
 | --- | --- |
-| `sensitivity_category` | Left side of the required path (e.g. `finance.budget`) |
+| `access_path` | Left side of the required path (e.g. `finance.budget`). Same key as the table's access tag; on a sensitive column it is the table's path |
 | `sensitivity` | Right side / leaf (e.g. `PII.Name`) |
 | `data_type` | Routes geometry/geography to separate policies; required by the VARIANT policy match |
 | `mask_rule` | Presentation algorithm name (registry key). Missing/unknown → `full` |
 
-**Required path** checked by auth: `concat_ws('.', sensitivity_category, sensitivity)`  
+**Required path** checked by auth: `concat_ws('.', access_path, sensitivity)`  
 Example: `finance.budget.PII.Name`.
 
 Admins set tags in UC (`ALTER TABLE … ALTER COLUMN … SET TAGS`). The app does **not** rewrite
@@ -84,7 +84,7 @@ Created by `MaskRuleService._recreate_variant_policy` on **Sync registry / Ensur
 - Scope: `ON METASTORE`, `TO account users`, `FOR TABLES`
 - When: `has_tag_value('data_access_controlled', 'true')` (catalog enrollment tag; configurable
   via Data Access settings). Tables inherit the catalog tag for this check.
-- Match: columns with `sensitivity_category`, `sensitivity`, `data_type` where `data_type` is
+- Match: columns with `access_path`, `sensitivity`, `data_type` where `data_type` is
   **not** `geometry` or `geography`
 - Action: `COLUMN MASK data_governance_app.masking_functions.mask_variant`
 - Passes: category, sensitivity, and `mask_rule` tag values via `get_column_tag_value`
@@ -92,7 +92,7 @@ Created by `MaskRuleService._recreate_variant_policy` on **Sync registry / Ensur
 Geometry / geography columns use two sibling policies, `mask_sensitivity_geometry` and
 `mask_sensitivity_geography`, also created by `MaskRuleService._recreate_geo_policies` on
 **Sync registry / Ensure pack**. They share the same `WHEN` enrollment clause and `EXCEPT`
-principals, match `sensitivity_category` + `sensitivity` + `data_type = geometry|geography`,
+principals, match `access_path` + `sensitivity` + `data_type = geometry|geography`,
 and call `mask_geometry_4326` / `mask_geography_4326`.
 
 Those UDFs are created by `_ensure_geo_functions` (pack sync) and by the
@@ -102,11 +102,11 @@ Those UDFs are created by `_ensure_geo_functions` (pack sync) and by the
 
 ### 3. Function `mask_variant` — **app-owned (setup step + pack sync)**
 
-FQN: `data_governance_app.masking_functions.mask_variant(value VARIANT, sensitivity_category STRING, sensitivity STRING, mask_rule STRING) RETURNS VARIANT`
+FQN: `data_governance_app.masking_functions.mask_variant(value VARIANT, access_path STRING, sensitivity STRING, mask_rule STRING) RETURNS VARIANT`
 
 Intended body (must stay aligned with Access Explorer):
 
-1. If `has_sensitivity(concat_ws('.', sensitivity_category, sensitivity))` → return `value`
+1. If `has_sensitivity(concat_ws('.', access_path, sensitivity))` → return `value`
 2. Else → `apply_mask_rule(value, mask_rule)`
 
 Built by `build_mask_variant_sql` in `backend/app/services/abac_udfs.py`, shared by
@@ -197,7 +197,7 @@ Reproduce with `scripts/mask_column_perf.py` (results: `scripts/mask_column_perf
 
 ```mermaid
 flowchart TD
-  q["SELECT reads a column value"] --> tagged{"Column has sensitivity_category, sensitivity, data_type tags?"}
+  q["SELECT reads a column value"] --> tagged{"Column has access_path, sensitivity, data_type tags?"}
   tagged -->|no| clearNoPolicy["No app mask policy matches: value returned"]
   tagged -->|yes| geo{"data_type is geometry or geography?"}
   geo -->|yes| geoPolicy["Static geo policies (outside this pack)"]
@@ -412,7 +412,7 @@ lineage instead:
 
 1. `system.access.column_lineage` maps each view column to its source table columns
    (`target_table_full_name` = view, `source_table_full_name` / `source_column_name` = source).
-2. Source column tags (`sensitivity_category`, `sensitivity`, `mask_rule`, `data_type`,
+2. Source column tags (`access_path`, `sensitivity`, `mask_rule`, `data_type`,
    `row_filter`) are read from each source table.
 3. A view column is reported as the strictest governed source: the first the user does not hold,
    otherwise the first governed source. All sources are named in the column notes.
@@ -422,7 +422,7 @@ lineage instead:
 If lineage is empty, the column is shown as not governed with "No column lineage recorded yet".
 Lineage is recorded when queries run, so query a view once before analyzing it.
 
-The view's own object tags (`data_access_control`, `clr_review_status`) are kept, so data-access
+The view's own object tags (`access_path`, `data_governance_status`) are kept, so data-access
 grant suggestions still apply to the view.
 
 UC grants are intentionally omitted for now.
@@ -432,7 +432,7 @@ UC grants are intentionally omitted for now.
 | Attribute | Routing |
 | --- | --- |
 | `sensitivity` | Most-specific configured **category approver** for a path prefix of the requested value. If none is configured (or the matched category has zero approvers) → **app admins**. |
-| Data-access attribute (linked to `data_access_control`) | Same most-specific path routing as `sensitivity`, using data-access category approvers. |
+| Data-access attribute (linked to `access_path`) | Same most-specific path routing as `sensitivity`, using data-access category approvers. |
 | Row-filter dimensions (`state`, …) | Designated **dimension approvers** (Identity → Approvers → Row-filter dimension). If none are configured → **app admins**. |
 
 Create requests via `POST /api/identity/access-requests` with `attribute_key` + `attribute_value`

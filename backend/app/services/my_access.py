@@ -44,12 +44,8 @@ class MyAccessService:
         """Groups the user belongs to and every attribute they hold (direct or via group)."""
         assignments = self._identity.list_for_user(user, unique=False).assignments
         settings = self._data_access._settings()  # noqa: SLF001
-        definitions = {
-            d.key.lower(): d for d in self._identity.list_definitions().definitions
-        }
-        statuses = {
-            s.assignment_id: s for s in self._data_access.access_status(assignments)
-        }
+        definitions = {d.key.lower(): d for d in self._identity.list_definitions().definitions}
+        statuses = {s.assignment_id: s for s in self._data_access.access_status(assignments)}
 
         group_counts: dict[str, int] = {g: 0 for g in user.attribute_groups}
         attributes: list[MyAccessAttribute] = []
@@ -59,9 +55,7 @@ class MyAccessService:
 
         for item in assignments:
             definition = definitions.get(item.attribute_key.lower())
-            value_source = (
-                definition.value_source if definition is not None else ValueSource.FREE_FORM
-            )
+            value_source = definition.value_source if definition is not None else ValueSource.FREE_FORM
             kind = self._explorer.classify(item.attribute_key, value_source, settings)
             status = statuses.get(item.assignment_id)
             if (
@@ -79,11 +73,7 @@ class MyAccessService:
                 else:
                     # Group name from assignment may differ in casing from /Me.
                     matched = next(
-                        (
-                            g
-                            for g in group_counts
-                            if g.lower() == item.principal_name.lower()
-                        ),
+                        (g for g in group_counts if g.lower() == item.principal_name.lower()),
                         None,
                     )
                     if matched is not None:
@@ -164,11 +154,7 @@ class MyAccessService:
             )
 
         exact = next(
-            (
-                a
-                for a in held_for_key
-                if a.attribute_value.lower() == value.lower()
-            ),
+            (a for a in held_for_key if a.attribute_value.lower() == value.lower()),
             None,
         )
         if exact is None:

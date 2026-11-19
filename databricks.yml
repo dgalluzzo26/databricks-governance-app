@@ -79,6 +79,15 @@ targets:
       host: https://dbc-16303671-e52d.cloud.databricks.com
       profile: dbc-16303671-e52d
 
+  # New demo workspace (same Account Admin SP as the other targets). Secrets for the SP live in
+  # the databricks-governance-app scope created in this workspace.
+  gov-demo:
+    workspace:
+      host: https://dbc-f05a69a4-3e7a.cloud.databricks.com
+      profile: gov-demo
+    variables:
+      sync_job_run_as_sp: c300a3e9-7bea-4035-9022-b0b1346ec68f
+
   # Same workspace, Delta storage backend. Uses its own names because each bundle target
   # owns the resources it creates.
   dev-delta:

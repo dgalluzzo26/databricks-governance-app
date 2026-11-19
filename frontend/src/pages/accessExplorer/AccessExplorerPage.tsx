@@ -107,7 +107,7 @@ export function AccessExplorerPage() {
         description={
           <>
             Browse or search a table to see masks, row filters, and the specific attributes
-            to request. Reviewed <code>data_access_control</code> tags on the table offer a
+            to request. Reviewed <code>access_path</code> tags on the table offer a
             data-access request. Group grants stay dry-run until apply mode is on.
           </>
         }

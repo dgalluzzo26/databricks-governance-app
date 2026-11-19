@@ -31,9 +31,11 @@ from backend.app.models.identity_attribute import (
     BulkAssignRequest,
     BulkAssignResult,
     GovernedTagList,
+    GovernedTagSummary,
     IdentityAttributeAssignment,
     UpsertAttributeDefinitionRequest,
     ValueSource,
+    is_data_access_definition,
 )
 from backend.app.models.principal import PrincipalKind
 from backend.app.models.user import CurrentUser
@@ -46,7 +48,7 @@ from backend.app.services.value_seed import run_seed_sql
 logger = logging.getLogger(__name__)
 
 _DATA_ACCESS_SETTINGS_KEY = "data_access"
-_DEFAULT_ACCESS_TAG_KEY = "data_access_control"
+_DEFAULT_ACCESS_TAG_KEY = "access_path"
 _DEFAULT_GROUP_PREFIX = "dac_"
 
 ASSIGNMENT_ASSIGNED = "assigned"
@@ -119,6 +121,10 @@ class IdentityAttributeService:
         """
         return self._governed_tags.list_tags(q=q, limit=limit)
 
+    def all_governed_tags(self) -> list[GovernedTagSummary]:
+        """Every governed tag with its allowed values, uncapped (cached)."""
+        return self._governed_tags.list_all()
+
     def list_definitions(self) -> AttributeDefinitionList:
         """List all attribute definitions with their current allowed values resolved.
 
@@ -146,7 +152,7 @@ class IdentityAttributeService:
         return self._enrich(definition)
 
     def access_tag_key(self) -> str:
-        """Return the configured data-access UC tag key (default ``data_access_control``)."""
+        """Return the configured data-access UC tag key (default ``access_path``)."""
         raw = self._storage.settings.get_all().get(_DATA_ACCESS_SETTINGS_KEY)
         if not raw:
             return _DEFAULT_ACCESS_TAG_KEY
@@ -165,9 +171,7 @@ class IdentityAttributeService:
         except Exception:  # noqa: BLE001
             return _DEFAULT_GROUP_PREFIX
 
-    def _reject_managed_group_principal(
-        self, principal_name: str, principal_type: PrincipalKind
-    ) -> None:
+    def _reject_managed_group_principal(self, principal_name: str, principal_type: PrincipalKind) -> None:
         """Block assigning attributes directly to Data Access sync groups."""
         if principal_type != PrincipalKind.GROUP:
             return
@@ -184,9 +188,7 @@ class IdentityAttributeService:
         definition = self._storage.identity_attributes.get_definition(SENSITIVITY_ATTRIBUTE_KEY)
         return self._enrich(definition) if definition is not None else None
 
-    def find_data_access_definition(
-        self, access_tag_key: str | None = None
-    ) -> AttributeDefinition | None:
+    def find_data_access_definition(self, access_tag_key: str | None = None) -> AttributeDefinition | None:
         """Return the definition linked to the data-access UC tag, if any.
 
         Matches by attribute key or ``governed_tag_keys`` equal to the access tag.
@@ -201,9 +203,7 @@ class IdentityAttributeService:
         if not needle:
             return None
         for item in self._storage.identity_attributes.list_definitions():
-            if item.key.lower() == needle:
-                return self._enrich(item)
-            if any(tag.lower() == needle for tag in item.governed_tag_keys):
+            if is_data_access_definition(item.key, item.governed_tag_keys, needle):
                 return self._enrich(item)
         return None
 
@@ -412,9 +412,7 @@ class IdentityAttributeService:
             items = [item for item in items if can_decide(item.attribute_key, item.attribute_value)]
         return AttributeAssignmentList(assignments=items, total=len(items))
 
-    def list_for_user(
-        self, user: CurrentUser, *, unique: bool = True
-    ) -> AttributeAssignmentList:
+    def list_for_user(self, user: CurrentUser, *, unique: bool = True) -> AttributeAssignmentList:
         """Active attributes for the signed-in user and their groups.
 
         Direct USER assignments plus assignments to any of the user's groups. When
@@ -490,7 +488,8 @@ class IdentityAttributeService:
                 governed-tag definition is not linked to any tag.
             NotFoundError: If an existing assignment disappears while updating its expiry.
         """
-        self._reject_managed_group_principal(request.principal_name, request.principal_type)
+        if source != AttributeSource.SUBSCRIPTION:
+            self._reject_managed_group_principal(request.principal_name, request.principal_type)
         definition = self._storage.identity_attributes.get_definition(request.attribute_key)
         if definition is None:
             raise InvalidRequestError(
@@ -839,17 +838,15 @@ class IdentityAttributeService:
         attr_key = (key or "").strip().lower()
         access_tag = self.access_tag_key()
         tags_lower = {tag.lower() for tag in tag_keys}
-        links_access_tag = access_tag in tags_lower
+        links_access_tag = is_data_access_definition(attr_key, tag_keys, access_tag)
 
         if attr_key == SENSITIVITY_ATTRIBUTE_KEY:
             # Key uniqueness already prevents a second sensitivity row; nothing else to do.
             return
 
         if links_access_tag or attr_key == access_tag:
-            if not links_access_tag:
-                raise InvalidRequestError(
-                    f"Data-access definitions must include governed tag '{access_tag}'"
-                )
+            if access_tag not in tags_lower:
+                raise InvalidRequestError(f"Data-access definitions must include governed tag '{access_tag}'")
             current = self.find_data_access_definition(access_tag)
             if current is not None and current.key.lower() != attr_key:
                 raise InvalidRequestError(
@@ -859,9 +856,7 @@ class IdentityAttributeService:
             return
 
         # Editing the existing data-access def must not drop the access tag.
-        if existing is not None and any(
-            tag.lower() == access_tag for tag in existing.governed_tag_keys
-        ):
+        if existing is not None and any(tag.lower() == access_tag for tag in existing.governed_tag_keys):
             raise InvalidRequestError(
                 f"Data-access definition '{existing.key}' must keep governed tag '{access_tag}'"
             )
@@ -901,14 +896,12 @@ class IdentityAttributeService:
                     "description": definition.description or str(exc),
                 }
             )
-        return definition.model_copy(
-            update={"governed_tag_keys": tag_keys, "allowed_values": values}
-        )
+        return definition.model_copy(update={"governed_tag_keys": tag_keys, "allowed_values": values})
 
     def _allowed_values_for_tags(self, tag_keys: list[str]) -> list[str]:
         """Resolve assignment vocabulary from governed tags.
 
-        When a definition binds both ``sensitivity_category`` and ``sensitivity``,
+        When a definition binds both ``access_path`` and ``sensitivity``,
         allowed values are category prefixes plus composed ``category.leaf`` paths
         so one ``sensitivity`` attribute can hold hierarchical grants.
 
@@ -923,8 +916,8 @@ class IdentityAttributeService:
             UpstreamError: If tag policies cannot be read.
         """
         key_set = set(tag_keys)
-        if "sensitivity_category" in key_set and "sensitivity" in key_set:
-            categories = self._governed_tags.get_tag("sensitivity_category").values
+        if "access_path" in key_set and "sensitivity" in key_set:
+            categories = self._governed_tags.get_tag("access_path").values
             leaves = self._governed_tags.get_tag("sensitivity").values
             values: list[str] = []
             seen: set[str] = set()

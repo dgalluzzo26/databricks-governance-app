@@ -181,9 +181,7 @@ class DeltaIdentityAttributeRepository(IdentityAttributeRepository):
         Returns:
             Parsed definitions. Empty when the table has no rows.
         """
-        rows = self._definitions.sql.query(
-            f"SELECT * FROM {self._definitions.fqn} ORDER BY attribute_key"
-        )
+        rows = self._definitions.sql.query(f"SELECT * FROM {self._definitions.fqn} ORDER BY attribute_key")
         return [self._definition_from_row(r) for r in rows]
 
     def get_definition(self, key: str) -> AttributeDefinition | None:
@@ -437,9 +435,7 @@ class DeltaIdentityAttributeRepository(IdentityAttributeRepository):
             governed_tag_keys=[str(v) for v in tag_keys],
             allowed_values=[str(v) for v in values],
             # The Delta table has no value_source column; stored values without tags are free-form.
-            value_source=(
-                ValueSource.FREE_FORM if values and not tag_keys else ValueSource.GOVERNED_TAGS
-            ),
+            value_source=(ValueSource.FREE_FORM if values and not tag_keys else ValueSource.GOVERNED_TAGS),
             created_by=row.get("created_by"),
             created_at=_ts(row.get("created_at")),
             updated_by=row.get("updated_by"),

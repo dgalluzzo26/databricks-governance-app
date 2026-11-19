@@ -37,6 +37,8 @@ from backend.app.services.policy_exceptions import PolicyExceptionService
 from backend.app.services.recovery import RecoveryService
 from backend.app.services.request_context import RequestContextResolver
 from backend.app.services.row_filters import RowFilterService
+from backend.app.services.subscription_engine import SubscriptionEngine
+from backend.app.services.subscriptions import SubscriptionService
 from backend.app.services.tasks import TaskService
 from backend.app.services.usage_access import UsageAccessService
 from backend.app.services.usage_analytics import UsageAnalyticsService
@@ -73,6 +75,7 @@ class ServiceContainer:
         data_access: Tag-driven group grant sync (settings, readiness, dry-run/apply).
         recovery: Recovery export preview and Git target settings.
         tasks: Tracked multi-step tasks (activity panel and admin task history).
+        subscriptions: Time-boxed access bundles and their group engine.
         identity_uc_sync: Mirrors identity attributes to Unity Catalog Delta; only set for
             the Lakebase backend, otherwise None.
     """
@@ -103,6 +106,7 @@ class ServiceContainer:
     usage_access: UsageAccessService
     metrics: MetricsRecorder
     tasks: TaskService
+    subscriptions: SubscriptionService
     identity_uc_sync: IdentityUcSync | None = None
 
     @classmethod
@@ -173,6 +177,14 @@ class ServiceContainer:
         my_access = MyAccessService(identity_attributes, data_access, attribute_explorer)
         usage_analytics = UsageAnalyticsService(sql, workspace, config, cache=metadata_cache)
         usage_access = UsageAccessService(sql, config, cache=metadata_cache)
+        subscriptions = SubscriptionService(
+            storage,
+            SubscriptionEngine(storage, sql, workspace, data_access, identity_attributes),
+            identity_attributes,
+            access_requests,
+            app_settings,
+            workspace,
+        )
         return cls(
             config=config,
             workspace=workspace,
@@ -219,6 +231,7 @@ class ServiceContainer:
                 pruner=storage.performance.prune,
             ),
             tasks=TaskService(lambda: storage.tasks),
+            subscriptions=subscriptions,
             identity_uc_sync=uc_sync,
         )
 

@@ -70,9 +70,7 @@ class AccountGroupResolver:
                 lambda: self._load_user_groups(user_id),
             )
         except DatabricksError as exc:
-            logger.warning(
-                "Reading account group memberships failed; using workspace groups: %s", exc
-            )
+            logger.warning("Reading account group memberships failed; using workspace groups: %s", exc)
             return []
 
     def _load_user_groups(self, user_id: str) -> list[str]:

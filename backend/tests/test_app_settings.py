@@ -35,7 +35,11 @@ def test_save_persists_under_app_key_and_switches_cache() -> None:
 
     svc.save_settings(AppSettings(disable_metadata_cache=True), ADMIN)
 
-    assert storage.settings.get_all()[SETTINGS_KEY] == {"disable_metadata_cache": True}
+    assert storage.settings.get_all()[SETTINGS_KEY] == {
+        "disable_metadata_cache": True,
+        "subscriptions_require_admin_approval": True,
+        "subscription_max_days": 365,
+    }
     assert cache.disabled is True
     assert cache.get_or_refresh("seed", lambda: "live", refresh_after=60) == "live"
 

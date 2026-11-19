@@ -147,9 +147,7 @@ def test_lakebase_endpoint_id_from_pghost_and_endpoint() -> None:
         == "ep-noisy-forest-d2p43vti"
     )
     assert (
-        lakebase_endpoint_id_from_config(
-            _config(pg_host=None, lakebase_endpoint="ep-still-art-d1ki94q1")
-        )
+        lakebase_endpoint_id_from_config(_config(pg_host=None, lakebase_endpoint="ep-still-art-d1ki94q1"))
         == "ep-still-art-d1ki94q1"
     )
     assert lakebase_endpoint_id_from_config(_config(pg_host=None, lakebase_endpoint=None)) is None

@@ -140,13 +140,9 @@ def compute_access_status(
             detail=detail,
         )
 
-    orphan_detail = (
-        "Principal not found in Account SCIM; revoke the assignment or restore the group/user"
-    )
+    orphan_detail = "Principal not found in Account SCIM; revoke the assignment or restore the group/user"
     if orphaned or (
-        event is not None
-        and event.action == "add"
-        and event.status == MembershipEventStatus.ORPHANED
+        event is not None and event.action == "add" and event.status == MembershipEventStatus.ORPHANED
     ):
         return AccessStatus(
             **base,

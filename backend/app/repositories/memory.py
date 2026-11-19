@@ -418,9 +418,7 @@ class InMemoryAccessRequestRepository(AccessRequestRepository):
             self._items[request.request_id] = request
         return request
 
-    def has_pending_for(
-        self, *, requester_name: str, attribute_key: str, attribute_value: str
-    ) -> bool:
+    def has_pending_for(self, *, requester_name: str, attribute_key: str, attribute_value: str) -> bool:
         """Return whether a pending request exists for the given attribute grant.
 
         Requester name and attribute value are compared case-insensitively;
@@ -445,9 +443,7 @@ class InMemoryAccessRequestRepository(AccessRequestRepository):
                     return True
         return False
 
-    def dismiss_renewal(
-        self, assignment_id: str, expires_at: datetime, actor: str, at: datetime
-    ) -> None:
+    def dismiss_renewal(self, assignment_id: str, expires_at: datetime, actor: str, at: datetime) -> None:
         """Record that a renewal reminder for this assignment expiry was dismissed.
 
         The marker is keyed by ``(assignment_id, expires_at)``.

@@ -445,9 +445,7 @@ def test_get_policy_overlays_api_details_and_finds_matching_columns() -> None:
     sql_routes = {
         "abac_policy_definitions": [
             _row(
-                match_columns=(
-                    '["(has_tag(\'sensitivity\') AND has_tag_value(\'sensitivity\', \'PII\')) AS c"]'
-                )
+                match_columns=("[\"(has_tag('sensitivity') AND has_tag_value('sensitivity', 'PII')) AS c\"]")
             )
         ],
         "scoped_column_tags": [column_hit, column_hit],  # duplicate is de-duplicated
@@ -488,14 +486,12 @@ def test_get_policy_with_sparse_api_payload_keeps_information_schema_values() ->
     service = _service_for(
         [
             _row(
-                match_columns='["(has_tag(\'sensitivity\')) AS c"]',
+                match_columns="[\"(has_tag('sensitivity')) AS c\"]",
             )
         ],
         api=_PoliciesApi(info=SimpleNamespace()),
         routes={
-            "abac_policy_definitions": [
-                _row(match_columns='["(has_tag(\'sensitivity\')) AS c"]')
-            ],
+            "abac_policy_definitions": [_row(match_columns="[\"(has_tag('sensitivity')) AS c\"]")],
             "scoped_column_tags": [],
         },
     )
@@ -531,9 +527,7 @@ def test_affected_assets_explain_unsupported_and_conditionless_policies() -> Non
 def test_affected_assets_report_lookup_failures() -> None:
     service = _service_for(
         routes={
-            "abac_policy_definitions": [
-                _row(match_columns='["(has_tag(\'sensitivity\')) AS c"]')
-            ],
+            "abac_policy_definitions": [_row(match_columns="[\"(has_tag('sensitivity')) AS c\"]")],
             "scoped_column_tags": RuntimeError("no access"),
         }
     )
@@ -557,9 +551,7 @@ def test_affected_assets_truncate_at_the_limit(monkeypatch: pytest.MonkeyPatch) 
     ]
     service = _service_for(
         routes={
-            "abac_policy_definitions": [
-                _row(match_columns='["(has_tag(\'sensitivity\')) AS c"]')
-            ],
+            "abac_policy_definitions": [_row(match_columns="[\"(has_tag('sensitivity')) AS c\"]")],
             "scoped_column_tags": columns,
         }
     )
@@ -602,20 +594,14 @@ def test_when_only_policies_return_matching_tables() -> None:
 
 def test_tag_condition_parser_and_match_column_helpers() -> None:
     assert strip_match_alias("(has_tag('x')) AS c") == ("(has_tag('x'))", "c")
-    node = parse_tag_condition(
-        "has_tag('sensitivity') AND NOT has_tag_value('data_type', 'geometry')"
-    )
+    node = parse_tag_condition("has_tag('sensitivity') AND NOT has_tag_value('data_type', 'geometry')")
     sql = having_sql(node)
     assert "bool_or(tag_name = 'sensitivity')" in sql
     assert "NOT (bool_or(tag_name = 'data_type' AND tag_value = 'geometry'))" in sql
     assert referenced_tag_keys(node) == ["data_type", "sensitivity"]
-    ignored = parse_tag_condition(
-        "has_tag('x') AND has_identity_attribute_value('role', 'admin')"
-    )
+    ignored = parse_tag_condition("has_tag('x') AND has_identity_attribute_value('role', 'admin')")
     assert "TRUE" in having_sql(ignored)
-    matches = _parse_match_columns(
-        '["(\\n  has_tag_value(\'row_filter\', \'state\')\\n) AS c"]'
-    )
+    matches = _parse_match_columns("[\"(\\n  has_tag_value('row_filter', 'state')\\n) AS c\"]")
     assert matches[0].alias == "c"
     assert "has_tag_value('row_filter', 'state')" in (matches[0].condition or "")
 
@@ -623,6 +609,7 @@ def test_tag_condition_parser_and_match_column_helpers() -> None:
 def test_scope_filter_sql_restricts_to_the_policy_securable() -> None:
     # Guard: the SQL builder reads this attribute off PolicyDetail, so it must exist there.
     assert "on_securable_fullname" in PolicyDetail.model_fields
+
     def scope(**fields: Any) -> str:
         return PolicyService._scope_filter_sql(SimpleNamespace(**fields))  # noqa: SLF001
 

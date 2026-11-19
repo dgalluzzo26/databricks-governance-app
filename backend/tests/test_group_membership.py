@@ -119,12 +119,20 @@ def test_no_names_makes_no_calls() -> None:
 def test_pages_when_total_results_is_a_string() -> None:
     users = [_user("u1", "ana@example.com"), _user("u2", "bo@example.com")]
     groups = [
-        {"id": "g1", "displayName": "finance", "members": [
-            {"value": "u1", "display": "Ana", "$ref": "Users/u1"},
-        ]},
-        {"id": "g2", "displayName": "ops", "members": [
-            {"value": "u2", "display": "Bo", "$ref": "Users/u2"},
-        ]},
+        {
+            "id": "g1",
+            "displayName": "finance",
+            "members": [
+                {"value": "u1", "display": "Ana", "$ref": "Users/u1"},
+            ],
+        },
+        {
+            "id": "g2",
+            "displayName": "ops",
+            "members": [
+                {"value": "u2", "display": "Bo", "$ref": "Users/u2"},
+            ],
+        },
     ]
 
     class _StringTotal(_FakeScim):

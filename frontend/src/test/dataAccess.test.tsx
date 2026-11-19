@@ -24,7 +24,7 @@ describe("Data access dry-run", () => {
     renderApp("/data-access");
     await user.click(await screen.findByRole("tab", { name: "Settings" }));
     expect(screen.getByRole("tab", { name: "Settings" })).toHaveAttribute("aria-selected", "true");
-    expect(await screen.findByDisplayValue("data_access_control")).toBeInTheDocument();
+    expect(await screen.findByDisplayValue("access_path")).toBeInTheDocument();
     expect(screen.getByLabelText("Schedule mode")).toHaveValue("dry_run");
     expect(screen.getByRole("button", { name: "Save settings" })).toBeInTheDocument();
   });
@@ -82,7 +82,7 @@ describe("Data access settings save", () => {
     const save = vi.spyOn(services.dataAccess, "saveSettings");
     renderApp("/data-access?tab=settings", services);
 
-    expect(await screen.findByDisplayValue("data_access_control")).toBeInTheDocument();
+    expect(await screen.findByDisplayValue("access_path")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Save settings" }));
 
     expect(save).toHaveBeenCalledTimes(1);

@@ -2,7 +2,7 @@
 
 Users request identity attribute values (hierarchical ``sensitivity`` paths or row-filter
 dimension values) with an expiry and justification. Sensitivity requests route to the
-approvers of the most-specific configured ``sensitivity_category`` covering the path, else to
+approvers of the most-specific configured ``access_path`` covering the path, else to
 app admins; row-filter and other non-sensitivity requests always route to app admins. Approval
 grants the attribute through ``IdentityAttributeService`` (which mirrors it to Unity Catalog),
 and sensitivity assignments nearing expiry surface in the same inbox for renewal. Every write
@@ -85,7 +85,6 @@ def resolve_category(path: str, configured_categories: list[str]) -> str | None:
     return None
 
 
-
 class _RoutingLookups:
     """Memoizes approver-routing storage reads while routing many requests in one listing.
 
@@ -164,9 +163,7 @@ class AccessRequestService:
         Returns:
             The approvers and their count.
         """
-        items = self._storage.category_approvers.list_approvers(
-            category_path, attribute_key=attribute_key
-        )
+        items = self._storage.category_approvers.list_approvers(category_path, attribute_key=attribute_key)
         return CategoryApproverList(approvers=items, total=len(items))
 
     def is_category_approver(self, actor: CurrentUser) -> bool:
@@ -210,9 +207,7 @@ class AccessRequestService:
         Returns:
             Grantable keys sorted by key.
         """
-        definitions = {
-            item.key.lower(): item.key for item in self._identity.list_definitions().definitions
-        }
+        definitions = {item.key.lower(): item.key for item in self._identity.list_definitions().definitions}
         if actor.is_admin:
             items = [GrantableAttribute(key=key, categories=[]) for key in sorted(definitions.values())]
             return GrantableAttributeList(attributes=items, total=len(items))
@@ -241,12 +236,10 @@ class AccessRequestService:
         ]
         return GrantableAttributeList(attributes=items, total=len(items))
 
-    def upsert_approver(
-        self, request: UpsertCategoryApproverRequest, actor: CurrentUser
-    ) -> CategoryApprover:
+    def upsert_approver(self, request: UpsertCategoryApproverRequest, actor: CurrentUser) -> CategoryApprover:
         """Add or update an approver for sensitivity, data-access, or a row-filter dimension.
 
-        Sensitivity categories must be current ``sensitivity_category`` values. Data-access
+        Sensitivity categories must be current ``access_path`` values. Data-access
         paths must be allowed values on the data-access definition (hierarchical routing).
         Row-filter dimensions must already exist as non-governed-tag attribute definitions;
         the stored path is the dimension key. Records a ``sensitivity_category_approver.upserted``
@@ -281,15 +274,13 @@ class AccessRequestService:
             allowed = {value.lower(): value for value in categories}
             if request.category_path.lower() not in allowed:
                 raise InvalidRequestError(
-                    f"Category '{request.category_path}' is not a sensitivity_category value. "
+                    f"Category '{request.category_path}' is not an access_path value. "
                     f"Allowed: {', '.join(categories)}"
                 )
             category = allowed[request.category_path.lower()]
         elif data_access_key is not None and attribute_key == data_access_key:
             # Hierarchical paths from the data-access vocabulary (most-specific wins at decide time).
-            allowed_values = [
-                value for value in data_access.allowed_values if value and value != "*"
-            ]
+            allowed_values = [value for value in data_access.allowed_values if value and value != "*"]
             allowed = {value.lower(): value for value in allowed_values}
             if request.category_path.lower() not in allowed:
                 raise InvalidRequestError(
@@ -307,8 +298,7 @@ class AccessRequestService:
             # Dimension approvers are exact-match on the dimension key.
             if request.category_path.strip().lower() not in {attribute_key, definition.key.lower()}:
                 raise InvalidRequestError(
-                    f"Row-filter approvers use the dimension key as the path "
-                    f"(expected '{definition.key}')"
+                    f"Row-filter approvers use the dimension key as the path (expected '{definition.key}')"
                 )
             category = definition.key
             attribute_key = definition.key
@@ -385,9 +375,7 @@ class AccessRequestService:
             attribute_key=key,
             attribute_value=value,
         ):
-            raise InvalidRequestError(
-                f"You already have a pending request for {key}='{value}'"
-            )
+            raise InvalidRequestError(f"You already have a pending request for {key}='{value}'")
         now = datetime.now(UTC)
         routing = self.resolve_attribute_routing(key, value)
         created = self._storage.access_requests.create(
@@ -477,9 +465,7 @@ class AccessRequestService:
         key = (attribute_key or SENSITIVITY_ATTRIBUTE_KEY).strip().lower()
         data_access = lookups.data_access_definition()
         data_access_key = data_access.key.lower() if data_access is not None else None
-        if key == SENSITIVITY_ATTRIBUTE_KEY or (
-            data_access_key is not None and key == data_access_key
-        ):
+        if key == SENSITIVITY_ATTRIBUTE_KEY or (data_access_key is not None and key == data_access_key):
             route_key = SENSITIVITY_ATTRIBUTE_KEY if key == SENSITIVITY_ATTRIBUTE_KEY else data_access.key
             configured = lookups.configured_categories(route_key)
             category = resolve_category(attribute_value, configured)
@@ -597,12 +583,8 @@ class AccessRequestService:
                 app admin).
         """
         current = self._require_pending(request_id)
-        self._require_can_decide(
-            actor, current.attribute_value, attribute_key=current.attribute_key
-        )
-        expires = self._require_future(
-            body.expires_at or current.requested_expires_at, field="expires_at"
-        )
+        self._require_can_decide(actor, current.attribute_value, attribute_key=current.attribute_key)
+        expires = self._require_future(body.expires_at or current.requested_expires_at, field="expires_at")
         self._identity.assign(
             AssignAttributeRequest(
                 principal_name=current.requester_name,
@@ -655,9 +637,7 @@ class AccessRequestService:
             ForbiddenError: If the actor may not decide this request.
         """
         current = self._require_pending(request_id)
-        self._require_can_decide(
-            actor, current.attribute_value, attribute_key=current.attribute_key
-        )
+        self._require_can_decide(actor, current.attribute_value, attribute_key=current.attribute_key)
         updated = current.model_copy(
             update={
                 "status": AccessRequestStatus.DENIED,
@@ -674,9 +654,7 @@ class AccessRequestService:
         )
         return saved
 
-    def approve_renewal(
-        self, assignment_id: str, body: DecideAccessRequestBody, actor: CurrentUser
-    ):
+    def approve_renewal(self, assignment_id: str, body: DecideAccessRequestBody, actor: CurrentUser):
         """Extend an expiring sensitivity assignment from the approvals inbox.
 
         Updates the assignment's expiry through the identity service (persisted and
@@ -709,9 +687,7 @@ class AccessRequestService:
             raise InvalidRequestError(
                 f"Assignment is not within the {RENEWAL_WINDOW_DAYS}-day renewal window"
             )
-        expires = self._require_future(
-            body.expires_at or current.expires_at, field="expires_at"
-        )
+        expires = self._require_future(body.expires_at or current.expires_at, field="expires_at")
         updated = self._identity.update_expiry(assignment_id, expires, actor)
         self._audit(
             "access_request.renewal_approved",
@@ -775,9 +751,7 @@ class AccessRequestService:
         lookups = _RoutingLookups(self._storage, self._identity)
 
         for request in pending:
-            if not self._can_decide_for(
-                actor, request.attribute_value, attribute_key=request.attribute_key
-            ):
+            if not self._can_decide_for(actor, request.attribute_value, attribute_key=request.attribute_key):
                 continue
             if request.attribute_key == SENSITIVITY_ATTRIBUTE_KEY:
                 category = resolve_category(request.attribute_value, configured)
@@ -842,9 +816,7 @@ class AccessRequestService:
                 )
             )
 
-        items.sort(
-            key=lambda item: item.expires_at or datetime.max.replace(tzinfo=UTC)
-        )
+        items.sort(key=lambda item: item.expires_at or datetime.max.replace(tzinfo=UTC))
         return ApprovalInbox(items=items, total=len(items))
 
     # --- helpers ---
@@ -864,15 +836,11 @@ class AccessRequestService:
         """
         definition = self._storage.identity_attributes.get_definition(attribute_key)
         if definition is None:
-            raise InvalidRequestError(
-                f"Attribute definition '{attribute_key}' is not configured"
-            )
+            raise InvalidRequestError(f"Attribute definition '{attribute_key}' is not configured")
         enriched = self._identity._enrich(definition)  # noqa: SLF001
         allowed = {value.lower(): value for value in enriched.allowed_values}
         if attribute_value.lower() not in allowed:
-            raise InvalidRequestError(
-                f"Value '{attribute_value}' is not allowed for '{attribute_key}'"
-            )
+            raise InvalidRequestError(f"Value '{attribute_value}' is not allowed for '{attribute_key}'")
         return allowed[attribute_value.lower()]
 
     def _sensitivity_allowed_values(self) -> list[str]:
@@ -883,24 +851,20 @@ class AccessRequestService:
         """
         definition = self._storage.identity_attributes.get_definition(SENSITIVITY_ATTRIBUTE_KEY)
         if definition is None:
-            raise InvalidRequestError(
-                "Sensitivity attribute definition is not configured"
-            )
+            raise InvalidRequestError("Sensitivity attribute definition is not configured")
         enriched = self._identity._enrich(definition)  # noqa: SLF001
         return enriched.allowed_values
 
     def _sensitivity_category_values(self) -> list[str]:
-        """Return the ``sensitivity_category`` governed tag values.
+        """Return the ``access_path`` governed tag values.
 
         Raises:
             InvalidRequestError: If the governed tag cannot be read.
         """
         try:
-            return self._identity._governed_tags.get_tag("sensitivity_category").values  # noqa: SLF001
+            return self._identity._governed_tags.get_tag("access_path").values  # noqa: SLF001
         except Exception as exc:  # noqa: BLE001
-            raise InvalidRequestError(
-                f"Could not load sensitivity_category values: {exc}"
-            ) from exc
+            raise InvalidRequestError(f"Could not load access_path values: {exc}") from exc
 
     def _require_pending(self, request_id: str) -> AccessRequest:
         """Load a request that must still be pending.
@@ -939,12 +903,8 @@ class AccessRequestService:
         key = (attribute_key or SENSITIVITY_ATTRIBUTE_KEY).strip().lower()
         data_access = self._identity.find_data_access_definition()
         data_access_key = data_access.key.lower() if data_access is not None else None
-        if key == SENSITIVITY_ATTRIBUTE_KEY or (
-            data_access_key is not None and key == data_access_key
-        ):
-            route_key = (
-                SENSITIVITY_ATTRIBUTE_KEY if key == SENSITIVITY_ATTRIBUTE_KEY else data_access.key
-            )
+        if key == SENSITIVITY_ATTRIBUTE_KEY or (data_access_key is not None and key == data_access_key):
+            route_key = SENSITIVITY_ATTRIBUTE_KEY if key == SENSITIVITY_ATTRIBUTE_KEY else data_access.key
             category = resolve_category(
                 path,
                 self._storage.category_approvers.list_configured_categories(attribute_key=route_key),
@@ -970,9 +930,7 @@ class AccessRequestService:
             return True
         if category is None:
             return False
-        approvers = self._storage.category_approvers.list_approvers(
-            category, attribute_key=attribute_key
-        )
+        approvers = self._storage.category_approvers.list_approvers(category, attribute_key=attribute_key)
         if not approvers:
             # Category / dimension exists but no reviewers — only app admins (handled above).
             return False

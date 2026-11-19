@@ -31,7 +31,7 @@ First successful run backfills **90 days**. Later runs re-process the last **3 d
 | `mask_exempt_principals` | Principals on column-mask `EXCEPT` lists. |
 | `access_snapshot` | Attributes each user held on the snapshot date (direct or via group). |
 | `group_member_snapshot` | Users inside each group that holds a `data_access` attribute (nesting expanded). |
-| `governed_table_snapshot` | Enrolled tables carrying a `data_access_control` tag, with the tag value (path). |
+| `governed_table_snapshot` | Enrolled tables carrying an `access_path` tag, with the tag value (path). |
 | `table_access_snapshot` | Who holds access to each governed table, directly or through a group (current). |
 
 Enrollment perimeter: catalogs tagged `data_access_controlled=true` (or the Data Access settings enrollment tag).
@@ -40,7 +40,7 @@ Enrollment perimeter: catalogs tagged `data_access_controlled=true` (or the Data
 
 ### Access holders (Phase 3)
 
-A holder is a USER or GROUP assignment whose value covers the table's `data_access_control` tag value: equal to it, or a dotted prefix of it (`finance` covers `finance.budget`). Wildcard (`*`) assignments are excluded. Group holders expand to members in `group_member_snapshot` via Account SCIM (member display names are resolved to `userName` by SCIM id).
+A holder is a USER or GROUP assignment whose value covers the table's `access_path` tag value: equal to it, or a dotted prefix of it (`finance` covers `finance.budget`). Wildcard (`*`) assignments are excluded. Group holders expand to members in `group_member_snapshot` via Account SCIM (member display names are resolved to `userName` by SCIM id).
 
 **Unused access**: a holder with zero reads on that table in the window.  
 **Reads without assigned access**: a user with reads in the window and no holder row on that table (often owners, admins, or grants made outside the app)—reported, not judged.

@@ -13,16 +13,16 @@ Policies applied:
 
 Usage:
   # Apply backup policies to a catalog (uses default profile dbc-16303671-e52d):
-  python scripts/catalog_policies.py apply --catalog data_access_control
+  python scripts/catalog_policies.py apply --catalog dga_finance
 
   # Inspect effective policies on a catalog:
-  python scripts/catalog_policies.py status --catalog data_access_control
+  python scripts/catalog_policies.py status --catalog dga_finance
 
   # Drop catalog-level policies when metastore ABAC is active:
-  python scripts/catalog_policies.py drop --catalog data_access_control
+  python scripts/catalog_policies.py drop --catalog dga_finance
 
   # Dry-run (prints SQL statements without executing):
-  python scripts/catalog_policies.py apply --catalog data_access_control --dry-run
+  python scripts/catalog_policies.py apply --catalog dga_finance --dry-run
 """
 
 from __future__ import annotations
@@ -155,7 +155,7 @@ COMMENT 'Catalog backup: Mask sensitivity columns (non-geo); presentation via ma
 COLUMN MASK `{app_cat}`.`{schema}`.`mask_variant`
 TO `account users`{except_clause}
 MATCH COLUMNS (
-  has_tag('sensitivity_category')
+  has_tag('access_path')
   AND has_tag('sensitivity')
   AND has_tag('data_type')
   AND NOT has_tag_value('data_type', 'geometry')
@@ -163,7 +163,7 @@ MATCH COLUMNS (
 ) AS c
 ON COLUMN c
 USING COLUMNS (
-  get_column_tag_value(c, 'sensitivity_category'),
+  get_column_tag_value(c, 'access_path'),
   get_column_tag_value(c, 'sensitivity'),
   get_column_tag_value(c, 'mask_rule')
 )"""
@@ -175,13 +175,13 @@ COMMENT 'Catalog backup: Mask sensitivity geometry columns; NULL unless sensitiv
 COLUMN MASK `{app_cat}`.`{schema}`.`mask_geometry_4326`
 TO `account users`{except_clause}
 MATCH COLUMNS (
-  has_tag('sensitivity_category')
+  has_tag('access_path')
   AND has_tag('sensitivity')
   AND has_tag_value('data_type', 'geometry')
 ) AS c
 ON COLUMN c
 USING COLUMNS (
-  get_column_tag_value(c, 'sensitivity_category'),
+  get_column_tag_value(c, 'access_path'),
   get_column_tag_value(c, 'sensitivity')
 )"""
 
@@ -192,13 +192,13 @@ COMMENT 'Catalog backup: Mask sensitivity geography columns; NULL unless sensiti
 COLUMN MASK `{app_cat}`.`{schema}`.`mask_geography_4326`
 TO `account users`{except_clause}
 MATCH COLUMNS (
-  has_tag('sensitivity_category')
+  has_tag('access_path')
   AND has_tag('sensitivity')
   AND has_tag_value('data_type', 'geography')
 ) AS c
 ON COLUMN c
 USING COLUMNS (
-  get_column_tag_value(c, 'sensitivity_category'),
+  get_column_tag_value(c, 'access_path'),
   get_column_tag_value(c, 'sensitivity')
 )"""
 
@@ -329,7 +329,7 @@ def main() -> int:
             "-c",
             "--catalog",
             required=True,
-            help="Target catalog name (e.g. data_access_control)",
+            help="Target catalog name (e.g. dga_finance)",
         )
         p.add_argument(
             "-p",

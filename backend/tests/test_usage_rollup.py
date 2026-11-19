@@ -128,9 +128,7 @@ def test_aggregate_and_access_sql_mention_sensitivity() -> None:
 
 def test_access_holder_sql_matches_hierarchical_tag_values() -> None:
     tables = UsageTables(catalog="app", identity_table="`app`.`app`.`identity_attributes`")
-    sql = "\n".join(
-        access_holder_sql(tables, ["data_governance_demo"], ["data_access"], "data_access_control")
-    )
+    sql = "\n".join(access_holder_sql(tables, ["data_governance_demo"], ["data_access"], "access_path"))
     assert "governed_table_snapshot" in sql
     assert "table_access_snapshot" in sql
     assert "group_member_snapshot" in sql
