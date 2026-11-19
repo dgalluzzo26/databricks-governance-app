@@ -1118,6 +1118,27 @@ export interface MyAccessSnapshot {
   directAttributeCount: number;
   inheritedAttributeCount: number;
   dataAccessReadyCount: number;
+  subscriptions: MyAccessSubscription[];
+  subscriptionCount: number;
+}
+
+/** A subscription the caller is a subject of, directly or through a group. */
+export interface MyAccessSubscription {
+  subscriptionId: string;
+  name: string;
+  displayName: string;
+  groupName: string;
+  phase: SubscriptionPhase;
+  startsAt: string;
+  expiresAt: string;
+  /** "Direct" or the group the caller belongs to. */
+  via: string;
+  resources: SubscriptionResource[];
+  /** Grants held at the last sync; empty when the subscription is not in effect. */
+  grants: SubscriptionGrant[];
+  matchedObjects: number;
+  lastSyncedAt: string | null;
+  syncOk: boolean | null;
 }
 
 /** Request body for `POST /identity/my-access/resources`. */

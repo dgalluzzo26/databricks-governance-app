@@ -207,10 +207,9 @@ through `quote_identifier` and literals through `string_literal`; never interpol
   **Sizing & cost**. The selected tab is kept in `?tab=`.
 - **Capacity.** `PerformanceService.capacity()` reads the app's compute size, the Lakebase endpoint,
   and the SQL warehouse size through the Account Admin SP. Each read fails separately.
-- **App telemetry.** The app exports OpenTelemetry logs (and optionally metrics/traces) to
-  ``${app_catalog}.${app_schema}.otel_{logs,metrics,spans}`` via ``telemetry_export_destinations``
-  in ``resources/app.yml``. System logs and usage events fill ``otel_logs`` after deploy;
-  ``otel_spans`` / ``otel_metrics`` need custom OpenTelemetry instrumentation in the process.
+- **App telemetry.** Not managed by the bundle. Export of OpenTelemetry logs to
+  ``${app_catalog}.${app_schema}.otel_{logs,metrics,spans}`` is configured manually on the app.
+  The app code does not read those tables; usage analytics reads the ``usage`` schema instead.
 - **Scaling.** The bundle runs the app on Medium instances with horizontal scaling
   (`app_min_instances` / `app_max_instances`, fixed at 2; min and max must match unless the
   workspace has app autoscaling) and the warehouse at 1 to 4 clusters. Each

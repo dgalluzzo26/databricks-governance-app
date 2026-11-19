@@ -4,6 +4,10 @@ resources:
       name: ${var.app_name}-setup
       description: Idempotent setup for the Data Governance App (app catalog, Delta tables, UDFs, grants)
       max_concurrent_runs: 1
+      # Runs as the Account Admin SP (not the deployer), so catalog, schema, and grant
+      # statements use the same identity that owns the app schema.
+      run_as:
+        service_principal_name: ${var.sync_job_run_as_sp}
       tasks:
         - task_key: provision
           environment_key: default

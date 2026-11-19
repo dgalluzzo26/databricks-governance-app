@@ -88,9 +88,7 @@ class GrantAdminSpPermissionsStep(ProvisioningStep):
             ctx.sql.execute(
                 f"GRANT MANAGE, USE CATALOG, USE SCHEMA, SELECT ON CATALOG `{catalog}` TO `{admin_sp}`"
             )
-        logger.info(
-            "Granted Admin SP MANAGE/USE/SELECT on enrolled catalogs: %s", ", ".join(catalogs)
-        )
+        logger.info("Granted Admin SP MANAGE/USE/SELECT on enrolled catalogs: %s", ", ".join(catalogs))
 
     def _ensure_lakebase_role(self, ctx: ProvisioningContext, admin_sp: str) -> None:
         project = (ctx.lakebase_project_id or "").strip()

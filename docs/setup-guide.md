@@ -125,10 +125,10 @@ In order:
 5. **Admin SP permissions** — Lakebase / catalog grants for the Account Admin SP
 6. **Usage analytics** — `{app_catalog}.usage` schema and system-table grants when allowed
 
-`./scripts/deploy.sh` creates the app catalog via SQL before the bundle deploy so app
-telemetry destinations resolve on first create (Default Storage metastores cannot use the
-catalogs REST API without a storage root). On metastores without Default Storage or a root
-location, set `catalog_managed_location`.
+`./scripts/deploy.sh` creates the app catalog via SQL before the bundle deploy, because Default
+Storage metastores cannot use the catalogs REST API without a storage root. On metastores
+without Default Storage or a root location, set `catalog_managed_location`. App telemetry export
+is configured manually and is not part of the bundle.
 
 ### Main bundle variables
 

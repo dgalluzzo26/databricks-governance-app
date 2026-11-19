@@ -41,6 +41,7 @@ import type {
   MyAccessResources,
   MyAccessResourcesRequest,
   MyAccessSnapshot,
+  MyAccessSubscription,
   TableAccessInsight,
   DataAccessAnalytics,
   DataAccessViewPage,
@@ -850,7 +851,36 @@ export const testMyAttributes: AttributeAssignmentList = {
   total: 1,
 };
 
+export const testMyAccessSubscription: MyAccessSubscription = {
+  subscriptionId: "sub-1",
+  name: "ia_engineers",
+  displayName: "IA engineers",
+  groupName: "dac_subscription_ia_engineers",
+  phase: "ACTIVE",
+  startsAt: "2026-11-01T00:00:00Z",
+  expiresAt: "2026-12-31T23:59:00Z",
+  via: "users",
+  resources: [
+    {
+      selector: "TAG_MATCH",
+      conditions: [{ tagKey: "access_path", values: ["people.ia"], match: "PREFIX" }],
+      levels: ["TABLE"],
+      preset: "READ",
+      privileges: [],
+    },
+  ],
+  grants: [
+    { securableKind: "TABLE", fullName: "dga_people.ia.claims", privilege: "SELECT" },
+    { securableKind: "CATALOG", fullName: "dga_people", privilege: "USE CATALOG" },
+  ],
+  matchedObjects: 1,
+  lastSyncedAt: "2026-11-19T12:00:00Z",
+  syncOk: true,
+};
+
 export const testMyAccess: MyAccessSnapshot = {
+  subscriptions: [testMyAccessSubscription],
+  subscriptionCount: 1,
   groups: [
     { name: "admins", attributeCount: 1 },
     { name: "users", attributeCount: 1 },

@@ -5,6 +5,7 @@ import time
 from dataclasses import dataclass
 
 from databricks.sdk import WorkspaceClient
+from databricks.sdk.errors import NotFound
 from databricks.sdk.service.sql import Disposition, Format, StatementState
 
 logger = logging.getLogger("provisioning")
@@ -52,3 +53,11 @@ class ProvisioningContext:
     @property
     def app_schema_fqn(self) -> str:
         return f"`{self.app_catalog}`.`{self.app_schema}`"
+
+    def app_principal(self) -> str | None:
+        """Client ID of the app's service principal, or None when the app does not exist yet."""
+        try:
+            app = self.client.apps.get(self.app_name)
+        except NotFound:
+            return None
+        return app.service_principal_client_id

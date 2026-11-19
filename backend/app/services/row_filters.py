@@ -378,11 +378,12 @@ class RowFilterService:
         except_principals = _parse_list(rows[0].get("except_principals")) if rows else []
         matched = set(_MATCHED_DIMENSION.findall(match or ""))
         missing_tag = [d for d in dims if d not in tag_values]
+        # With no dimensions the policy must be absent; EXCEPT principals only matter when it exists.
         in_sync = (
             not missing_tag
             and (bool(rows) if dims else not rows)
             and matched == set(dims)
-            and set(self._except_principals()) <= set(except_principals)
+            and (not rows or set(self._except_principals()) <= set(except_principals))
         )
         return RowFilterPackStatus(
             tag_key=self.tag_key,
@@ -424,7 +425,14 @@ class RowFilterService:
             self._create_row_filter_policy(policy_name, dims)
         else:
             with step("Drop row-filter policy"):
-                self._sql.execute(f"DROP POLICY IF EXISTS {policy_name} ON METASTORE")
+                # Databricks rejects DROP POLICY IF EXISTS, so look the policy up first.
+                exists = self._sql.query(
+                    "SELECT 1 FROM system.information_schema.abac_policy_definitions "
+                    "WHERE policy_name = :name AND upper(on_securable_type) = 'METASTORE'",
+                    {"name": policy_name},
+                )
+                if exists:
+                    self._sql.execute(f"DROP POLICY {policy_name} ON METASTORE")
         if self._metadata_cache is not None:
             self._metadata_cache.invalidate(("abac-policy-definitions",))
         self._audit("row_filter.pack_ensured", actor.user_name, {"dimensions": dims})

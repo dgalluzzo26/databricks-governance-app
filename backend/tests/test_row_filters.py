@@ -265,3 +265,30 @@ def test_attach_enforces_one_dimension_per_table(container) -> None:  # noqa: AN
         )
     with pytest.raises(InvalidRequestError, match="Detach"):
         service.delete_dimension("state", actor)  # type: ignore[arg-type]
+
+
+def test_pack_with_no_dimensions_drops_policy_only_when_it_exists(container) -> None:  # noqa: ANN001
+    """Databricks rejects DROP POLICY IF EXISTS; the drop must be guarded by a lookup."""
+    _, service, sql = _services(container)
+    service.ensure_pack(_admin())  # type: ignore[arg-type]
+    assert not any("DROP POLICY" in s for s in sql.executed)
+
+    original = sql.query
+
+    def with_policy(statement: str, parameters=None):  # noqa: ANN001
+        if "abac_policy_definitions" in statement:
+            return [{"match_columns": "", "except_principals": ""}]
+        return original(statement, parameters)
+
+    sql.query = with_policy  # type: ignore[method-assign]
+    service.ensure_pack(_admin())  # type: ignore[arg-type]
+    drops = [s for s in sql.executed if "DROP POLICY" in s]
+    assert drops == [f"DROP POLICY {service._config.row_filter_policy_name} ON METASTORE"]  # noqa: SLF001
+    assert not any("IF EXISTS" in s for s in drops)
+
+
+def test_pack_status_is_in_sync_with_no_dimensions_and_no_policy(container) -> None:  # noqa: ANN001
+    _, service, _sql = _services(container)
+    status = service.pack_status()
+    assert status.policy_exists is False
+    assert status.in_sync is True

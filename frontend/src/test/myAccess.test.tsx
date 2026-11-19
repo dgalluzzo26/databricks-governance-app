@@ -2,7 +2,7 @@ import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { MyAccessResources } from "@/api/types";
-import { fakeServices, renderApp } from "./renderApp";
+import { fakeServices, renderApp, testMyAccess, testMyAccessSubscription } from "./renderApp";
 
 describe("Identity My access", () => {
   it("shows groups, inherited attributes, and expands resources", async () => {
@@ -65,5 +65,39 @@ describe("Identity My access", () => {
     expect(screen.getByText("11–20 of 25")).toBeInTheDocument();
     expect(within(table).getByText("data_governance_demo.finance.t010")).toBeInTheDocument();
     expect(within(table).queryByText("data_governance_demo.finance.t000")).not.toBeInTheDocument();
+  });
+
+  it("lists subscriptions that include the caller and shows what they hold", async () => {
+    const user = userEvent.setup();
+    renderApp("/identity?tab=my-access");
+
+    const table = await screen.findByRole("table", { name: "My subscriptions" });
+    expect(within(table).getByText("IA engineers")).toBeInTheDocument();
+    expect(within(table).getByText("dac_subscription_ia_engineers")).toBeInTheDocument();
+    expect(within(table).getByText("Via users")).toBeInTheDocument();
+    expect(within(table).getByText("Active")).toBeInTheDocument();
+    expect(screen.getByText("1 subscriptions")).toBeInTheDocument();
+
+    await user.click(within(table).getByRole("button", { name: "Show access" }));
+    expect(screen.getByText(/Reaches: Tables where access_path is under people\.ia/)).toBeInTheDocument();
+    const grants = screen.getByRole("table", { name: "Matched objects" });
+    expect(within(grants).getByText("dga_people.ia.claims")).toBeInTheDocument();
+    expect(within(grants).getByText("SELECT")).toBeInTheDocument();
+  });
+
+  it("explains when a subscription holds nothing yet", async () => {
+    const user = userEvent.setup();
+    const services = fakeServices({
+      myAccess: {
+        ...testMyAccess,
+        subscriptions: [{ ...testMyAccessSubscription, phase: "PENDING_APPROVAL", grants: [] }],
+        subscriptionCount: 1,
+      },
+    });
+    renderApp("/identity?tab=my-access", services);
+    const table = await screen.findByRole("table", { name: "My subscriptions" });
+    expect(within(table).getByText("Pending approval")).toBeInTheDocument();
+    await user.click(within(table).getByRole("button", { name: "Show access" }));
+    expect(screen.getByText(/not in effect, so it holds no access/)).toBeInTheDocument();
   });
 });

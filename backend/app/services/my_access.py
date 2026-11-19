@@ -12,13 +12,24 @@ from backend.app.models.my_access import (
     MyAccessResources,
     MyAccessResourcesRequest,
     MyAccessSnapshot,
+    MyAccessSubscription,
 )
 from backend.app.models.principal import PrincipalKind
+from backend.app.models.subscription import Subscription, SubscriptionPhase
 from backend.app.models.user import CurrentUser
+from backend.app.repositories.subscriptions import SubscriptionRepository
 from backend.app.services.attribute_explorer import AttributeExplorerService
 from backend.app.services.data_access import DataAccessService
 from backend.app.services.data_access_planner import is_managed_group
 from backend.app.services.identity_attributes import IdentityAttributeService
+
+# Shown first; then the ones that are about to start, then everything else.
+_PHASE_ORDER = {
+    SubscriptionPhase.ACTIVE: 0,
+    SubscriptionPhase.EXPIRING: 1,
+    SubscriptionPhase.SCHEDULED: 2,
+    SubscriptionPhase.PENDING_APPROVAL: 3,
+}
 
 
 class MyAccessService:
@@ -28,6 +39,7 @@ class MyAccessService:
         identity: Effective assignments (user + groups).
         data_access: Data-access status for ``dac_*`` paths.
         attribute_explorer: Kind classification and resource inventory.
+        subscriptions: Subscription store, to list the ones the caller is a subject of.
     """
 
     def __init__(
@@ -35,10 +47,12 @@ class MyAccessService:
         identity: IdentityAttributeService,
         data_access: DataAccessService,
         attribute_explorer: AttributeExplorerService,
+        subscriptions: SubscriptionRepository,
     ) -> None:
         self._identity = identity
         self._data_access = data_access
         self._explorer = attribute_explorer
+        self._subscriptions = subscriptions
 
     def snapshot(self, user: CurrentUser) -> MyAccessSnapshot:
         """Groups the user belongs to and every attribute they hold (direct or via group)."""
@@ -107,6 +121,7 @@ class MyAccessService:
             for name in user.attribute_groups
             if not is_managed_group(name, prefix)
         ]
+        subscriptions = self._subscriptions_for(user)
         return MyAccessSnapshot(
             groups=groups,
             attributes=attributes,
@@ -115,7 +130,22 @@ class MyAccessService:
             direct_attribute_count=direct,
             inherited_attribute_count=inherited,
             data_access_ready_count=ready,
+            subscriptions=subscriptions,
+            subscription_count=len(subscriptions),
         )
+
+    def _subscriptions_for(self, user: CurrentUser) -> list[MyAccessSubscription]:
+        """Subscriptions whose subjects include the caller, directly or through a group."""
+        me = {n.lower() for n in (user.user_name, user.email) if n}
+        groups = {g.lower(): g for g in user.attribute_groups}
+        rows: list[MyAccessSubscription] = []
+        for subscription in self._subscriptions.list_subscriptions():
+            via = _via(subscription, me, groups)
+            if via is None:
+                continue
+            rows.append(_to_row(subscription, via))
+        rows.sort(key=lambda r: (_PHASE_ORDER.get(r.phase, 9), r.display_name.lower()))
+        return rows
 
     def resources(self, body: MyAccessResourcesRequest, user: CurrentUser) -> MyAccessResources:
         """Load tables/columns for one attribute the caller holds.
@@ -167,3 +197,35 @@ class MyAccessService:
             kind=kind,
             tables=tables,
         )
+
+
+def _via(subscription: Subscription, me: set[str], groups: dict[str, str]) -> str | None:
+    """How the caller is covered: ``Direct`` wins over a group, None when not a subject."""
+    via: str | None = None
+    for subject in subscription.subjects:
+        name = subject.principal_name.lower()
+        if subject.principal_type == PrincipalKind.USER and name in me:
+            return "Direct"
+        if subject.principal_type == PrincipalKind.GROUP and name in groups:
+            via = via or groups[name]
+    return via
+
+
+def _to_row(subscription: Subscription, via: str) -> MyAccessSubscription:
+    in_effect = subscription.in_effect()
+    sync = subscription.last_sync
+    return MyAccessSubscription(
+        subscription_id=subscription.subscription_id,
+        name=subscription.name,
+        display_name=subscription.display_name,
+        group_name=subscription.group_name,
+        phase=subscription.phase,
+        starts_at=subscription.starts_at,
+        expires_at=subscription.expires_at,
+        via=via,
+        resources=subscription.resources,
+        grants=list(sync.grants) if sync and in_effect else [],
+        matched_objects=sync.matched_objects if sync else 0,
+        last_synced_at=sync.synced_at if sync else None,
+        sync_ok=sync.ok if sync else None,
+    )

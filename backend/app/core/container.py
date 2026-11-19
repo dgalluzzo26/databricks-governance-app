@@ -174,7 +174,9 @@ class ServiceContainer:
         attribute_explorer = AttributeExplorerService(
             storage, identity_attributes, access_requests, data_access, sql, row_filters
         )
-        my_access = MyAccessService(identity_attributes, data_access, attribute_explorer)
+        my_access = MyAccessService(
+            identity_attributes, data_access, attribute_explorer, storage.subscriptions
+        )
         usage_analytics = UsageAnalyticsService(sql, workspace, config, cache=metadata_cache)
         usage_access = UsageAccessService(sql, config, cache=metadata_cache)
         subscriptions = SubscriptionService(

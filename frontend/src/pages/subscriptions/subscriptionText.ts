@@ -5,6 +5,7 @@ import type { BadgeTone } from "@/components/ui/Badge";
 import type {
   PrivilegePreset,
   SecurableKind,
+  SubscriptionGrant,
   SubscriptionPhase,
   SubscriptionResource,
 } from "@/api/types";
@@ -110,6 +111,24 @@ export function describeResource(resource: SubscriptionResource): string {
 export function describePrivileges(resource: SubscriptionResource): string {
   if (resource.preset === "CUSTOM") return resource.privileges.join(", ");
   return PRESET_LABELS[resource.preset].label;
+}
+
+/**
+ * Grants as one row per object with its privileges, in first-seen order.
+ *
+ * @param grants - Grants from a sync.
+ */
+export function groupGrants(
+  grants: SubscriptionGrant[],
+): { securableKind: SecurableKind; fullName: string; privileges: string[] }[] {
+  const grouped = new Map<string, { securableKind: SecurableKind; fullName: string; privileges: string[] }>();
+  for (const g of grants) {
+    const key = `${g.securableKind}:${g.fullName}`;
+    const row = grouped.get(key) ?? { securableKind: g.securableKind, fullName: g.fullName, privileges: [] };
+    row.privileges.push(g.privilege);
+    grouped.set(key, row);
+  }
+  return [...grouped.values()];
 }
 
 /** Locale date and time for an ISO timestamp. */

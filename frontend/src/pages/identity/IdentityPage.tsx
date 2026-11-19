@@ -9,7 +9,7 @@
  * redirects to `/approvals`. This gating is a UI convenience only; the backend enforces
  * authorization on every endpoint.
  */
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { Link, Navigate, useSearchParams } from "react-router-dom";
 import {
   useAccessStatus,
@@ -44,6 +44,7 @@ import type {
   GovernedTagSummary,
   IdentityAttributeAssignment,
   MyAccessAttribute,
+  MyAccessSubscription,
   PrincipalKind,
   UnlockedTable,
   ValueSource,
@@ -57,6 +58,8 @@ import { useTableView, type TableColumn } from "@/hooks/useTableView";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import styles from "./IdentityPage.module.css";
 import { isDataAccessDefinition } from "./definitionRules";
+import { ObjectTable } from "@/pages/subscriptions/SubscriptionWizardPage";
+import { PHASE_LABELS, describePrivileges, describeResource, groupGrants } from "@/pages/subscriptions/subscriptionText";
 
 /**
  * Identifier of a top-level tab on the identity page, as stored in the `?tab=` search parameter.
@@ -298,8 +301,11 @@ function MyAccessPanel() {
           <Badge tone="info">{data.directAttributeCount} direct</Badge>
           <Badge tone="info">{data.inheritedAttributeCount} via groups</Badge>
           <Badge tone="success">{data.dataAccessReadyCount} data access ready</Badge>
+          <Badge tone="info">{data.subscriptionCount} subscriptions</Badge>
         </div>
       </Card>
+
+      <MyAccessSubscriptionsCard subscriptions={data.subscriptions} />
 
       <Card title="My groups" actions={<Badge>{data.groups.length}</Badge>}>
         {data.groups.length === 0 ? (
@@ -356,6 +362,97 @@ function MyAccessPanel() {
         )}
       </Card>
     </div>
+  );
+}
+
+/**
+ * Subscriptions that include the caller, directly or through a group. Each row can expand to the
+ * grants its group held at the last sync and what the subscription is meant to reach.
+ */
+function MyAccessSubscriptionsCard({ subscriptions }: { subscriptions: MyAccessSubscription[] }) {
+  const [openId, setOpenId] = useState<string | null>(null);
+  return (
+    <Card title="My subscriptions" actions={<Badge>{subscriptions.length}</Badge>}>
+      {subscriptions.length === 0 ? (
+        <div className={styles.empty}>No subscriptions include you, directly or through your groups.</div>
+      ) : (
+        <div className={styles.tableWrap}>
+          <table className={styles.table} aria-label="My subscriptions">
+            <thead>
+              <tr>
+                <th>Subscription</th>
+                <th>Via</th>
+                <th>Status</th>
+                <th>Ends</th>
+                <th>Objects</th>
+                <th>Access</th>
+              </tr>
+            </thead>
+            <tbody>
+              {subscriptions.map((sub) => {
+                const open = openId === sub.subscriptionId;
+                const phase = PHASE_LABELS[sub.phase];
+                return (
+                  <Fragment key={sub.subscriptionId}>
+                    <tr>
+                      <td>
+                        <strong>{sub.displayName}</strong>
+                        <br />
+                        <code>{sub.groupName}</code>
+                      </td>
+                      <td>{sub.via === "Direct" ? "Direct" : `Via ${sub.via}`}</td>
+                      <td>
+                        <Badge tone={phase.tone}>{phase.label}</Badge>
+                      </td>
+                      <td className={styles.muted}>{formatWhen(sub.expiresAt)}</td>
+                      <td>{sub.matchedObjects}</td>
+                      <td>
+                        <button
+                          type="button"
+                          className={styles.button}
+                          onClick={() => setOpenId(open ? null : sub.subscriptionId)}
+                          aria-expanded={open}
+                        >
+                          {open ? "Hide" : "Show"} access
+                        </button>
+                      </td>
+                    </tr>
+                    {open && (
+                      <tr>
+                        <td colSpan={6}>
+                          <div className={styles.stack}>
+                            <p className={styles.muted}>
+                              Reaches: {sub.resources.map(describeResource).join("; ")}. Permissions:{" "}
+                              {sub.resources.map(describePrivileges).join("; ")}.
+                            </p>
+                            {sub.grants.length > 0 ? (
+                              <>
+                                <p className={styles.muted}>
+                                  As of{" "}
+                                  {sub.lastSyncedAt ? formatWhen(sub.lastSyncedAt) : "the last sync"}
+                                  {sub.syncOk === false && " (the last sync reported errors)"}:
+                                </p>
+                                <ObjectTable objects={groupGrants(sub.grants).slice(0, 200)} />
+                              </>
+                            ) : (
+                              <p className={styles.muted}>
+                                {sub.phase === "ACTIVE" || sub.phase === "EXPIRING"
+                                  ? "No grants recorded yet. The next sync sets them."
+                                  : "This subscription is not in effect, so it holds no access."}
+                              </p>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
   );
 }
 

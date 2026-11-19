@@ -6,7 +6,7 @@
 import { useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useCurrentUser, useSubscription, useSubscriptionAction, useSubscriptionOptions } from "@/api/queries";
-import type { SecurableKind, Subscription } from "@/api/types";
+import type { Subscription } from "@/api/types";
 import { Alert, Badge, Card, DescriptionList, ErrorAlert, PageHeader, Spinner } from "@/components/ui";
 import shared from "../identity/IdentityPage.module.css";
 import styles from "./Subscriptions.module.css";
@@ -17,6 +17,7 @@ import {
   describeResource,
   formatWhen,
   fromLocalInput,
+  groupGrants,
   relativeTime,
   toLocalInput,
 } from "./subscriptionText";
@@ -158,7 +159,7 @@ function Detail({ subscription: s }: { subscription: Subscription }) {
           ]}
         />
         {canManage && !ended && (
-          <div className={styles.conditionRow}>
+          <div className={styles.endDateRow}>
             <label className={shared.field}>
               <span className={shared.label}>Change end date</span>
               <input
@@ -248,14 +249,7 @@ function Detail({ subscription: s }: { subscription: Subscription }) {
 }
 
 function GrantTable({ subscription }: { subscription: Subscription }) {
-  const grouped = new Map<string, { securableKind: SecurableKind; fullName: string; privileges: string[] }>();
-  for (const g of subscription.lastSync?.grants ?? []) {
-    const key = `${g.securableKind}:${g.fullName}`;
-    const row = grouped.get(key) ?? { securableKind: g.securableKind, fullName: g.fullName, privileges: [] };
-    row.privileges.push(g.privilege);
-    grouped.set(key, row);
-  }
-  return <ObjectTable objects={[...grouped.values()].slice(0, 200)} />;
+  return <ObjectTable objects={groupGrants(subscription.lastSync?.grants ?? []).slice(0, 200)} />;
 }
 
 function Stat({ label, value }: { label: string; value: ReactNode }) {
