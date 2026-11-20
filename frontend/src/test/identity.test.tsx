@@ -49,8 +49,8 @@ describe("Identity attributes", () => {
     await user.click(within(matches).getByRole("button", { name: /Ana Lopez/ }));
     expect(within(card as HTMLElement).getByText("ana.lopez@example.com")).toBeInTheDocument();
 
-    await user.selectOptions(within(card as HTMLElement).getByLabelText("Attribute"), "sensitivity");
-    const valueBox = within(card as HTMLElement).getByRole("combobox", { name: "Value" });
+    await user.selectOptions(within(card as HTMLElement).getByLabelText("Grant"), "sensitivity");
+    const valueBox = within(card as HTMLElement).getByRole("combobox", { name: "Sensitivity path" });
     await user.click(valueBox);
     await user.click(await screen.findByRole("option", { name: "finance.budget.PII.Name" }));
     await user.type(within(card as HTMLElement).getByLabelText("Justification"), "Close support");

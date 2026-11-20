@@ -100,6 +100,39 @@ type SelectedPrincipal = { name: string; type: PrincipalKind };
 /** One attribute key/value row in the bulk assign form. */
 type AttributeRow = { key: string; value: string; id: string };
 
+/** Human label for an assignable attribute key (data access / sensitivity / row filter). */
+function attributeGrantLabel(key: string, accessTagKey = "access_path"): string {
+  const lower = key.toLowerCase();
+  if (lower === "sensitivity" || lower === "data_access" || lower === accessTagKey.toLowerCase()) {
+    if (lower === "sensitivity") return "Sensitivity";
+    return "Data access";
+  }
+  return `Row filter · ${key}`;
+}
+
+/** Value-field label for the selected attribute key. */
+function attributeValueLabel(key: string, accessTagKey = "access_path"): string {
+  const lower = key.toLowerCase();
+  if (lower === "sensitivity") return "Sensitivity path";
+  if (lower === "data_access" || lower === accessTagKey.toLowerCase()) return "Access path";
+  return "Dimension value";
+}
+
+/** Prefer data_access, then sensitivity, then the rest A–Z. */
+function sortGrantableKeys(keys: string[], accessTagKey = "access_path"): string[] {
+  const access = accessTagKey.toLowerCase();
+  const rank = (key: string) => {
+    const lower = key.toLowerCase();
+    if (lower === "data_access" || lower === access) return 0;
+    if (lower === "sensitivity") return 1;
+    return 2;
+  };
+  return [...keys].sort((a, b) => {
+    const diff = rank(a) - rank(b);
+    return diff !== 0 ? diff : a.localeCompare(b, undefined, { sensitivity: "base" });
+  });
+}
+
 /**
  * Formats an ISO timestamp for display using the browser locale.
  *
@@ -743,8 +776,11 @@ function MyAttributesTable({ assignments }: { assignments: IdentityAttributeAssi
 function RequestAccessPanel() {
   const [searchParams] = useSearchParams();
   const definitions = useAttributeDefinitions();
+  const dataAccessSettings = useDataAccessSettings();
   const dimensions = useRowFilterDimensions();
   const create = useCreateAccessRequest();
+  const accessTagKey =
+    dataAccessSettings.data?.settings.accessTagKey?.trim().toLowerCase() || "access_path";
   const prefillsKey = searchParams.get("key") ?? "sensitivity";
   const prefillsValue = searchParams.get("value") ?? "";
   const [attributeKey, setAttributeKey] = useState(prefillsKey);
@@ -758,11 +794,22 @@ function RequestAccessPanel() {
   );
   const requestable = useMemo(() => {
     const defs = definitions.data?.definitions ?? [];
-    return defs.filter((item) => item.key === "sensitivity" || dimKeys.has(item.key));
-  }, [definitions.data, dimKeys]);
+    const keys = defs
+      .filter(
+        (item) =>
+          item.key === "sensitivity" ||
+          isDataAccessDefinition(item, accessTagKey) ||
+          dimKeys.has(item.key),
+      )
+      .map((item) => item.key);
+    const ordered = sortGrantableKeys(keys, accessTagKey);
+    return ordered
+      .map((key) => defs.find((item) => item.key === key))
+      .filter((item): item is AttributeDefinition => Boolean(item));
+  }, [definitions.data, dimKeys, accessTagKey]);
   const selected = requestable.find((item) => item.key === attributeKey) ?? null;
   const values = selected?.allowedValues ?? [];
-  const isRowFilter = attributeKey !== "sensitivity";
+  const valueLabel = attributeValueLabel(attributeKey, accessTagKey);
 
   // Re-apply prefills when the deep-link search params change while the panel is mounted.
   useEffect(() => {
@@ -793,21 +840,22 @@ function RequestAccessPanel() {
   return (
     <Card title="Request access">
       <p className={styles.muted}>
-        Request a sensitivity path (category approvers when configured) or a row-filter dimension value
-        such as <code>state=*</code> (app admins). Prefer Access Explorer to discover the right
-        attributes for a table.
+        Request data access (an access path), a sensitivity path, or a row-filter value such as{" "}
+        <code>finance.state=*</code>. Prefer Access Explorer to discover the right attributes for a
+        table.
       </p>
       {!requestable.length && !definitions.isPending && !dimensions.isPending && (
         <Alert tone="warning" title="No requestable attributes">
-          An admin must create the sensitivity definition and/or row-filter dimensions before requests
-          can be submitted.
+          An admin must create the data-access and sensitivity definitions and/or row-filter dimensions
+          before requests can be submitted.
         </Alert>
       )}
       <div className={styles.formGrid}>
         <label className={styles.field}>
-          <span className={styles.label}>Attribute</span>
+          <span className={styles.label}>Grant</span>
           <select
             className={styles.select}
+            aria-label="Grant"
             value={attributeKey}
             onChange={(event) => {
               setAttributeKey(event.target.value);
@@ -817,20 +865,19 @@ function RequestAccessPanel() {
           >
             {requestable.map((item) => (
               <option key={item.key} value={item.key}>
-                {item.key}
-                {item.key === "sensitivity" ? " (mask)" : " (row filter)"}
+                {attributeGrantLabel(item.key, accessTagKey)}
               </option>
             ))}
           </select>
         </label>
         <label className={styles.fieldGrow}>
-          <span className={styles.label}>{isRowFilter ? "Dimension value" : "Sensitivity path"}</span>
+          <span className={styles.label}>{valueLabel}</span>
           <SearchableSelect
-            aria-label={isRowFilter ? "Dimension value" : "Sensitivity path"}
+            aria-label={valueLabel}
             value={attributeValue}
             onChange={setAttributeValue}
             options={values}
-            placeholder="Select value"
+            placeholder={`Select ${valueLabel.toLowerCase()}`}
             disabled={!values.length}
           />
         </label>
@@ -853,10 +900,10 @@ function RequestAccessPanel() {
           />
         </label>
       </div>
-      {isRowFilter && (
+      {dimKeys.has(attributeKey) && (
         <div className={styles.muted} style={{ marginTop: "var(--space-2)" }}>
-          Row-filter requests are reviewed by app admins. Use <code>*</code> for all rows, or a
-          concrete value to match only those rows.
+          Row-filter requests are reviewed by the access-path approvers when configured, otherwise
+          app admins. Use <code>*</code> for all rows, or a concrete value to match only those rows.
         </div>
       )}
       <div className={styles.buttonRow} style={{ marginTop: "var(--space-3)" }}>
@@ -1215,7 +1262,14 @@ function ApproversTable({
 function AssignmentsPanel() {
   const { data: user } = useEffectiveUser();
   const definitions = useAttributeDefinitions();
+  const dataAccessSettings = useDataAccessSettings();
   const grantable = useGrantableAttributes();
+  const accessTagKey =
+    dataAccessSettings.data?.settings.accessTagKey?.trim().toLowerCase() || "access_path";
+  const dataAccessDef = (definitions.data?.definitions ?? []).find((item) =>
+    isDataAccessDefinition(item, accessTagKey),
+  );
+  const defaultGrantKey = dataAccessDef?.key ?? "data_access";
   const [principalName, setPrincipalName] = useState("");
   // The box filters as you type: the query waits briefly after the last keystroke.
   const principalSearch = useDebouncedValue(principalName.trim(), 300);
@@ -1264,17 +1318,26 @@ function AssignmentsPanel() {
 
   const [pickerValue, setPickerValue] = useState("");
   const [principals, setPrincipals] = useState<SelectedPrincipal[]>([]);
-  const [attrRows, setAttrRows] = useState<AttributeRow[]>([{ id: "row-1", key: "", value: "" }]);
+  const [attrRows, setAttrRows] = useState<AttributeRow[]>([
+    { id: "row-1", key: defaultGrantKey, value: "" },
+  ]);
   const [formJustification, setFormJustification] = useState("");
   const [formExpires, setFormExpires] = useState("");
   const [lastResult, setLastResult] = useState<BulkAssignResult | null>(null);
 
+  // Once definitions load, pin empty rows to the data-access key so the form starts on a path.
+  useEffect(() => {
+    setAttrRows((current) =>
+      current.map((row) => (row.key ? row : { ...row, key: defaultGrantKey })),
+    );
+  }, [defaultGrantKey]);
+
   const grantableKeys = useMemo(() => {
-    if (user?.isAdmin) {
-      return (definitions.data?.definitions ?? []).map((item) => item.key);
-    }
-    return (grantable.data?.attributes ?? []).map((item) => item.key);
-  }, [user?.isAdmin, definitions.data?.definitions, grantable.data?.attributes]);
+    const keys = user?.isAdmin
+      ? (definitions.data?.definitions ?? []).map((item) => item.key)
+      : (grantable.data?.attributes ?? []).map((item) => item.key);
+    return sortGrantableKeys(keys, accessTagKey);
+  }, [user?.isAdmin, definitions.data?.definitions, grantable.data?.attributes, accessTagKey]);
 
   const definitionByKey = useMemo(() => {
     const map = new Map<string, AttributeDefinition>();
@@ -1312,7 +1375,7 @@ function AssignmentsPanel() {
       expiresAt: formExpires ? new Date(formExpires).toISOString() : null,
     });
     setLastResult(result);
-    setAttrRows([{ id: `row-${Date.now()}`, key: "", value: "" }]);
+    setAttrRows([{ id: `row-${Date.now()}`, key: defaultGrantKey, value: "" }]);
     setFormJustification("");
     setFormExpires("");
   };
@@ -1320,6 +1383,10 @@ function AssignmentsPanel() {
   return (
     <div className={styles.stack}>
       <Card title="Assign attributes">
+        <p className={styles.muted}>
+          Grant an access path by default (data access). Add sensitivity or row-filter values when
+          the person also needs unmasked columns or filtered rows.
+        </p>
         <div className={styles.formGrid}>
           <label className={styles.fieldGrow} style={{ gridColumn: "1 / -1" }}>
             <span className={styles.label}>Principals</span>
@@ -1358,12 +1425,14 @@ function AssignmentsPanel() {
 
           {attrRows.map((row) => {
             const valueOptions = definitionByKey.get(row.key)?.allowedValues ?? [];
+            const valueLabel = attributeValueLabel(row.key || defaultGrantKey, accessTagKey);
             return (
               <div key={row.id} className={styles.attrRow}>
                 <label className={styles.field}>
-                  <span className={styles.label}>Attribute</span>
+                  <span className={styles.label}>Grant</span>
                   <select
                     className={styles.select}
+                    aria-label="Grant"
                     value={row.key}
                     onChange={(event) => {
                       const key = event.target.value;
@@ -1372,19 +1441,18 @@ function AssignmentsPanel() {
                       );
                     }}
                   >
-                    <option value="">Select attribute</option>
                     {grantableKeys.map((key) => (
                       <option key={key} value={key}>
-                        {key}
+                        {attributeGrantLabel(key, accessTagKey)}
                       </option>
                     ))}
                   </select>
                 </label>
                 <label className={styles.field}>
-                  <span className={styles.label}>Value</span>
+                  <span className={styles.label}>{valueLabel}</span>
                   {valueOptions.length ? (
                     <SearchableSelect
-                      aria-label="Value"
+                      aria-label={valueLabel}
                       value={row.value}
                       onChange={(value) => {
                         setAttrRows((current) =>
@@ -1392,7 +1460,7 @@ function AssignmentsPanel() {
                         );
                       }}
                       options={valueOptions}
-                      placeholder="Select value"
+                      placeholder={`Select ${valueLabel.toLowerCase()}`}
                     />
                   ) : (
                     <input
@@ -1405,7 +1473,7 @@ function AssignmentsPanel() {
                         );
                       }}
                       placeholder="finance or finance.budget"
-                      aria-label="Value"
+                      aria-label={valueLabel}
                     />
                   )}
                 </label>
@@ -1413,7 +1481,7 @@ function AssignmentsPanel() {
                   <button
                     type="button"
                     className={styles.button}
-                    aria-label="Remove attribute row"
+                    aria-label="Remove grant row"
                     onClick={() => setAttrRows((current) => current.filter((item) => item.id !== row.id))}
                   >
                     Remove
@@ -1428,10 +1496,13 @@ function AssignmentsPanel() {
               type="button"
               className={styles.button}
               onClick={() =>
-                setAttrRows((current) => [...current, { id: `row-${Date.now()}`, key: "", value: "" }])
+                setAttrRows((current) => [
+                  ...current,
+                  { id: `row-${Date.now()}`, key: defaultGrantKey, value: "" },
+                ])
               }
             >
-              Add attribute
+              Add grant
             </button>
           </div>
 
@@ -1530,16 +1601,17 @@ function AssignmentsPanel() {
             </select>
           </label>
           <label className={styles.field}>
-            <span className={styles.label}>Attribute</span>
+            <span className={styles.label}>Grant</span>
             <select
               className={styles.select}
+              aria-label="Filter by grant"
               value={attributeKey}
               onChange={(event) => setAttributeKey(event.target.value)}
             >
-              <option value="">All attributes</option>
+              <option value="">All grants</option>
               {grantableKeys.map((key) => (
                 <option key={key} value={key}>
-                  {key}
+                  {attributeGrantLabel(key, accessTagKey)}
                 </option>
               ))}
             </select>
