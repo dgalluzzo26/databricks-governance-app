@@ -1969,8 +1969,12 @@ export function fakeServices(
           };
         }
         return {
-          attributes: [{ key: "sensitivity", categories: ["finance"] }],
-          total: 1,
+          attributes: [
+            { key: "data_access", categories: ["finance"] },
+            { key: "sensitivity", categories: ["finance"] },
+            { key: "finance.state", categories: ["finance"] },
+          ],
+          total: 3,
         };
       },
       listAssignments: () =>

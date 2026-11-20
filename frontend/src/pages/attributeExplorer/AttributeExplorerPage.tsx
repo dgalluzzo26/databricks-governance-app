@@ -11,6 +11,7 @@ import {
   useAnalyzeAttribute,
   useAttributeDefinitions,
   useDataAccessSettings,
+  useGrantableAttributes,
   useRevokeAttribute,
 } from "@/api/queries";
 import { useEffectiveUser } from "@/app/viewAs";
@@ -46,12 +47,23 @@ function definitionKind(
   return "other";
 }
 
+/** Keep values under the approver's registered path prefixes (case-insensitive). */
+function valuesUnderPaths(values: string[], paths: string[]): string[] {
+  if (!paths.length) return values;
+  const prefixes = paths.map((path) => path.toLowerCase());
+  return values.filter((value) => {
+    const lower = value.toLowerCase();
+    return prefixes.some((prefix) => lower === prefix || lower.startsWith(`${prefix}.`));
+  });
+}
+
 /**
  * Admin / approver reverse lookup: holders + affected resources for a path.
  */
 export function AttributeExplorerPage() {
   const { data: user } = useEffectiveUser();
   const definitions = useAttributeDefinitions();
+  const grantable = useGrantableAttributes();
   const dataAccessSettings = useDataAccessSettings();
   const analyze = useAnalyzeAttribute();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -63,14 +75,26 @@ export function AttributeExplorerPage() {
   const [attributeValue, setAttributeValue] = useState(searchParams.get("value") ?? "");
   const [result, setResult] = useState<AttributeExplorerResult | null>(null);
 
-  const defs = definitions.data?.definitions ?? [];
+  const defs = useMemo(() => {
+    const all = definitions.data?.definitions ?? [];
+    if (user?.isAdmin) return all;
+    const allowed = new Set(
+      (grantable.data?.attributes ?? []).map((item) => item.key.toLowerCase()),
+    );
+    return all.filter((item) => allowed.has(item.key.toLowerCase()));
+  }, [definitions.data?.definitions, grantable.data?.attributes, user?.isAdmin]);
+
   const selected = defs.find((d) => d.key === attributeKey);
   const selectedKind = selected ? definitionKind(selected, accessTagKey) : null;
   const isRowFilterOverview = selectedKind === "row_filter";
-  const values = useMemo(
-    () => (selected?.allowedValues ?? []).filter((v) => v && v !== "*"),
-    [selected],
+  const grantableEntry = (grantable.data?.attributes ?? []).find(
+    (item) => item.key.toLowerCase() === attributeKey.toLowerCase(),
   );
+  const values = useMemo(() => {
+    const all = (selected?.allowedValues ?? []).filter((v) => v && v !== "*");
+    if (user?.isAdmin || !grantableEntry?.categories.length) return all;
+    return valuesUnderPaths(all, grantableEntry.categories);
+  }, [selected, user?.isAdmin, grantableEntry]);
 
   useEffect(() => {
     const key = searchParams.get("key");
@@ -78,6 +102,16 @@ export function AttributeExplorerPage() {
     if (key) setAttributeKey(key);
     if (value) setAttributeValue(value);
   }, [searchParams]);
+
+  // Drop a selected key that is outside the caller's grantable set (approvers only).
+  useEffect(() => {
+    if (!attributeKey || user?.isAdmin || grantable.isPending) return;
+    if (!defs.some((item) => item.key === attributeKey)) {
+      setAttributeKey("");
+      setAttributeValue("");
+      setResult(null);
+    }
+  }, [attributeKey, defs, user?.isAdmin, grantable.isPending]);
 
   const canAnalyze = isRowFilterOverview
     ? Boolean(attributeKey.trim())

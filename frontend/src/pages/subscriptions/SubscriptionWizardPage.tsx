@@ -10,6 +10,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   useAttributeDefinitions,
+  useGrantableAttributes,
   usePreviewSubscription,
   useSaveSubscription,
   useSubscription,
@@ -935,18 +936,40 @@ function PrivilegePicker({
 // ------------------------------------------------------------------ attributes
 
 function AttributesStep({ draft, onChange }: { draft: WizardDraft; onChange: (patch: Partial<WizardDraft>) => void }) {
+  const { data: options } = useSubscriptionOptions();
   const definitions = useAttributeDefinitions();
-  const defs = definitions.data?.definitions ?? [];
+  const grantable = useGrantableAttributes();
+  const allDefs = definitions.data?.definitions ?? [];
+  const defs = useMemo(() => {
+    if (options?.isAdmin) return allDefs;
+    const allowed = new Set((grantable.data?.attributes ?? []).map((item) => item.key.toLowerCase()));
+    return allDefs.filter((item) => allowed.has(item.key.toLowerCase()));
+  }, [allDefs, grantable.data?.attributes, options?.isAdmin]);
   const setRow = (index: number, key: string, value: string) =>
     onChange({
       attributes: draft.attributes.map((a, i) => (i === index ? { attributeKey: key, attributeValue: value } : a)),
     });
+  const valuesFor = (key: string): string[] => {
+    const definition = allDefs.find((d) => d.key === key);
+    const values = (definition?.allowedValues ?? []).filter((v) => v && v !== "*");
+    if (options?.isAdmin) return values;
+    const entry = (grantable.data?.attributes ?? []).find((item) => item.key.toLowerCase() === key.toLowerCase());
+    if (!entry?.categories.length) return values;
+    const prefixes = entry.categories.map((path) => path.toLowerCase());
+    // Row-filter codes (CA, NY) are not paths — keep the full list for scoped dimensions.
+    if (key.includes(".") && !values.some((v) => v.includes("."))) return values;
+    return values.filter((value) => {
+      const lower = value.toLowerCase();
+      return prefixes.some((prefix) => lower === prefix || lower.startsWith(`${prefix}.`));
+    });
+  };
   return (
     <Card title="Attributes while active (optional)">
       <div className={shared.stack}>
         <p className={shared.muted}>
           The subscription group holds these Identity attribute values until it ends: sensitivity values unmask
           columns, row-filter values widen row filters, and data-access values add the group to that access path.
+          {!options?.isAdmin && " Only attributes under paths you approve are listed."}
         </p>
         {definitions.isPending && <Spinner label="Loading attributes" />}
         {definitions.error && <ErrorAlert error={definitions.error} title="Could not load attributes" />}
@@ -975,7 +998,7 @@ function AttributesStep({ draft, onChange }: { draft: WizardDraft; onChange: (pa
                   aria-label="Attribute value"
                   value={attribute.attributeValue}
                   disabled={!definition}
-                  options={(definition?.allowedValues ?? []).filter((v) => v !== "*")}
+                  options={valuesFor(attribute.attributeKey)}
                   onChange={(value) => setRow(index, attribute.attributeKey, value)}
                 />
               </div>

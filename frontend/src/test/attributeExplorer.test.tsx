@@ -58,7 +58,7 @@ describe("Attribute explorer", () => {
     expect(screen.getByText("state_code")).toBeInTheDocument();
   });
 
-  it("is available to category approvers", async () => {
+  it("is available to category approvers and only lists grantable attributes", async () => {
     renderApp(
       "/attribute-explorer",
       fakeServices({
@@ -67,6 +67,11 @@ describe("Attribute explorer", () => {
     );
     expect(await screen.findByRole("heading", { name: "Attribute explorer" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Attribute explorer/i })).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: /sensitivity/i })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /data_access/i })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /finance.state/i })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /assessments.state/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /dga_domain/i })).not.toBeInTheDocument();
   });
 
   it("redirects non-approvers", async () => {

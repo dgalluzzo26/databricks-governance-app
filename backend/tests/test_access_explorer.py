@@ -613,7 +613,7 @@ def test_analyze_table_dac_without_definition_does_not_fail(container) -> None: 
     assert any(s.kind.value == "sensitivity" for s in insight.suggestions)
 
 
-def test_directory_principal_search(client: TestClient) -> None:
+def test_directory_principal_search(client: TestClient, container) -> None:  # noqa: ANN001
     body = client.get(
         "/api/directory/principals",
         params={"q": "admin", "kind": "USER"},
@@ -627,6 +627,50 @@ def test_directory_principal_search(client: TestClient) -> None:
         headers=headers_for("analyst@example.com"),
     )
     assert forbidden.status_code == 403
+
+    from backend.app.models.access_request import UpsertCategoryApproverRequest
+    from backend.app.models.identity_attribute import UpsertAttributeDefinitionRequest
+    from backend.app.models.principal import PrincipalKind
+    from backend.app.services.access_requests import AccessRequestService
+    from backend.tests.conftest import FakeWorkspaceFactory
+    from backend.tests.test_identity_attributes import FakeGovernedTags, _admin, _service
+
+    fake = FakeWorkspaceFactory(
+        {
+            "admin@example.com": ["admins", "users"],
+            "analyst@example.com": ["users"],
+            "finance.lead@example.com": ["finance-owners", "users"],
+        },
+        admin_configured=True,
+    )
+    container.workspace = fake
+    container.identity._factory = fake
+    container.request_context._factory = fake
+
+    identity = _service(container)
+    identity._governed_tags = FakeGovernedTags()  # type: ignore[method-assign]
+    access = AccessRequestService(container.storage, identity)
+    actor = _admin()
+    identity.upsert_definition(
+        UpsertAttributeDefinitionRequest(key="data_access", governed_tag_keys=["access_path"]),
+        actor,  # type: ignore[arg-type]
+    )
+    access.upsert_approver(
+        UpsertCategoryApproverRequest(
+            category_path="finance",
+            principal_name="finance-owners",
+            principal_type=PrincipalKind.GROUP,
+        ),
+        actor,  # type: ignore[arg-type]
+    )
+    container.access_requests = access
+    allowed = client.get(
+        "/api/directory/principals",
+        params={"q": "admin"},
+        headers=headers_for("finance.lead@example.com"),
+    )
+    assert allowed.status_code == 200
+    assert allowed.json()["total"] >= 1
 
 
 def test_directory_principal_search_hides_managed_groups(client: TestClient, container) -> None:

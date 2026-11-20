@@ -6,7 +6,8 @@ from typing import Annotated
 
 from fastapi import APIRouter, Query
 
-from backend.app.api.deps import Admin, Container
+from backend.app.api.deps import Container, User
+from backend.app.core.errors import ForbiddenError
 from backend.app.models.directory import DirectoryPrincipalList
 from backend.app.models.principal import PrincipalKind
 
@@ -17,7 +18,7 @@ PrincipalKindQuery = Annotated[PrincipalKind | None, Query()]
 
 @router.get("/principals", response_model=DirectoryPrincipalList)
 def search_principals(
-    _: Admin,
+    user: User,
     container: Container,
     q: str = Query(..., min_length=2, max_length=200),
     kind: PrincipalKindQuery = None,
@@ -25,9 +26,10 @@ def search_principals(
 ) -> DirectoryPrincipalList:
     """Search users and/or groups by name substring.
 
-    Requires app admin. Used by Identity assignment and approver forms.
+    Requires app admin or path approver (Identity assignments, Approvers, Subscriptions).
 
     Args:
+        user: Signed-in admin or path approver.
         container: Process-scoped service container.
         q: Search text (2-200 characters).
         kind: Optional ``USER`` or ``GROUP`` filter.
@@ -35,5 +37,10 @@ def search_principals(
 
     Returns:
         Matching principals.
+
+    Raises:
+        ForbiddenError: If the caller is neither an admin nor a path approver.
     """
+    if not (user.is_admin or user.is_approver):
+        raise ForbiddenError("Directory search is limited to admins and approvers")
     return container.identity.search_principals(q, kind=kind, limit=limit)
