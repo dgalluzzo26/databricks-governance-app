@@ -15,7 +15,9 @@ resources:
       run_as:
         service_principal_name: ${var.sync_job_run_as_sp}
       schedule:
-        quartz_cron_expression: "0 */15 * * * ?"
+        # Hourly by default. The app owns the live cadence (Data access settings) and re-applies it
+        # on startup, so a deploy briefly resets to this value until the app restarts.
+        quartz_cron_expression: "0 0 * * * ?"
         timezone_id: UTC
         pause_status: UNPAUSED
       parameters:

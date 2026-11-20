@@ -170,6 +170,7 @@ CREATE TABLE IF NOT EXISTS {schema}.identity_attribute_definitions (
   allowed_values      JSONB NOT NULL DEFAULT '[]'::jsonb,
   value_source        TEXT NOT NULL DEFAULT 'governed_tags',
   value_sql           TEXT,
+  scope_path          TEXT,
   created_by          TEXT,
   created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_by          TEXT,
@@ -1219,10 +1220,10 @@ class LakebaseIdentityAttributeRepository(IdentityAttributeRepository):
             """
             INSERT INTO {schema}.identity_attribute_definitions (
               attribute_key, description, governed_tag_keys, allowed_values,
-              value_source, value_sql, created_by, created_at, updated_by, updated_at
+              value_source, value_sql, scope_path, created_by, created_at, updated_by, updated_at
             ) VALUES (
               %(key)s, %(description)s, %(governed_tag_keys)s, %(allowed_values)s,
-              %(value_source)s, %(value_sql)s,
+              %(value_source)s, %(value_sql)s, %(scope_path)s,
               %(created_by)s, %(created_at)s, %(updated_by)s, %(updated_at)s
             )
             ON CONFLICT (attribute_key) DO UPDATE SET
@@ -1231,6 +1232,7 @@ class LakebaseIdentityAttributeRepository(IdentityAttributeRepository):
               allowed_values = EXCLUDED.allowed_values,
               value_source = EXCLUDED.value_source,
               value_sql = EXCLUDED.value_sql,
+              scope_path = EXCLUDED.scope_path,
               updated_by = EXCLUDED.updated_by,
               updated_at = EXCLUDED.updated_at
             """,
@@ -1241,6 +1243,7 @@ class LakebaseIdentityAttributeRepository(IdentityAttributeRepository):
                 "allowed_values": Jsonb(definition.allowed_values),
                 "value_source": definition.value_source.value,
                 "value_sql": definition.value_sql,
+                "scope_path": definition.scope_path,
                 "created_by": definition.created_by,
                 "created_at": definition.created_at or datetime.now().astimezone(),
                 "updated_by": definition.updated_by,
@@ -1430,6 +1433,7 @@ class LakebaseIdentityAttributeRepository(IdentityAttributeRepository):
             allowed_values=[str(v) for v in values],
             value_source=ValueSource(row.get("value_source") or ValueSource.GOVERNED_TAGS.value),
             value_sql=row.get("value_sql"),
+            scope_path=row.get("scope_path"),
             created_by=row.get("created_by"),
             created_at=row.get("created_at"),
             updated_by=row.get("updated_by"),
@@ -1560,13 +1564,11 @@ class LakebaseCategoryApproverRepository(CategoryApproverRepository):
         existing = self._pg.fetch(
             """
             SELECT approver_id FROM {schema}.sensitivity_category_approvers
-            WHERE lower(attribute_key) = lower(%(attribute_key)s)
-              AND lower(category_path) = lower(%(path)s)
+            WHERE lower(category_path) = lower(%(path)s)
               AND lower(principal_name) = lower(%(principal)s)
               AND principal_type = %(ptype)s
             """,
             {
-                "attribute_key": approver.attribute_key,
                 "path": approver.category_path,
                 "principal": approver.principal_name,
                 "ptype": approver.principal_type.value,
@@ -1619,7 +1621,7 @@ class LakebaseCategoryApproverRepository(CategoryApproverRepository):
         """Map an approver table row to a ``CategoryApprover``."""
         return CategoryApprover(
             approver_id=row["approver_id"],
-            attribute_key=str(row.get("attribute_key") or "sensitivity"),
+            attribute_key=str(row.get("attribute_key") or "access"),
             category_path=row["category_path"],
             principal_name=row["principal_name"],
             principal_type=PrincipalKind(row["principal_type"]),
@@ -2334,6 +2336,9 @@ class LakebaseStorageProvider(StorageProvider):
                 "ALTER TABLE {schema}.identity_attribute_definitions ADD COLUMN IF NOT EXISTS value_sql TEXT"
             )
             self._pg.run(
+                "ALTER TABLE {schema}.identity_attribute_definitions ADD COLUMN IF NOT EXISTS scope_path TEXT"
+            )
+            self._pg.run(
                 "ALTER TABLE {schema}.mask_rule_definitions "
                 "ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'builtin'"
             )
@@ -2350,10 +2355,21 @@ class LakebaseStorageProvider(StorageProvider):
                 "CREATE INDEX IF NOT EXISTS request_metrics_user_idx "
                 "ON {schema}.request_metrics (user_name, recorded_at DESC)"
             )
-            # Approvers gained attribute_key so row-filter dimensions can have their own reviewers.
+            # Approvers are path-only; attribute_key is kept for older rows.
             self._pg.run(
                 "ALTER TABLE {schema}.sensitivity_category_approvers "
-                "ADD COLUMN IF NOT EXISTS attribute_key TEXT NOT NULL DEFAULT 'sensitivity'"
+                "ADD COLUMN IF NOT EXISTS attribute_key TEXT NOT NULL DEFAULT 'access'"
+            )
+            # Drop duplicate (path, principal) rows left from per-attribute registrations.
+            self._pg.run(
+                """
+                DELETE FROM {schema}.sensitivity_category_approvers a
+                USING {schema}.sensitivity_category_approvers b
+                WHERE a.approver_id > b.approver_id
+                  AND lower(a.category_path) = lower(b.category_path)
+                  AND lower(a.principal_name) = lower(b.principal_name)
+                  AND a.principal_type = b.principal_type
+                """
             )
             # Indexes are (re)built here, not in _DDL: Postgres resolves index columns before the
             # IF NOT EXISTS check, so referencing attribute_key in _DDL breaks older tables.
@@ -2362,11 +2378,11 @@ class LakebaseStorageProvider(StorageProvider):
             self._pg.run(
                 "CREATE UNIQUE INDEX IF NOT EXISTS sensitivity_category_approvers_uniq "
                 "ON {schema}.sensitivity_category_approvers ("
-                "lower(attribute_key), lower(category_path), lower(principal_name), principal_type)"
+                "lower(category_path), lower(principal_name), principal_type)"
             )
             self._pg.run(
                 "CREATE INDEX IF NOT EXISTS sensitivity_category_approvers_path_idx "
-                "ON {schema}.sensitivity_category_approvers (lower(attribute_key), lower(category_path))"
+                "ON {schema}.sensitivity_category_approvers (lower(category_path))"
             )
             self._apply_data_access_views()
             self._grant_admin_sp_access()

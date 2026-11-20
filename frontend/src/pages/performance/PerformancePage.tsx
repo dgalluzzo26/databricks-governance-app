@@ -403,6 +403,14 @@ function AppCostCard() {
       })),
     [report],
   );
+  const windowTotal = useMemo(
+    () =>
+      (report?.daily ?? []).reduce(
+        (sum, day) => sum + day.appUsd + day.warehouseUsd + day.jobUsd + day.lakebaseUsd,
+        0,
+      ),
+    [report],
+  );
 
   return (
     <Card title="App cost">
@@ -435,6 +443,11 @@ function AppCostCard() {
       {report?.available ? (
         <>
           <div className={styles.kpiGrid}>
+            <Kpi
+              label={`Total, last ${days} days`}
+              value={formatUsd(windowTotal)}
+              hint="App, SQL warehouse, sync job, and Lakebase"
+            />
             <Kpi label="Today so far" value={formatUsd(report.todayAppUsd)} hint="App compute, partial day" />
             <Kpi label="Last 7 days" value={formatUsd(report.appUsdLast7Days)} hint="App compute" />
             <Kpi

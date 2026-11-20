@@ -323,8 +323,7 @@ class InMemoryCategoryApproverRepository(CategoryApproverRepository):
         with self._lock:
             for existing in self._items.values():
                 if (
-                    existing.attribute_key.lower() == approver.attribute_key.lower()
-                    and existing.category_path.lower() == approver.category_path.lower()
+                    existing.category_path.lower() == approver.category_path.lower()
                     and existing.principal_name.lower() == approver.principal_name.lower()
                     and existing.principal_type == approver.principal_type
                 ):

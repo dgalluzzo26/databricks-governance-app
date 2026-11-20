@@ -67,17 +67,16 @@ def test_my_access_snapshot_includes_groups_and_inherited(client: TestClient, co
     )
     identity.upsert_definition(
         UpsertAttributeDefinitionRequest(
-            key="sensitivity",
-            governed_tag_keys=["access_path", "sensitivity"],
+            key="data_access",
+            description="DAC",
+            governed_tag_keys=["access_path"],
         ),
         actor,
     )
     identity.upsert_definition(
         UpsertAttributeDefinitionRequest(
-            key="data_access",
-            description="DAC",
-            value_source=ValueSource.FREE_FORM,
-            allowed_values=["public", "finance"],
+            key="sensitivity",
+            governed_tag_keys=["access_path", "sensitivity"],
         ),
         actor,
     )
@@ -141,6 +140,10 @@ def test_my_access_snapshot_includes_groups_and_inherited(client: TestClient, co
 def test_my_access_resources_requires_held_attribute(client: TestClient, container) -> None:
     identity = _service(container)
     actor = _admin()
+    identity.upsert_definition(
+        UpsertAttributeDefinitionRequest(key="data_access", governed_tag_keys=["access_path"]),
+        actor,
+    )
     identity.upsert_definition(
         UpsertAttributeDefinitionRequest(
             key="sensitivity",

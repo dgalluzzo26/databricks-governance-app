@@ -18,7 +18,7 @@ Governed tag policies created or extended (values come from the tree and sensiti
 
 Tag keys match the app defaults. ``access_path`` is set on tables, schemas, catalogs, and sensitive
 columns; ``sensitivity``, ``data_type`` and ``mask_rule`` on sensitive columns; ``row_filter`` on
-``state`` columns.
+``state`` columns with value ``{domain}.state``.
 
 Re-running is safe: objects are created IF NOT EXISTS, rows are inserted only into empty tables,
 and tags are re-applied.
@@ -222,7 +222,7 @@ def subdomain_tables(domain: str, sub: str) -> list[TableSpec]:
             "full_name": _sensitive_tags(path, "PII.Name"),
             "email": _sensitive_tags(path, "PII.Email"),
             focus_col: _sensitive_tags(path, focus_leaf),
-            "state": {"row_filter": "state"},
+            "state": {"row_filter": f"{domain}.state"},
         },
     )
 
@@ -235,7 +235,7 @@ def subdomain_tables(domain: str, sub: str) -> list[TableSpec]:
         columns_sql="period STRING, state STRING, record_count BIGINT, total_amount DOUBLE",
         insert_sql=", ".join(summary_rows),
         table_tags=table_tags,
-        column_tags={"state": {"row_filter": "state"}},
+        column_tags={"state": {"row_filter": f"{domain}.state"}},
     )
     return [records, summary]
 

@@ -44,8 +44,8 @@ describe("Attribute explorer", () => {
     const user = userEvent.setup();
     renderApp("/attribute-explorer");
     expect(await screen.findByRole("heading", { name: "Attribute explorer" })).toBeInTheDocument();
-    expect(await screen.findByRole("option", { name: /state \(row filter\)/i })).toBeInTheDocument();
-    await user.selectOptions(screen.getByLabelText("Attribute"), "state");
+    expect(await screen.findByRole("option", { name: /finance.state \(row filter\)/i })).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText("Attribute"), "finance.state");
     expect(screen.queryByLabelText("Value")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Analyze" }));
     expect(await screen.findByRole("table", { name: "Principals" })).toBeInTheDocument();

@@ -334,8 +334,9 @@ flowchart TD
   value -->|no| deny
 ```
 
-Example: `us_states.state` tagged `row_filter=state`. A user with `state=CA` and `state=NY`
-sees two rows; a user with `state=*` sees all; a user with no `state` assignment sees none.
+Example: `us_states.state` tagged `row_filter=finance.state`. A user with `finance.state=CA`
+and `finance.state=NY` sees two rows; a user with `finance.state=*` sees all; a user with no
+`finance.state` assignment sees none.
 
 ### Decision flow: admin configures a dimension
 
@@ -431,9 +432,9 @@ UC grants are intentionally omitted for now.
 
 | Attribute | Routing |
 | --- | --- |
-| `sensitivity` | Most-specific configured **category approver** for a path prefix of the requested value. If none is configured (or the matched category has zero approvers) → **app admins**. |
-| Data-access attribute (linked to `access_path`) | Same most-specific path routing as `sensitivity`, using data-access category approvers. |
-| Row-filter dimensions (`state`, …) | Designated **dimension approvers** (Identity → Approvers → Row-filter dimension). If none are configured → **app admins**. |
+| `sensitivity` | Most-specific **access-path approvers** (users and/or groups) whose path is a prefix of the requested value. If none match → **app admins**. |
+| Data-access attribute (linked to `access_path`) | Same most-specific path routing as `sensitivity`. |
+| Row-filter dimensions (`finance.state`, …) | Same access-path approvers as the dimension's `scope_path`. If none match → **app admins**. |
 
 Create requests via `POST /api/identity/access-requests` with `attribute_key` + `attribute_value`
 (defaults to `sensitivity` when `attribute_key` is omitted). Approvals appear on the **Approvals**
@@ -451,11 +452,9 @@ flowchart TD
   vocab -->|yes| dup{"Requester already has a pending request for key=value?"}
   dup -->|yes| e3["422 already pending"]
   dup -->|no| route{"Attribute key"}
-  route -->|sensitivity or data-access| path["Most-specific configured category that is a prefix of the value"]
-  route -->|row-filter dimension| dim["Designated approvers for that dimension key"]
-  path --> hasApprovers{"Matched category has approvers?"}
-  dim --> hasApprovers
-  hasApprovers -->|yes| approvers["Routed to category / dimension approvers"]
+  route -->|sensitivity, data-access, or row-filter| path["Most-specific configured access path that covers the value"]
+  path --> hasApprovers{"Matched path has approvers?"}
+  hasApprovers -->|yes| approvers["Routed to those users and groups"]
   hasApprovers -->|no| admins["Routed to app admins"]
   approvers --> decide{"Approve or deny (approver for this route, or app admin)"}
   admins --> decide
@@ -477,9 +476,9 @@ matching immediately, and the next grants-sync apply removes data-access group m
 
 | Attribute key | Used by | How users get it |
 | --- | --- | --- |
-| `sensitivity` | `has_sensitivity` / column unmask | Access request → category approver (or app admin) → assign; or Identity → Assignments (admin / path approver) |
-| Row-filter dimension keys (`state`, …) | `has_row_access` | Access request → dimension approver (or app admin) → assign; or Identity → Assignments |
-| Data-access attribute | Grants sync `dac_*` group membership | Access request → data-access category approver (or app admin) → assign; or Identity → Assignments |
+| `sensitivity` | `has_sensitivity` / column unmask | Access request → access-path approvers (or app admin) → assign; or Identity → Assignments (admin / path approver) |
+| Row-filter dimension keys (`finance.state`, …) | `has_row_access` | Access request → access-path approvers for the dimension scope (or app admin) → assign; or Identity → Assignments |
+| Data-access attribute | Grants sync `dac_*` group membership | Access request → access-path approvers (or app admin) → assign; or Identity → Assignments |
 
 Mirror table: `data_governance_app.app.identity_attributes` (synced from Lakebase when that
 backend is active).

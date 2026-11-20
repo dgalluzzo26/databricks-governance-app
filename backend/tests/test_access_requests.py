@@ -29,10 +29,14 @@ def _access_service(container) -> AccessRequestService:  # noqa: ANN001
 
 def _seed_sensitivity(service: IdentityAttributeService, actor) -> None:  # noqa: ANN001
     service.upsert_definition(
+        UpsertAttributeDefinitionRequest(key="data_access", governed_tag_keys=["access_path"]),
+        actor,
+    )
+    service.upsert_definition(
         UpsertAttributeDefinitionRequest(
             key="sensitivity",
             description="masking",
-            governed_tag_keys=["access_path", "sensitivity"],
+            governed_tag_keys=["sensitivity"],
         ),
         actor,
     )
@@ -259,6 +263,10 @@ def test_api_access_request_flow(client: TestClient, container) -> None:  # noqa
         },
     )
     assert created_approver.status_code == 200
+    saved = created_approver.json()
+    assert saved["total"] == 1
+    assert saved["approvers"][0]["principalName"] == "admin@example.com"
+    assert saved["approvers"][0]["principalType"] == "USER"
 
     analyst = headers_for("analyst@example.com")
     created = client.post(
@@ -300,6 +308,45 @@ def test_api_access_request_flow(client: TestClient, container) -> None:  # noqa
     assert forbidden.status_code == 403
 
 
+def test_upsert_approvers_accepts_users_and_groups(client: TestClient, container) -> None:  # noqa: ANN001
+    identity = _service(container)
+    _seed_sensitivity(identity, _admin())
+    container.identity_attributes._governed_tags = FakeGovernedTags()  # type: ignore[method-assign]
+    container.access_requests = AccessRequestService(container.storage, container.identity_attributes)
+    admin = headers_for("admin@example.com")
+
+    empty = client.put(
+        "/api/identity/category-approvers",
+        headers=admin,
+        json={"categoryPath": "finance", "principals": []},
+    )
+    assert empty.status_code == 422
+
+    created = client.put(
+        "/api/identity/category-approvers",
+        headers=admin,
+        json={
+            "categoryPath": "finance",
+            "principals": [
+                {"principalName": "ana.lopez@example.com", "principalType": "USER"},
+                {"principalName": "finance-owners", "principalType": "GROUP"},
+            ],
+        },
+    )
+    assert created.status_code == 200
+    body = created.json()
+    assert body["total"] == 2
+    names = {row["principalName"]: row["principalType"] for row in body["approvers"]}
+    assert names == {
+        "ana.lopez@example.com": "USER",
+        "finance-owners": "GROUP",
+    }
+
+    listed = client.get("/api/identity/category-approvers", headers=admin).json()
+    listed_names = {row["principalName"] for row in listed["approvers"]}
+    assert {"ana.lopez@example.com", "finance-owners"} <= listed_names
+
+
 def test_row_filter_request_routes_to_admins(container) -> None:  # noqa: ANN001
     identity = _service(container)
     access = AccessRequestService(container.storage, identity)
@@ -308,10 +355,18 @@ def test_row_filter_request_routes_to_admins(container) -> None:  # noqa: ANN001
 
     identity.upsert_definition(
         UpsertAttributeDefinitionRequest(
-            key="state",
+            key="data_access",
+            governed_tag_keys=["access_path"],
+        ),
+        actor,
+    )
+    identity.upsert_definition(
+        UpsertAttributeDefinitionRequest(
+            key="finance.state",
             description="US state",
             value_source=ValueSource.FREE_FORM,
             allowed_values=["CA", "NY", "*"],
+            scope_path="finance",
         ),
         actor,
     )
@@ -328,14 +383,14 @@ def test_row_filter_request_routes_to_admins(container) -> None:  # noqa: ANN001
     )()
     created = access.create_request(
         CreateAccessRequestBody(
-            attribute_key="state",
+            attribute_key="finance.state",
             attribute_value="*",
             requested_expires_at=datetime.now(UTC) + timedelta(days=30),
             justification="Need all states for us_states",
         ),
         requester,  # type: ignore[arg-type]
     )
-    assert created.attribute_key == "state"
+    assert created.attribute_key == "finance.state"
     assert created.attribute_value == "*"
     assert created.routed_to.value == "app_admins"
     inbox_admin = access.approvals_inbox(actor)  # type: ignore[arg-type]
@@ -452,18 +507,22 @@ def test_row_filter_request_routes_to_dimension_approvers(container) -> None:  #
     access = AccessRequestService(container.storage, identity)
     actor = _admin()
     identity.upsert_definition(
+        UpsertAttributeDefinitionRequest(key="data_access", governed_tag_keys=["access_path"]),
+        actor,
+    )
+    identity.upsert_definition(
         UpsertAttributeDefinitionRequest(
-            key="state",
+            key="finance.state",
             description="US state",
             value_source=ValueSource.FREE_FORM,
             allowed_values=["CA", "NY", "*"],
+            scope_path="finance",
         ),
         actor,
     )
     access.upsert_approver(
         UpsertCategoryApproverRequest(
-            attribute_key="state",
-            category_path="state",
+            category_path="finance",
             principal_name="geo-owners",
             principal_type=PrincipalKind.GROUP,
         ),
@@ -478,7 +537,7 @@ def test_row_filter_request_routes_to_dimension_approvers(container) -> None:  #
     )
     created = access.create_request(
         CreateAccessRequestBody(
-            attribute_key="state",
+            attribute_key="finance.state",
             attribute_value="CA",
             requested_expires_at=datetime.now(UTC) + timedelta(days=30),
             justification="Need California rows",
@@ -486,7 +545,7 @@ def test_row_filter_request_routes_to_dimension_approvers(container) -> None:  #
         requester,
     )
     assert created.routed_to.value == "category_approvers"
-    assert created.resolved_category == "state"
+    assert created.resolved_category == "finance"
     assert [a.principal_name for a in created.approvers] == ["geo-owners"]
 
     member = CurrentUser(
@@ -517,6 +576,7 @@ def test_is_category_approver_for_user_and_group(container) -> None:  # noqa: AN
 
     access = _access_service(container)
     actor = _admin()
+    _seed_sensitivity(access._identity, actor)
     access.upsert_approver(
         UpsertCategoryApproverRequest(
             category_path="finance",

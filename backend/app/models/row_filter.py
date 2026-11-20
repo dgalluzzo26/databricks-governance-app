@@ -1,27 +1,34 @@
-"""Row-filter dimensions (e.g. ``state``, ``region``) enforced by one metastore ABAC policy.
+"""Row-filter dimensions enforced by one metastore ABAC policy.
 
-A column tagged ``row_filter=<dimension>`` is filtered so each user only sees rows whose
-value matches one of their active ``<dimension>`` identity attributes. ``*`` grants all rows;
-no assignment means no rows.
+A column tagged ``row_filter=<path.qualified.name>`` is filtered so each user only sees rows
+whose value matches one of their active identity attributes for that dimension. ``*`` grants
+all rows; no assignment means no rows. The governed tag **key** stays ``row_filter``; the
+**value** is the path-qualified dimension key (e.g. ``finance.budget.state``).
 """
 
 from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from backend.app.models.base import ApiModel
 from backend.app.models.identity_attribute import ValueSource
 
-DIMENSION_KEY_PATTERN = r"^[a-z][a-z0-9_]{0,62}$"
+# Short name of the filter (``state``). The stored key / tag value is ``{access_path}.{name}``.
+DIMENSION_SHORT_NAME_PATTERN = r"^[a-z][a-z0-9_]{0,62}$"
+DIMENSION_KEY_PATTERN = r"^[a-z][a-z0-9_]{0,62}(\.[a-z][a-z0-9_]{0,62})+$"
+ACCESS_PATH_PATTERN = r"^[a-z][a-z0-9_]{0,62}(\.[a-z][a-z0-9_]{0,62})*$"
 
 
 class RowFilterDimension(ApiModel):
     """Row-filter dimension backed by a free-form or SQL-seeded attribute definition.
 
     Attributes:
-        key: Dimension key; also the identity attribute key and the ``row_filter`` tag value.
+        key: Path-qualified dimension key; also the identity attribute key and the
+            ``row_filter`` tag **value** (tag key stays ``row_filter``).
+        access_path: Access-path this dimension is scoped to (e.g. ``finance.budget``).
+        name: Short filter name (e.g. ``state``).
         description: Optional human-readable description.
         value_source: Where allowed values come from (``free_form`` or ``sql``).
         value_sql: Seed query when ``value_source`` is ``sql``; otherwise None.
@@ -31,6 +38,8 @@ class RowFilterDimension(ApiModel):
     """
 
     key: str
+    access_path: str | None = None
+    name: str | None = None
     description: str | None = None
     value_source: ValueSource
     value_sql: str | None = None
@@ -55,31 +64,54 @@ class UpsertRowFilterDimensionRequest(ApiModel):
     """Request body to create or update a row-filter dimension.
 
     Attributes:
-        key: Dimension key; lower-cased and stripped, must match ``DIMENSION_KEY_PATTERN``.
+        access_path: Access-path value from the data-access vocabulary (required on create).
+        name: Short filter name such as ``state`` (required on create).
+        key: Optional path-qualified key; built as ``{access_path}.{name}`` when omitted.
         description: Optional human-readable description.
         value_source: ``free_form`` (admin-entered values) or ``sql`` (seeded by a query).
         allowed_values: Allowed values for free-form dimensions.
         value_sql: Seed query returning allowed values; required for ``sql`` dimensions.
     """
 
-    key: str = Field(pattern=DIMENSION_KEY_PATTERN)
+    access_path: str | None = Field(default=None, pattern=ACCESS_PATH_PATTERN)
+    name: str | None = Field(default=None, pattern=DIMENSION_SHORT_NAME_PATTERN)
+    key: str | None = Field(default=None, pattern=DIMENSION_KEY_PATTERN)
     description: str | None = None
     value_source: Literal[ValueSource.FREE_FORM, ValueSource.SQL]
     allowed_values: list[str] = []
     value_sql: str | None = None
 
-    @field_validator("key", mode="before")
+    @field_validator("access_path", "name", "key", mode="before")
     @classmethod
-    def _lower_key(cls, value: str) -> str:
-        """Normalize the key to stripped lower case before pattern validation.
+    def _lower_optional(cls, value: str | None) -> str | None:
+        """Normalize optional identifiers to stripped lower case.
 
         Args:
-            value: Raw key; None is treated as an empty string.
+            value: Raw field; empty becomes None.
 
         Returns:
-            The normalized key.
+            The normalized value, or None.
         """
-        return str(value or "").strip().lower()
+        text = str(value or "").strip().lower()
+        return text or None
+
+    @model_validator(mode="after")
+    def _build_key(self) -> UpsertRowFilterDimensionRequest:
+        """Compose ``key`` from ``access_path`` and ``name`` when both are set.
+
+        Returns:
+            This request with ``key`` populated.
+
+        Raises:
+            ValueError: If neither a key nor access_path+name is provided.
+        """
+        if self.access_path and self.name:
+            self.key = f"{self.access_path}.{self.name}"
+        if not self.key:
+            raise ValueError("access_path and name are required to build the dimension key")
+        if self.name is None and "." in self.key:
+            self.access_path, _, self.name = self.key.rpartition(".")
+        return self
 
 
 class SeedPreviewRequest(ApiModel):

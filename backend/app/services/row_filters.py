@@ -41,6 +41,7 @@ from backend.app.models.row_filter import (
 )
 from backend.app.models.user import CurrentUser
 from backend.app.repositories.base import StorageProvider
+from backend.app.services.access_requests import path_covers
 from backend.app.services.governed_tags import GovernedTagService
 from backend.app.services.identity_attributes import IdentityAttributeService
 from backend.app.services.tasks import step, task_summary
@@ -250,36 +251,39 @@ class RowFilterService:
     ) -> RowFilterDimension:
         """Create or update a dimension and apply it to Unity Catalog.
 
-        Upserts the identity attribute definition (mirrored to UC and audited), adds the key
-        to the row-filter governed tag, and runs ``ensure_pack`` to recreate the UDF and
-        metastore policy.
+        Upserts the identity attribute definition (mirrored to UC and audited), adds the
+        path-qualified key as a value of the ``row_filter`` governed tag, and runs
+        ``ensure_pack`` to recreate the UDF and metastore policy.
 
         Args:
-            request: Dimension key, description, and manual or SQL value source.
+            request: Access path, short name, description, and manual or SQL value source.
             actor: The admin making the change.
 
         Returns:
             The saved dimension.
 
         Raises:
-            InvalidRequestError: If the key already exists as a governed-tag definition or
-                the seed query is invalid.
+            InvalidRequestError: If the access path is not in the data-access vocabulary, the
+                key already exists as a governed-tag definition, or the seed query is invalid.
             NotConfiguredError: If a SQL seed is requested without a SQL warehouse.
             UpstreamError: If governed tag updates or UC SQL fail.
         """
-        existing = self._storage.identity_attributes.get_definition(request.key)
+        key = request.key or ""
+        access_path = self._require_access_path(request.access_path)
+        existing = self._storage.identity_attributes.get_definition(key)
         if existing is not None and existing.value_source == ValueSource.GOVERNED_TAGS:
             raise InvalidRequestError(
-                f"Attribute '{request.key}' already exists as a governed-tag definition"
+                f"Attribute '{key}' already exists as a governed-tag definition"
             )
         with step("Save dimension definition"):
             definition = self._identity.upsert_definition(
                 UpsertAttributeDefinitionRequest(
-                    key=request.key,
+                    key=key,
                     description=request.description,
                     value_source=request.value_source,
                     allowed_values=request.allowed_values,
                     value_sql=request.value_sql,
+                    scope_path=access_path,
                 ),
                 actor,
             )
@@ -539,6 +543,20 @@ class RowFilterService:
         catalog, schema, table = split_table_name(request.table_full_name)
         column = request.column_name.strip()
         quote_identifier(column)
+        table_path = self._nearest_access_path(catalog, schema, table)
+        if not dim.scope_path:
+            raise InvalidRequestError(
+                f"Dimension '{dim.key}' has no access path; recreate it with an access path"
+            )
+        if not table_path:
+            raise InvalidRequestError(
+                f"Table {catalog}.{schema}.{table} has no access_path tag on the table, schema, or catalog"
+            )
+        if not path_covers(dim.scope_path, table_path):
+            raise InvalidRequestError(
+                f"Table access path '{table_path}' is outside dimension '{dim.key}' "
+                f"(scoped to '{dim.scope_path}')"
+            )
         dims = [d.key for d in self._dimension_definitions()]
         with step("Check existing row filters on the table"):
             rows = self._attachment_rows(dims, table=(catalog, schema, table))
@@ -663,8 +681,11 @@ class RowFilterService:
     def _to_dimension(self, definition: AttributeDefinition, attachments: int) -> RowFilterDimension:
         """Convert a definition into a dimension view, excluding ``*`` from value counts."""
         concrete = [v for v in definition.allowed_values if v != "*"]
+        name = definition.key.rsplit(".", 1)[-1] if "." in definition.key else definition.key
         return RowFilterDimension(
             key=definition.key,
+            access_path=definition.scope_path,
+            name=name,
             description=definition.description,
             value_source=definition.value_source,
             value_sql=definition.value_sql,
@@ -672,6 +693,49 @@ class RowFilterService:
             sample_values=concrete[:20],
             attachment_count=attachments,
         )
+
+    def _require_access_path(self, access_path: str | None) -> str:
+        """Return a canonical access-path value from the data-access vocabulary.
+
+        Raises:
+            InvalidRequestError: If data access is missing or the path is not allowed.
+        """
+        path = (access_path or "").strip().lower()
+        if not path:
+            raise InvalidRequestError("access_path is required")
+        data_access = self._identity.find_data_access_definition()
+        if data_access is None:
+            raise InvalidRequestError("Create a data-access definition before adding row-filter dimensions")
+        allowed = {value.lower(): value for value in data_access.allowed_values if value and value != "*"}
+        if path not in allowed:
+            raise InvalidRequestError(
+                f"Access path '{access_path}' is not an allowed data-access value. "
+                f"Allowed: {', '.join(sorted(allowed.values())) or '(none)'}"
+            )
+        return allowed[path]
+
+    def _nearest_access_path(self, catalog: str, schema: str, table: str) -> str | None:
+        """Nearest ``access_path`` tag on the table, then schema, then catalog."""
+        access_tag = self._identity.access_tag_key()
+        rows = self._sql.query(
+            "SELECT 'table' AS kind, tag_value FROM system.information_schema.table_tags "
+            "WHERE catalog_name = :catalog AND schema_name = :schema AND table_name = :table "
+            "AND lower(tag_name) = lower(:tag) "
+            "UNION ALL "
+            "SELECT 'schema', tag_value FROM system.information_schema.schema_tags "
+            "WHERE catalog_name = :catalog AND schema_name = :schema "
+            "AND lower(tag_name) = lower(:tag) "
+            "UNION ALL "
+            "SELECT 'catalog', tag_value FROM system.information_schema.catalog_tags "
+            "WHERE catalog_name = :catalog AND lower(tag_name) = lower(:tag)",
+            {"catalog": catalog, "schema": schema, "table": table, "tag": access_tag},
+        )
+        by_kind = {str(row.get("kind")): str(row.get("tag_value") or "") for row in rows}
+        for kind in ("table", "schema", "catalog"):
+            value = (by_kind.get(kind) or "").strip()
+            if value:
+                return value
+        return None
 
     def _audit(self, event_type: str, actor: str, payload: dict) -> None:
         """Record an audit event in storage."""

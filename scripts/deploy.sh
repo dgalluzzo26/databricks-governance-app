@@ -65,6 +65,9 @@ python3 scripts/ensure_app_catalog.py -t "$TARGET" ${ENSURE_ARGS[@]+"${ENSURE_AR
 step "Deploying bundle"
 databricks bundle deploy -t "$TARGET" ${BUNDLE_ARGS[@]+"${BUNDLE_ARGS[@]}"}
 
+step "Sizing Lakebase endpoint"
+python3 scripts/size_lakebase.py -t "$TARGET" ${ENSURE_ARGS[@]+"${ENSURE_ARGS[@]}"}
+
 if [[ $RUN_SETUP -eq 1 ]]; then
   step "Running setup job (catalog, tables, UDFs, app grants)"
   databricks bundle run setup_job -t "$TARGET" ${BUNDLE_ARGS[@]+"${BUNDLE_ARGS[@]}"}

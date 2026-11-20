@@ -64,7 +64,6 @@ import type {
   AttributeDefinitionList,
   BulkAssignRequest,
   BulkAssignResult,
-  CategoryApprover,
   GrantableAttributeList,
   CategoryApproverList,
   CreateAccessRequestBody,
@@ -724,8 +723,8 @@ export class IdentityAttributesApi {
    * @returns The saved approver.
    * @throws {@link ApiError} On a non-2xx response.
    */
-  upsertCategoryApprover(body: UpsertCategoryApproverRequest): Promise<CategoryApprover> {
-    return this.http.put<CategoryApprover>("/identity/category-approvers", body);
+  upsertCategoryApprover(body: UpsertCategoryApproverRequest): Promise<CategoryApproverList> {
+    return this.http.put<CategoryApproverList>("/identity/category-approvers", body);
   }
 
   /**

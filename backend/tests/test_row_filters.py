@@ -30,9 +30,18 @@ class FakeSql:
     def query(self, statement: str, parameters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         if "column_tags" in statement:
             rows = self.column_tags
-            if "table_name = " in statement:
-                rows = [r for r in rows if f"table_name = '{r['table_name']}'" in statement]
+            if parameters and parameters.get("table"):
+                pass
+            if "table_name =" in statement:
+                rows = [
+                    r
+                    for r in rows
+                    if f"table_name = '{r['table_name']}'" in statement
+                    or (parameters and parameters.get("table") == r["table_name"])
+                ]
             return rows
+        if "table_tags" in statement or "schema_tags" in statement or "catalog_tags" in statement:
+            return [{"kind": "table", "tag_value": "finance"}]
         if "abac_policy_definitions" in statement:
             return []
         if "AS seed" in statement:
@@ -77,6 +86,13 @@ def _services(container) -> tuple[IdentityAttributeService, RowFilterService, Fa
         identity,  # type: ignore[arg-type]
     )
     return identity, service, sql
+
+
+def _ensure_data_access(identity: IdentityAttributeService, actor: object) -> None:
+    identity.upsert_definition(
+        UpsertAttributeDefinitionRequest(key="data_access", governed_tag_keys=["access_path"]),
+        actor,  # type: ignore[arg-type]
+    )
 
 
 def test_seed_sql_accepts_more_than_five_hundred_values() -> None:
@@ -167,17 +183,23 @@ def test_governed_tag_definition_still_requires_tags() -> None:
 
 
 def test_upsert_dimension_regenerates_policy(container) -> None:  # noqa: ANN001
-    _, service, sql = _services(container)
+    identity, service, sql = _services(container)
+    actor = _admin()
+    _ensure_data_access(identity, actor)
     dim = service.upsert_dimension(
         UpsertRowFilterDimensionRequest(
-            key="State", value_source=ValueSource.SQL, value_sql="SELECT abbreviation FROM t"
+            access_path="finance",
+            name="state",
+            value_source=ValueSource.SQL,
+            value_sql="SELECT abbreviation FROM t",
         ),
-        _admin(),  # type: ignore[arg-type]
+        actor,  # type: ignore[arg-type]
     )
-    assert dim.key == "state"
+    assert dim.key == "finance.state"
+    assert dim.access_path == "finance"
     assert dim.allowed_value_count == 2
     policy = next(s for s in sql.executed if "CREATE OR REPLACE POLICY" in s)
-    assert "has_tag_value('row_filter', 'state')" in policy
+    assert "has_tag_value('row_filter', 'finance.state')" in policy
     assert "WHEN has_tag_value('data_access_controlled', 'true')" in policy
     assert "EXCEPT `app-sp-id`, `admin-sp-id`" in policy
     assert "geo_region" not in policy
@@ -188,7 +210,8 @@ def test_upsert_dimension_retries_policy_when_tag_value_is_missing(
     container, monkeypatch: pytest.MonkeyPatch
 ) -> None:  # noqa: ANN001
     monkeypatch.setattr("backend.app.services.row_filters.time.sleep", lambda _s: None)
-    _, service, sql = _services(container)
+    identity, service, sql = _services(container)
+    _ensure_data_access(identity, _admin())
     attempts = {"n": 0}
     original = sql.execute
 
@@ -205,13 +228,16 @@ def test_upsert_dimension_retries_policy_when_tag_value_is_missing(
     sql.execute = execute  # type: ignore[method-assign]
     dim = service.upsert_dimension(
         UpsertRowFilterDimensionRequest(
-            key="state", value_source=ValueSource.SQL, value_sql="SELECT abbreviation FROM t"
+            access_path="finance",
+            name="state",
+            value_source=ValueSource.SQL,
+            value_sql="SELECT abbreviation FROM t",
         ),
         _admin(),  # type: ignore[arg-type]
     )
-    assert dim.key == "state"
+    assert dim.key == "finance.state"
     assert attempts["n"] == 2
-    assert "state" in sql.executed[-1]
+    assert "finance.state" in sql.executed[-1]
 
 
 def test_policy_sql_matches_every_dimension() -> None:
@@ -225,22 +251,28 @@ def test_policy_sql_matches_every_dimension() -> None:
 
 
 def test_attach_enforces_one_dimension_per_table(container) -> None:  # noqa: ANN001
-    _, service, sql = _services(container)
+    identity, service, sql = _services(container)
     actor = _admin()
-    for key in ["state", "region"]:
+    _ensure_data_access(identity, actor)
+    for name in ["state", "region"]:
         service.upsert_dimension(
             UpsertRowFilterDimensionRequest(
-                key=key, value_source=ValueSource.FREE_FORM, allowed_values=["A"]
+                access_path="finance",
+                name=name,
+                value_source=ValueSource.FREE_FORM,
+                allowed_values=["A"],
             ),
             actor,  # type: ignore[arg-type]
         )
     service.attach(
         AttachRowFilterRequest(
-            table_full_name="cat.sch.us_states", column_name="abbreviation", dimension="state"
+            table_full_name="cat.sch.us_states",
+            column_name="abbreviation",
+            dimension="finance.state",
         ),
         actor,  # type: ignore[arg-type]
     )
-    assert "SET TAGS ('row_filter' = 'state')" in sql.executed[-1]
+    assert "SET TAGS ('row_filter' = 'finance.state')" in sql.executed[-1]
 
     sql.column_tags = [
         {
@@ -248,23 +280,27 @@ def test_attach_enforces_one_dimension_per_table(container) -> None:  # noqa: AN
             "schema_name": "sch",
             "table_name": "us_states",
             "column_name": "abbreviation",
-            "tag_value": "state",
+            "tag_value": "finance.state",
         }
     ]
     with pytest.raises(InvalidRequestError, match="one dimension per table"):
         service.attach(
             AttachRowFilterRequest(
-                table_full_name="cat.sch.us_states", column_name="region_code", dimension="region"
+                table_full_name="cat.sch.us_states",
+                column_name="region_code",
+                dimension="finance.region",
             ),
             actor,  # type: ignore[arg-type]
         )
     with pytest.raises(InvalidRequestError, match="three-part"):
         service.attach(
-            AttachRowFilterRequest(table_full_name="sch.us_states", column_name="x", dimension="state"),
+            AttachRowFilterRequest(
+                table_full_name="sch.us_states", column_name="x", dimension="finance.state"
+            ),
             actor,  # type: ignore[arg-type]
         )
     with pytest.raises(InvalidRequestError, match="Detach"):
-        service.delete_dimension("state", actor)  # type: ignore[arg-type]
+        service.delete_dimension("finance.state", actor)  # type: ignore[arg-type]
 
 
 def test_pack_with_no_dimensions_drops_policy_only_when_it_exists(container) -> None:  # noqa: ANN001

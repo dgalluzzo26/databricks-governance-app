@@ -66,7 +66,7 @@ describe("Identity attributes", () => {
     expect(await screen.findByText(/1 created or renewed, 0 already held/)).toBeInTheDocument();
   });
 
-  it("blocks a second sensitivity definition and allows data-access create", async () => {
+  it("blocks a second sensitivity or data-access definition", async () => {
     const user = userEvent.setup();
     renderApp("/identity?tab=definitions");
 
@@ -82,9 +82,9 @@ describe("Identity attributes", () => {
 
     await user.selectOptions(screen.getByRole("combobox", { name: "Definition purpose" }), "data_access");
     expect(screen.getByRole("textbox", { name: "Attribute key" })).toHaveValue("data_access");
-    expect(screen.queryByText("Already configured")).not.toBeInTheDocument();
+    expect(screen.getByText("Already configured")).toBeInTheDocument();
     expect(await screen.findByRole("checkbox", { name: "Select access_path" })).toBeChecked();
-    expect(screen.getByRole("button", { name: "Create definition" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Create definition" })).toBeDisabled();
   });
 
   it("hides admin tabs for non-admins", async () => {
@@ -125,15 +125,37 @@ describe("Identity attributes", () => {
     expect(await screen.findByText("Inbox")).toBeInTheDocument();
   });
 
-  it("lists category approvers for admins including data-access scope", async () => {
+  it("adds a user and a group as approvers for an access path", async () => {
     const user = userEvent.setup();
-    renderApp("/identity?tab=approvers");
+    const services = fakeServices();
+    const upsert = vi.spyOn(services.identityAttributes, "upsertCategoryApprover");
+    renderApp("/identity?tab=approvers", services);
+
     expect(await screen.findByText("Configured approvers")).toBeInTheDocument();
     const table = await screen.findByRole("table", { name: "Approvers" });
     expect(within(table).getByText("finance")).toBeInTheDocument();
     expect(within(table).getByText("finance-owners")).toBeInTheDocument();
 
-    await user.selectOptions(screen.getByLabelText("Scope"), "data_access");
-    expect(screen.getByRole("combobox", { name: "Data-access path" })).toBeDisabled();
+    await user.click(screen.getByRole("combobox", { name: "Access path" }));
+    await user.click(await screen.findByRole("option", { name: "finance.budget" }));
+
+    const picker = screen.getByRole("combobox", { name: "Add approver principal" });
+    await user.type(picker, "an");
+    const userHits = await screen.findByRole("listbox", { name: "Matching principals" });
+    await user.click(within(userHits).getByRole("button", { name: /Ana Lopez/ }));
+    expect(screen.getByLabelText("Selected approvers")).toBeInTheDocument();
+
+    await user.type(picker, "data");
+    const groupHits = await screen.findByRole("listbox", { name: "Matching principals" });
+    await user.click(within(groupHits).getByRole("button", { name: /data-stewards/ }));
+
+    await user.click(screen.getByRole("button", { name: "Add approvers" }));
+    expect(upsert).toHaveBeenCalledWith({
+      categoryPath: "finance.budget",
+      principals: [
+        { principalName: "ana.lopez@example.com", principalType: "USER" },
+        { principalName: "data-stewards", principalType: "GROUP" },
+      ],
+    });
   });
 });

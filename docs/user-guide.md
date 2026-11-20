@@ -71,8 +71,8 @@ will review it.
 - Everything you are missing is **checked by default**. Uncheck anything you do not need.
 - Rows labelled **Already held** have no checkbox. You have that attribute already
   (`sales.PII.Phone` above, which is why the `phone` column is unmasked).
-- **Reviewed by** names the approver group for that path, or **App admins** when no approver is
-  configured.
+- **Reviewed by** names the users and groups who approve that path, or **App admins** when no
+  approver is configured.
 
 ### Step 4: decide how many rows you need
 
@@ -203,7 +203,7 @@ admin for help. If the message says the SQL warehouse is not ready, wait a minut
 | --- | --- |
 | **Already held** | You already have this attribute; no need to request it again |
 | **Not requestable yet** | The attribute is not set up for requests yet; ask an app admin |
-| A group name in **Reviewed by** | That approver group will review the request |
+| A name in **Reviewed by** | That user or group will review the request |
 | **App admins** | No approver is configured for that path, so app admins review it |
 
 ---

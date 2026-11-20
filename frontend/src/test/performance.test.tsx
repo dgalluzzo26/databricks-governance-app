@@ -280,6 +280,8 @@ describe("App cost card", () => {
     expect(await screen.findByText("App cost")).toBeInTheDocument();
     expect(await screen.findByText("Avg cost per sync")).toBeInTheDocument();
     expect(screen.getByText("Lakebase last 7 days")).toBeInTheDocument();
+    expect(screen.getByText("Total, last 30 days")).toBeInTheDocument();
+    expect(screen.getByText("$12.20")).toBeInTheDocument();
     expect(screen.getByText("$5.50")).toBeInTheDocument();
     expect(screen.getByText("$1.50")).toBeInTheDocument();
     expect(screen.getByText("$3.20")).toBeInTheDocument();

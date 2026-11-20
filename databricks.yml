@@ -28,6 +28,12 @@ variables:
   lakebase_project_id:
     description: Lakebase project ID for app state
     default: data-governance-app
+  lakebase_min_cu:
+    description: Lakebase endpoint autoscaling minimum (compute units, ~2 GB RAM each)
+    default: 1
+  lakebase_max_cu:
+    description: Lakebase endpoint autoscaling maximum (max - min must be <= 16)
+    default: 4
   lakebase_database_id:
     description: Lakebase database ID inside the production branch
     default: governance

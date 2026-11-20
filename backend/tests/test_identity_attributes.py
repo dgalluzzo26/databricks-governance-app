@@ -163,6 +163,10 @@ def test_rejects_assign_to_managed_data_access_group(container) -> None:  # noqa
 def test_sensitivity_composes_category_and_leaf(container) -> None:  # noqa: ANN001
     service = _service(container)
     actor = _admin()
+    service.upsert_definition(
+        UpsertAttributeDefinitionRequest(key="data_access", governed_tag_keys=["access_path"]),
+        actor,  # type: ignore[arg-type]
+    )
 
     definition = service.upsert_definition(
         UpsertAttributeDefinitionRequest(
@@ -312,16 +316,29 @@ def test_find_sensitivity_definition(container) -> None:  # noqa: ANN001
     service = _service(container)
     actor = _admin()
     assert service.find_sensitivity_definition() is None
+    with pytest.raises(InvalidRequestError, match="data-access definition first"):
+        service.upsert_definition(
+            UpsertAttributeDefinitionRequest(
+                key="sensitivity",
+                governed_tag_keys=["sensitivity"],
+            ),
+            actor,  # type: ignore[arg-type]
+        )
+    service.upsert_definition(
+        UpsertAttributeDefinitionRequest(key="data_access", governed_tag_keys=["access_path"]),
+        actor,  # type: ignore[arg-type]
+    )
     service.upsert_definition(
         UpsertAttributeDefinitionRequest(
             key="sensitivity",
-            governed_tag_keys=["access_path", "sensitivity"],
+            governed_tag_keys=["sensitivity"],
         ),
         actor,  # type: ignore[arg-type]
     )
     found = service.find_sensitivity_definition()
     assert found is not None
     assert found.key == "sensitivity"
+    assert found.governed_tag_keys == ["access_path", "sensitivity"]
 
 
 def test_approver_can_revoke_assignment_for_their_path(client: TestClient, container) -> None:  # noqa: ANN001
@@ -346,6 +363,10 @@ def test_approver_can_revoke_assignment_for_their_path(client: TestClient, conta
     identity = _service(container)
     access = AccessRequestService(container.storage, identity)
     actor = _admin()
+    identity.upsert_definition(
+        UpsertAttributeDefinitionRequest(key="data_access", governed_tag_keys=["access_path"]),
+        actor,  # type: ignore[arg-type]
+    )
     identity.upsert_definition(
         UpsertAttributeDefinitionRequest(
             key="sensitivity",
@@ -408,6 +429,10 @@ def _seed_sensitivity_and_finance_approver(container) -> None:  # noqa: ANN001
     identity = _service(container)
     access = AccessRequestService(container.storage, identity)
     actor = _admin()
+    identity.upsert_definition(
+        UpsertAttributeDefinitionRequest(key="data_access", governed_tag_keys=["access_path"]),
+        actor,  # type: ignore[arg-type]
+    )
     identity.upsert_definition(
         UpsertAttributeDefinitionRequest(
             key="sensitivity",
@@ -574,7 +599,7 @@ def test_approver_bulk_and_list_are_scoped(client: TestClient, container) -> Non
     grantable = client.get("/api/identity/grantable-attributes", headers=lead)
     assert grantable.status_code == 200
     keys = {item["key"] for item in grantable.json()["attributes"]}
-    assert keys == {"sensitivity"}
+    assert keys == {"data_access", "sensitivity"}
 
     assert client.get("/api/identity/grantable-attributes", headers=outsider).status_code == 403
     assert client.get("/api/identity/assignments", headers=outsider).status_code == 403

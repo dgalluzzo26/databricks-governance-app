@@ -628,6 +628,18 @@ export const testGovernedTags: GovernedTagList = {
 export const testDefinitions: AttributeDefinitionList = {
   definitions: [
     {
+      key: "data_access",
+      description: "FEMA access tree",
+      governedTagKeys: ["access_path"],
+      valueSource: "governed_tags",
+      valueSql: null,
+      allowedValues: ["public", "finance", "finance.budget"],
+      createdBy: "admin",
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedBy: "admin",
+      updatedAt: "2026-01-01T00:00:00Z",
+    },
+    {
       key: "dga_domain",
       description: "Business domain",
       governedTagKeys: ["dga_domain"],
@@ -659,25 +671,28 @@ export const testDefinitions: AttributeDefinitionList = {
       updatedAt: "2026-01-01T00:00:00Z",
     },
     {
-      key: "state",
+      key: "finance.state",
       description: "Row filter dimension: US state abbreviation",
       governedTagKeys: [],
       valueSource: "sql",
       valueSql: "SELECT DISTINCT abbreviation FROM cat.sch.us_states",
       allowedValues: ["*", "CA", "NY", "TX"],
+      scopePath: "finance",
       createdBy: "admin",
       createdAt: "2026-01-01T00:00:00Z",
       updatedBy: "admin",
       updatedAt: "2026-01-01T00:00:00Z",
     },
   ],
-  total: 3,
+  total: 4,
 };
 
 export const testRowFilterDimensions: RowFilterDimensionList = {
   dimensions: [
     {
-      key: "state",
+      key: "finance.state",
+      accessPath: "finance",
+      name: "state",
       description: "Row filter dimension: US state abbreviation",
       valueSource: "sql",
       valueSql: "SELECT DISTINCT abbreviation FROM cat.sch.us_states",
@@ -691,19 +706,21 @@ export const testRowFilterDimensions: RowFilterDimensionList = {
 
 export const testRowFilterPack: RowFilterPackStatus = {
   tagKey: "row_filter",
-  tagValues: ["geo_region", "state", "region"],
+  tagValues: ["geo_region", "finance.state", "region"],
   functionName: "`data_governance_app`.`masking_functions`.`has_row_access`",
   policyName: "rf_by_dimension",
   policyExists: true,
-  policyMatchColumns: "has_tag_value('row_filter', 'state') AS c",
+  policyMatchColumns: "has_tag_value('row_filter', 'finance.state') AS c",
   policyExceptPrincipals: ["app-sp"],
-  dimensions: ["state"],
+  dimensions: ["finance.state"],
   missingTagValues: [],
   inSync: true,
 };
 
 export const testRowFilterAttachments: RowFilterAttachmentList = {
-  attachments: [{ tableFullName: "cat.sch.us_states", columnName: "abbreviation", dimension: "state" }],
+  attachments: [
+    { tableFullName: "cat.sch.us_states", columnName: "abbreviation", dimension: "finance.state" },
+  ],
   total: 1,
 };
 
@@ -954,7 +971,7 @@ export const testCategoryApprovers: CategoryApproverList = {
   approvers: [
     {
       approverId: "ap1",
-      attributeKey: "sensitivity",
+      attributeKey: "access",
       categoryPath: "finance",
       principalName: "finance-owners",
       principalType: "GROUP",
@@ -2047,15 +2064,23 @@ export function fakeServices(
         categoryApprovers instanceof Error
           ? Promise.reject(categoryApprovers)
           : Promise.resolve(categoryApprovers),
-      upsertCategoryApprover: async (body: UpsertCategoryApproverRequest) => ({
-        approverId: "new-ap",
-        attributeKey: body.attributeKey ?? "sensitivity",
-        categoryPath: body.categoryPath,
-        principalName: body.principalName,
-        principalType: body.principalType,
-        createdBy: "admin",
-        createdAt: "2026-01-01T00:00:00Z",
-      }),
+      upsertCategoryApprover: async (body: UpsertCategoryApproverRequest) => {
+        const principals = body.principals?.length
+          ? body.principals
+          : body.principalName && body.principalType
+            ? [{ principalName: body.principalName, principalType: body.principalType }]
+            : [];
+        const approvers = principals.map((item, index) => ({
+          approverId: `new-ap-${index}`,
+          attributeKey: body.attributeKey ?? "access",
+          categoryPath: body.categoryPath,
+          principalName: item.principalName,
+          principalType: item.principalType,
+          createdBy: "admin",
+          createdAt: "2026-01-01T00:00:00Z",
+        }));
+        return { approvers, total: approvers.length };
+      },
       deleteCategoryApprover: async () => undefined,
       createAccessRequest: async (body: CreateAccessRequestBody) => ({
         requestId: "new-req",
@@ -2148,7 +2173,9 @@ export function fakeServices(
           ? Promise.reject(rowFilterDimensions)
           : Promise.resolve(rowFilterDimensions),
       upsertDimension: async (body: UpsertRowFilterDimensionRequest) => ({
-        key: body.key,
+        key: body.key ?? `${body.accessPath}.${body.name}`,
+        accessPath: body.accessPath,
+        name: body.name,
         description: body.description ?? null,
         valueSource: body.valueSource,
         valueSql: body.valueSql ?? null,

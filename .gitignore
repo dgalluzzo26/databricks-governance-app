@@ -26,3 +26,6 @@ frontend/dist/
 .idea/
 .vscode/
 .perf/
+
+# Local Lakebase ownership-migration dumps (may contain secrets)
+.lakebase-backup/

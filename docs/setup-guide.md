@@ -231,7 +231,8 @@ Create exactly one of each:
 
 Allowed values come from the governed tag policies (including paths the seed script added).
 
-Optional: **Approvers** tab — map path prefixes to approver groups for request routing.
+Optional: **Approvers** tab — pick a data-access path and add any mix of users and groups
+who will review requests under that path.
 
 ### 5b. Mask rules
 
@@ -241,8 +242,10 @@ Optional: **Approvers** tab — map path prefixes to approver groups for request
 
 ### 5c. Row filters
 
-1. Create dimensions you need (the demo uses `state`).
-2. Attach dimensions to columns as needed (seed already tags some columns `row_filter=state`).
+1. Create dimensions you need (access path + name, e.g. `finance` + `state` → tag value
+   `finance.state`).
+2. Attach dimensions to columns as needed (seed already tags some columns
+   `row_filter={domain}.state`).
 3. **Sync / ensure pack** for the row-filter UDF and policy.
 
 ### 5d. Policy exceptions (optional)

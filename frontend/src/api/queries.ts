@@ -1021,7 +1021,7 @@ export function useUpsertCategoryApprover() {
   const api = useApi();
   const client = useQueryClient();
   return useMutation({
-    meta: { busyMessage: "Saving approver…" },
+    meta: { busyMessage: "Saving approvers…" },
     mutationFn: (body: UpsertCategoryApproverRequest) => api.identityAttributes.upsertCategoryApprover(body),
     onSuccess: () => client.invalidateQueries({ queryKey: queryKeys.categoryApprovers }),
   });

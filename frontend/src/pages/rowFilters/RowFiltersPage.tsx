@@ -8,6 +8,7 @@ import { Link } from "react-router-dom";
 import {
   useAttachRowFilter,
   useAttributeDefinitions,
+  useDataAccessSettings,
   useDeleteRowFilterDimension,
   useDetachRowFilter,
   useEnsureRowFilterPack,
@@ -20,7 +21,8 @@ import {
 } from "@/api/queries";
 import { useEffectiveUser } from "@/app/viewAs";
 import type { RowFilterAttachment, RowFilterDimension } from "@/api/types";
-import { Alert, Badge, Card, ErrorAlert, PageHeader, Spinner, TablePager } from "@/components/ui";
+import { isDataAccessDefinition } from "@/pages/identity/definitionRules";
+import { Alert, Badge, Card, ErrorAlert, PageHeader, SearchableSelect, Spinner, TablePager } from "@/components/ui";
 import { DataTableHead } from "@/components/ui/DataTableHead";
 import { useTableView, type TableColumn } from "@/hooks/useTableView";
 import styles from "../identity/IdentityPage.module.css";
@@ -59,9 +61,9 @@ export function RowFiltersPage() {
         title="Row filters"
         description={
           <>
-            Tag a column with <code>row_filter=&lt;dimension&gt;</code> and users only see rows whose value matches
-            one of their <code>&lt;dimension&gt;</code> attributes. <code>*</code> grants every row; no attribute
-            means no rows.
+            Tag a column with <code>row_filter=&lt;access.path.name&gt;</code> (tag key stays{" "}
+            <code>row_filter</code>) and users only see rows whose value matches one of their attributes for
+            that dimension. <code>*</code> grants every row; no attribute means no rows.
           </>
         }
       />
@@ -229,7 +231,7 @@ function DimensionsTable({
       key: "dimension",
       label: "Dimension",
       value: (dim) => dim.key,
-      filterText: (dim) => `${dim.key} ${dim.description ?? ""}`,
+      filterText: (dim) => `${dim.key} ${dim.accessPath ?? ""} ${dim.description ?? ""}`,
     },
     {
       key: "values",
@@ -252,6 +254,11 @@ function DimensionsTable({
               <tr key={dim.key}>
                 <td>
                   <code>{dim.key}</code>
+                  {dim.accessPath && (
+                    <div className={styles.muted}>
+                      Access path <code>{dim.accessPath}</code>
+                    </div>
+                  )}
                   {dim.description && <div className={styles.muted}>{dim.description}</div>}
                   <div className={styles.muted}>
                     {dim.valueSource === "sql" ? "SQL seed query" : "Free-form list"}
@@ -360,22 +367,34 @@ function DimensionFormFields({
 }) {
   const upsert = useUpsertRowFilterDimension();
   const preview = usePreviewSeed();
-  const [key, setKey] = useState(initial?.key ?? "");
+  const definitions = useAttributeDefinitions();
+  const dataAccessSettings = useDataAccessSettings();
+  const accessTagKey =
+    dataAccessSettings.data?.settings.accessTagKey?.trim().toLowerCase() || "access_path";
+  const dataAccessDef = (definitions.data?.definitions ?? []).find((item) =>
+    isDataAccessDefinition(item, accessTagKey),
+  );
+  const accessPaths = (dataAccessDef?.allowedValues ?? []).filter((value) => value && value !== "*");
+  const [accessPath, setAccessPath] = useState(initial?.accessPath ?? "");
+  const [name, setName] = useState(initial?.name ?? "");
   const [description, setDescription] = useState(initial?.description ?? "");
   const [mode, setMode] = useState<ValueMode>(initial?.valueSource === "free_form" ? "free_form" : "sql");
   const [valuesText, setValuesText] = useState(
     initial?.valueSource === "free_form" ? storedValues.join("\n") : "",
   );
   const [valueSql, setValueSql] = useState(initial?.valueSql ?? "");
+  const composedKey = accessPath && name ? `${accessPath}.${name.trim().toLowerCase()}` : "";
 
   const canSave =
-    /^[a-z][a-z0-9_]{0,62}$/.test(key.trim().toLowerCase()) &&
+    Boolean(accessPath) &&
+    /^[a-z][a-z0-9_]{0,62}$/.test(name.trim().toLowerCase()) &&
     (mode === "sql" ? valueSql.trim().length > 0 : parseValues(valuesText).length > 0);
 
   /** Upserts the dimension with either parsed free-form values or a seed SQL query. */
   const onSave = async () => {
     await upsert.mutateAsync({
-      key: key.trim().toLowerCase(),
+      accessPath,
+      name: name.trim().toLowerCase(),
       description: description.trim() || null,
       valueSource: mode,
       allowedValues: mode === "free_form" ? parseValues(valuesText) : [],
@@ -388,15 +407,32 @@ function DimensionFormFields({
     <div className={styles.approvalCard}>
       <div className={styles.formGrid}>
         <label className={styles.field}>
-          <span className={styles.label}>Dimension key</span>
-          <input
-            className={styles.input}
-            value={key}
-            disabled={Boolean(initial)}
-            placeholder="state"
-            onChange={(event) => setKey(event.target.value)}
+          <span className={styles.label}>Access path</span>
+          <SearchableSelect
+            aria-label="Access path"
+            value={accessPath}
+            onChange={setAccessPath}
+            options={accessPaths}
+            placeholder={dataAccessDef ? "Select path" : "Create a data-access definition first"}
+            disabled={Boolean(initial) || !dataAccessDef}
           />
         </label>
+        <label className={styles.field}>
+          <span className={styles.label}>Name</span>
+          <input
+            className={styles.input}
+            value={name}
+            disabled={Boolean(initial)}
+            placeholder="state"
+            aria-label="Dimension name"
+            onChange={(event) => setName(event.target.value)}
+          />
+        </label>
+        {composedKey ? (
+          <p className={styles.muted} style={{ gridColumn: "1 / -1" }}>
+            Tag value <code>row_filter={composedKey}</code>
+          </p>
+        ) : null}
         <label className={styles.fieldGrow}>
           <span className={styles.label}>Description</span>
           <input

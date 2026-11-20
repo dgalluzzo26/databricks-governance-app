@@ -194,6 +194,10 @@ def test_attribute_explorer_sensitivity_lists_matching_columns(client: TestClien
     identity = _service(container)
     actor = _admin()
     identity.upsert_definition(
+        UpsertAttributeDefinitionRequest(key="data_access", governed_tag_keys=["access_path"]),
+        actor,
+    )
+    identity.upsert_definition(
         UpsertAttributeDefinitionRequest(
             key="sensitivity",
             description="Sensitivity",

@@ -18,6 +18,7 @@ from typing import Any
 
 from backend.app.core.errors import ForbiddenError, InvalidRequestError, NotFoundError
 from backend.app.models.access_request import (
+    ACCESS_LEAF_APPROVER_KEY,
     RENEWAL_WINDOW_DAYS,
     SENSITIVITY_ATTRIBUTE_KEY,
     AccessRequest,
@@ -66,6 +67,23 @@ def path_prefixes(path: str) -> list[str]:
     return [".".join(parts[:index]) for index in range(len(parts), 0, -1)]
 
 
+def path_covers(scope: str, value: str) -> bool:
+    """Return True when ``value`` equals ``scope`` or is a dotted child of it.
+
+    Args:
+        scope: Access-path prefix (e.g. ``finance``).
+        value: Path being tested (e.g. ``finance.budget``).
+
+    Returns:
+        True when ``value`` is ``scope`` or ``scope.<rest>``.
+    """
+    scope_l = scope.strip().lower()
+    value_l = value.strip().lower()
+    if not scope_l or not value_l:
+        return False
+    return value_l == scope_l or value_l.startswith(f"{scope_l}.")
+
+
 def resolve_category(path: str, configured_categories: list[str]) -> str | None:
     """Most-specific configured category that prefixes ``path`` (case-insensitive).
 
@@ -107,25 +125,23 @@ class _RoutingLookups:
         """Return the data-access attribute definition, or None."""
         return self._get(("data-access-definition",), self._identity.find_data_access_definition)
 
-    def configured_categories(self, attribute_key: str) -> Any:
-        """Return configured approver categories for ``attribute_key``."""
+    def configured_categories(self) -> Any:
+        """Return every access path that has at least one approver."""
         return self._get(
-            ("configured", attribute_key),
-            lambda: self._storage.category_approvers.list_configured_categories(attribute_key=attribute_key),
+            ("configured",),
+            lambda: self._storage.category_approvers.list_configured_categories(),
         )
 
-    def approvers(self, category: str | None, attribute_key: str) -> Any:
-        """Return approvers for ``category`` (or every category when None) under ``attribute_key``."""
+    def approvers(self, category: str | None) -> Any:
+        """Return approvers for ``category`` (or every category when None)."""
         if category is None:
             return self._get(
-                ("approvers", None, attribute_key),
-                lambda: list(self._storage.category_approvers.list_approvers(attribute_key=attribute_key)),
+                ("approvers", None),
+                lambda: list(self._storage.category_approvers.list_approvers()),
             )
         return self._get(
-            ("approvers", category, attribute_key),
-            lambda: list(
-                self._storage.category_approvers.list_approvers(category, attribute_key=attribute_key)
-            ),
+            ("approvers", category),
+            lambda: list(self._storage.category_approvers.list_approvers(category)),
         )
 
 
@@ -198,8 +214,8 @@ class AccessRequestService:
         """Attribute keys (and category paths) the actor may grant from Assignments.
 
         Admins get every definition key with an empty category list (all values allowed).
-        Approvers get keys where they are a designated USER/GROUP approver; ``categories``
-        lists the paths they cover (empty for dimension keys, where the key is the scope).
+        Access-path approvers get the data-access key, ``sensitivity``, and every row-filter
+        dimension whose ``scope_path`` sits under one of their paths.
 
         Args:
             actor: Signed-in admin or path approver.
@@ -213,7 +229,7 @@ class AccessRequestService:
             return GrantableAttributeList(attributes=items, total=len(items))
 
         actor_groups = {group.lower() for group in actor.groups}
-        by_key: dict[str, set[str]] = {}
+        paths: set[str] = set()
         for approver in self._storage.category_approvers.list_approvers():
             matches_user = (
                 approver.principal_type == PrincipalKind.USER
@@ -223,108 +239,101 @@ class AccessRequestService:
                 approver.principal_type == PrincipalKind.GROUP
                 and approver.principal_name.lower() in actor_groups
             )
-            if not (matches_user or matches_group):
+            if matches_user or matches_group:
+                paths.add(approver.category_path)
+        if not paths:
+            return GrantableAttributeList(attributes=[], total=0)
+
+        data_access = self._identity.find_data_access_definition()
+        by_key: dict[str, set[str]] = {}
+        if data_access is not None and data_access.key.lower() in definitions:
+            by_key[definitions[data_access.key.lower()]] = set(paths)
+        if SENSITIVITY_ATTRIBUTE_KEY in definitions:
+            by_key[definitions[SENSITIVITY_ATTRIBUTE_KEY]] = set(paths)
+        for item in self._identity.list_definitions().definitions:
+            if item.value_source == ValueSource.GOVERNED_TAGS or not item.scope_path:
                 continue
-            key = approver.attribute_key.strip()
-            if key.lower() not in definitions:
+            if item.key.lower() not in definitions:
                 continue
-            by_key.setdefault(definitions[key.lower()], set()).add(approver.category_path)
+            if any(path_covers(path, item.scope_path) for path in paths):
+                by_key.setdefault(definitions[item.key.lower()], set()).update(
+                    path for path in paths if path_covers(path, item.scope_path)
+                )
 
         items = [
-            GrantableAttribute(key=key, categories=sorted(paths, key=str.lower))
-            for key, paths in sorted(by_key.items(), key=lambda item: item[0].lower())
+            GrantableAttribute(key=key, categories=sorted(cats, key=str.lower))
+            for key, cats in sorted(by_key.items(), key=lambda pair: pair[0].lower())
         ]
         return GrantableAttributeList(attributes=items, total=len(items))
 
-    def upsert_approver(self, request: UpsertCategoryApproverRequest, actor: CurrentUser) -> CategoryApprover:
-        """Add or update an approver for sensitivity, data-access, or a row-filter dimension.
+    def upsert_approver(
+        self, request: UpsertCategoryApproverRequest, actor: CurrentUser
+    ) -> CategoryApproverList:
+        """Add or update one or more approvers for an access path.
 
-        Sensitivity categories must be current ``access_path`` values. Data-access
-        paths must be allowed values on the data-access definition (hierarchical routing).
-        Row-filter dimensions must already exist as non-governed-tag attribute definitions;
-        the stored path is the dimension key. Records a ``sensitivity_category_approver.upserted``
-        audit event (legacy name; payload includes ``attribute_key``).
+        The path must be an allowed value of the data-access definition. Each principal
+        (USER and/or GROUP) is registered for that path and covers data-access, sensitivity,
+        and row-filter requests under it.
 
         Args:
-            request: Attribute key, path, and the USER or GROUP principal to register.
+            request: Access path and USER/GROUP principals to register.
             actor: The admin making the change.
 
         Returns:
-            The saved approver.
+            The saved approver rows.
 
         Raises:
-            InvalidRequestError: If the principal is not a USER or GROUP, or the path / dimension
-                is not valid.
+            InvalidRequestError: If a principal is not a USER or GROUP, data access is
+                not configured, or the path is not in the data-access vocabulary.
         """
-        if request.principal_type not in {PrincipalKind.USER, PrincipalKind.GROUP}:
-            raise InvalidRequestError("Approvers must be USER or GROUP principals")
-        if request.principal_type == PrincipalKind.GROUP and is_managed_group(
-            request.principal_name, self._identity.managed_group_prefix()
-        ):
-            prefix = self._identity.managed_group_prefix()
-            raise InvalidRequestError(
-                f"'{request.principal_name}' is a managed Data Access group ({prefix}*). "
-                "Pick a real user or group as the approver."
-            )
-        attribute_key = (request.attribute_key or SENSITIVITY_ATTRIBUTE_KEY).strip().lower()
         data_access = self._identity.find_data_access_definition()
-        data_access_key = data_access.key.lower() if data_access is not None else None
-        if attribute_key == SENSITIVITY_ATTRIBUTE_KEY:
-            categories = self._sensitivity_category_values()
-            allowed = {value.lower(): value for value in categories}
-            if request.category_path.lower() not in allowed:
-                raise InvalidRequestError(
-                    f"Category '{request.category_path}' is not an access_path value. "
-                    f"Allowed: {', '.join(categories)}"
-                )
-            category = allowed[request.category_path.lower()]
-        elif data_access_key is not None and attribute_key == data_access_key:
-            # Hierarchical paths from the data-access vocabulary (most-specific wins at decide time).
-            allowed_values = [value for value in data_access.allowed_values if value and value != "*"]
-            allowed = {value.lower(): value for value in allowed_values}
-            if request.category_path.lower() not in allowed:
-                raise InvalidRequestError(
-                    f"Path '{request.category_path}' is not an allowed data-access value. "
-                    f"Allowed: {', '.join(allowed_values) or '(none — configure the definition)'}"
-                )
-            category = allowed[request.category_path.lower()]
-            attribute_key = data_access.key
-        else:
-            definition = self._storage.identity_attributes.get_definition(attribute_key)
-            if definition is None or definition.value_source == ValueSource.GOVERNED_TAGS:
-                raise InvalidRequestError(
-                    f"'{attribute_key}' is not a configured row-filter dimension or data-access attribute"
-                )
-            # Dimension approvers are exact-match on the dimension key.
-            if request.category_path.strip().lower() not in {attribute_key, definition.key.lower()}:
-                raise InvalidRequestError(
-                    f"Row-filter approvers use the dimension key as the path (expected '{definition.key}')"
-                )
-            category = definition.key
-            attribute_key = definition.key
-        saved = self._storage.category_approvers.upsert_approver(
-            CategoryApprover(
-                approver_id=str(uuid.uuid4()),
-                attribute_key=attribute_key,
-                category_path=category,
-                principal_name=request.principal_name,
-                principal_type=request.principal_type,
-                created_by=actor.user_name,
-                created_at=datetime.now(UTC),
+        if data_access is None:
+            raise InvalidRequestError("Create a data-access definition before adding approvers")
+        allowed_values = [value for value in data_access.allowed_values if value and value != "*"]
+        allowed = {value.lower(): value for value in allowed_values}
+        if request.category_path.lower() not in allowed:
+            raise InvalidRequestError(
+                f"Path '{request.category_path}' is not an allowed data-access value. "
+                f"Allowed: {', '.join(allowed_values) or '(none — configure the definition)'}"
             )
-        )
+        category = allowed[request.category_path.lower()]
+        saved_rows: list[CategoryApprover] = []
+        for principal in request.principals:
+            if principal.principal_type not in {PrincipalKind.USER, PrincipalKind.GROUP}:
+                raise InvalidRequestError("Approvers must be USER or GROUP principals")
+            if principal.principal_type == PrincipalKind.GROUP and is_managed_group(
+                principal.principal_name, self._identity.managed_group_prefix()
+            ):
+                prefix = self._identity.managed_group_prefix()
+                raise InvalidRequestError(
+                    f"'{principal.principal_name}' is a managed Data Access group ({prefix}*). "
+                    "Pick a real user or group as the approver."
+                )
+            saved_rows.append(
+                self._storage.category_approvers.upsert_approver(
+                    CategoryApprover(
+                        approver_id=str(uuid.uuid4()),
+                        attribute_key=ACCESS_LEAF_APPROVER_KEY,
+                        category_path=category,
+                        principal_name=principal.principal_name,
+                        principal_type=principal.principal_type,
+                        created_by=actor.user_name,
+                        created_at=datetime.now(UTC),
+                    )
+                )
+            )
         self._audit(
             "sensitivity_category_approver.upserted",
             actor.user_name,
             {
-                "approver_id": saved.approver_id,
-                "attribute_key": saved.attribute_key,
-                "category_path": saved.category_path,
-                "principal_name": saved.principal_name,
-                "principal_type": saved.principal_type.value,
+                "category_path": category,
+                "principals": [
+                    {"principal_name": row.principal_name, "principal_type": row.principal_type.value}
+                    for row in saved_rows
+                ],
             },
         )
-        return saved
+        return CategoryApproverList(approvers=saved_rows, total=len(saved_rows))
 
     def delete_approver(self, approver_id: str, actor: CurrentUser) -> None:
         """Remove a category approver and record a ``sensitivity_category_approver.deleted`` audit.
@@ -447,9 +456,9 @@ class AccessRequestService:
     ) -> dict:
         """Who reviews a request for ``attribute_key`` / ``attribute_value``.
 
-        Sensitivity and data-access use most-specific path routing. Row-filter dimensions use
-        exact designated approvers for that dimension key; when none are configured, app admins
-        decide.
+        All request kinds use most-specific access-path routing. Sensitivity and data-access
+        match against the requested value. Row-filter dimensions match against the dimension's
+        stored ``scope_path``. When no approvers cover the path, app admins decide.
 
         Args:
             attribute_key: ``sensitivity``, the data-access key, or a row-filter dimension key.
@@ -462,56 +471,46 @@ class AccessRequestService:
             ``AccessRequestApprover``, empty when routed to app admins).
         """
         lookups = lookups or _RoutingLookups(self._storage, self._identity)
-        key = (attribute_key or SENSITIVITY_ATTRIBUTE_KEY).strip().lower()
-        data_access = lookups.data_access_definition()
-        data_access_key = data_access.key.lower() if data_access is not None else None
-        if key == SENSITIVITY_ATTRIBUTE_KEY or (data_access_key is not None and key == data_access_key):
-            route_key = SENSITIVITY_ATTRIBUTE_KEY if key == SENSITIVITY_ATTRIBUTE_KEY else data_access.key
-            configured = lookups.configured_categories(route_key)
-            category = resolve_category(attribute_value, configured)
-            approvers: list[AccessRequestApprover] = []
-            if category is not None:
-                approvers = [
-                    AccessRequestApprover(
-                        principal_name=item.principal_name,
-                        principal_type=item.principal_type,
-                    )
-                    for item in lookups.approvers(category, route_key)
-                ]
-            if not approvers:
-                return {
-                    "resolved_category": category,
-                    "routed_to": AccessRequestRouteKind.APP_ADMINS,
-                    "approvers": [],
-                }
-            return {
-                "resolved_category": category,
-                "routed_to": AccessRequestRouteKind.CATEGORY_APPROVERS,
-                "approvers": approvers,
-            }
-
-        # Row-filter (or other) dimension: designated approvers for this attribute key.
-        dimension_approvers = lookups.approvers(key, key)
-        if not dimension_approvers:
-            # Also accept rows stored with attribute_key only (path may match key casing).
-            dimension_approvers = lookups.approvers(None, key)
-        if not dimension_approvers:
-            return {
-                "resolved_category": None,
-                "routed_to": AccessRequestRouteKind.APP_ADMINS,
-                "approvers": [],
-            }
-        return {
-            "resolved_category": key,
-            "routed_to": AccessRequestRouteKind.CATEGORY_APPROVERS,
-            "approvers": [
+        route_path = self._routing_path(attribute_key, attribute_value)
+        configured = lookups.configured_categories()
+        category = resolve_category(route_path, configured) if route_path else None
+        approvers: list[AccessRequestApprover] = []
+        if category is not None:
+            approvers = [
                 AccessRequestApprover(
                     principal_name=item.principal_name,
                     principal_type=item.principal_type,
                 )
-                for item in dimension_approvers
-            ],
+                for item in lookups.approvers(category)
+            ]
+        if not approvers:
+            return {
+                "resolved_category": category,
+                "routed_to": AccessRequestRouteKind.APP_ADMINS,
+                "approvers": [],
+            }
+        return {
+            "resolved_category": category,
+            "routed_to": AccessRequestRouteKind.CATEGORY_APPROVERS,
+            "approvers": approvers,
         }
+
+    def _routing_path(self, attribute_key: str, attribute_value: str) -> str:
+        """Access path used to look up approvers for this request.
+
+        Row-filter dimensions route on ``scope_path``; everything else uses the requested value.
+        """
+        key = (attribute_key or SENSITIVITY_ATTRIBUTE_KEY).strip()
+        data_access = self._identity.find_data_access_definition()
+        data_access_key = data_access.key.lower() if data_access is not None else None
+        if key.lower() == SENSITIVITY_ATTRIBUTE_KEY or (
+            data_access_key is not None and key.lower() == data_access_key
+        ):
+            return attribute_value
+        definition = self._storage.identity_attributes.get_definition(key)
+        if definition is not None and definition.scope_path:
+            return definition.scope_path
+        return attribute_value
 
     def _with_routing(self, request: AccessRequest, lookups: _RoutingLookups | None = None) -> AccessRequest:
         """Return a copy of ``request`` with live routing fields."""
@@ -743,9 +742,7 @@ class AccessRequestService:
         Returns:
             Inbox items sorted by soonest expiry.
         """
-        configured = self._storage.category_approvers.list_configured_categories(
-            attribute_key=SENSITIVITY_ATTRIBUTE_KEY
-        )
+        configured = self._storage.category_approvers.list_configured_categories()
         pending = self._storage.access_requests.list_by_status(AccessRequestStatus.PENDING)
         items: list[ApprovalInboxItem] = []
         lookups = _RoutingLookups(self._storage, self._identity)
@@ -894,27 +891,18 @@ class AccessRequestService:
             data_access = self._identity.find_data_access_definition()
             if data_access is not None and attribute_key.lower() == data_access.key.lower():
                 raise ForbiddenError("You are not an approver for this data-access path")
-            raise ForbiddenError("You are not an approver for this row-filter dimension")
+            raise ForbiddenError("You are not an approver for this access path")
 
     def _can_decide_for(
         self, actor: CurrentUser, path: str, *, attribute_key: str = SENSITIVITY_ATTRIBUTE_KEY
     ) -> bool:
         """Whether the actor may decide a request for this attribute and path/value."""
-        key = (attribute_key or SENSITIVITY_ATTRIBUTE_KEY).strip().lower()
-        data_access = self._identity.find_data_access_definition()
-        data_access_key = data_access.key.lower() if data_access is not None else None
-        if key == SENSITIVITY_ATTRIBUTE_KEY or (data_access_key is not None and key == data_access_key):
-            route_key = SENSITIVITY_ATTRIBUTE_KEY if key == SENSITIVITY_ATTRIBUTE_KEY else data_access.key
-            category = resolve_category(
-                path,
-                self._storage.category_approvers.list_configured_categories(attribute_key=route_key),
-            )
-            return self._can_decide(actor, path, category, attribute_key=route_key)
-        routing = self.resolve_attribute_routing(key, path)
-        # No designated dimension approvers → app admins only.
-        if routing["routed_to"] == AccessRequestRouteKind.APP_ADMINS:
-            return actor.is_admin
-        return self._can_decide(actor, path, key, attribute_key=key)
+        route_path = self._routing_path(attribute_key, path)
+        category = resolve_category(
+            route_path,
+            self._storage.category_approvers.list_configured_categories(),
+        )
+        return self._can_decide(actor, path, category)
 
     def _can_decide(
         self,
@@ -925,12 +913,13 @@ class AccessRequestService:
         attribute_key: str = SENSITIVITY_ATTRIBUTE_KEY,
     ) -> bool:
         """Whether the actor is an app admin or a USER/GROUP approver of ``category``."""
+        del attribute_key
         # App admins always see and decide unrouted requests and can override.
         if actor.is_admin:
             return True
         if category is None:
             return False
-        approvers = self._storage.category_approvers.list_approvers(category, attribute_key=attribute_key)
+        approvers = self._storage.category_approvers.list_approvers(category)
         if not approvers:
             # Category / dimension exists but no reviewers — only app admins (handled above).
             return False

@@ -10,7 +10,7 @@ describe("Row filters", () => {
     expect(await screen.findByRole("heading", { name: "Row filters" })).toBeInTheDocument();
     expect(await screen.findByText("In sync")).toBeInTheDocument();
     const dims = await screen.findByRole("table", { name: "Row filter dimensions" });
-    expect(within(dims).getByText("state", { selector: "code" })).toBeInTheDocument();
+    expect(within(dims).getByText("finance.state", { selector: "code" })).toBeInTheDocument();
     expect(within(dims).getByText("SQL seed query")).toBeInTheDocument();
     expect(within(dims).getByText("*")).toBeInTheDocument();
     const columns = await screen.findByRole("table", { name: "Filtered columns" });
@@ -24,7 +24,10 @@ describe("Row filters", () => {
     renderApp("/row-filters", services);
 
     await user.click(await screen.findByRole("button", { name: "New dimension" }));
-    await user.type(screen.getByLabelText("Dimension key"), "region");
+    await user.click(screen.getByRole("combobox", { name: "Access path" }));
+    await user.click(await screen.findByRole("option", { name: "finance" }));
+    await user.type(screen.getByLabelText("Dimension name"), "region");
+    expect(screen.getByText("row_filter=finance.region")).toBeInTheDocument();
     const create = screen.getByRole("button", { name: "Create dimension" });
     expect(create).toBeDisabled();
     await user.type(screen.getByLabelText(/Seed query/), "SELECT DISTINCT region FROM t");
@@ -33,7 +36,12 @@ describe("Row filters", () => {
     await user.click(screen.getByRole("button", { name: "Create dimension" }));
 
     expect(upsert).toHaveBeenCalledWith(
-      expect.objectContaining({ key: "region", valueSource: "sql", valueSql: "SELECT DISTINCT region FROM t" }),
+      expect.objectContaining({
+        accessPath: "finance",
+        name: "region",
+        valueSource: "sql",
+        valueSql: "SELECT DISTINCT region FROM t",
+      }),
     );
   });
 
@@ -43,7 +51,7 @@ describe("Row filters", () => {
     const attach = vi.spyOn(services.rowFilters, "attach");
     renderApp("/row-filters", services);
 
-    await screen.findByRole("option", { name: "state" });
+    await screen.findByRole("option", { name: "finance.state" });
     await user.type(screen.getByLabelText("Table"), "cat.sch.customers");
     await user.type(screen.getByLabelText("Column"), "state_code");
     await user.click(screen.getByRole("button", { name: "Attach row filter" }));
@@ -51,7 +59,7 @@ describe("Row filters", () => {
     expect(attach).toHaveBeenCalledWith({
       tableFullName: "cat.sch.customers",
       columnName: "state_code",
-      dimension: "state",
+      dimension: "finance.state",
     });
   });
 

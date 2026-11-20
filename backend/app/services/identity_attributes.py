@@ -21,6 +21,7 @@ from backend.app.models.audit import AuditEvent
 from backend.app.models.data_access import DataAccessSettings
 from backend.app.models.identity_attribute import (
     ALL_VALUES,
+    SENSITIVITY_TAG_KEY,
     AssignAttributeRequest,
     AttributeAssignmentFilter,
     AttributeAssignmentList,
@@ -36,6 +37,7 @@ from backend.app.models.identity_attribute import (
     UpsertAttributeDefinitionRequest,
     ValueSource,
     is_data_access_definition,
+    is_sensitivity_definition,
 )
 from backend.app.models.principal import PrincipalKind
 from backend.app.models.user import CurrentUser
@@ -249,6 +251,7 @@ class IdentityAttributeService:
                 description=current.description,
                 value_source=ValueSource.SQL,
                 value_sql=current.value_sql,
+                scope_path=current.scope_path,
             ),
             actor,
         )
@@ -283,8 +286,10 @@ class IdentityAttributeService:
         description = request.description
         tag_keys: list[str] = []
         stored_values: list[str] = []
+        governed_keys = list(request.governed_tag_keys)
         if request.value_source == ValueSource.GOVERNED_TAGS:
-            tags = self._governed_tags.require_tags(request.governed_tag_keys)
+            governed_keys = self._inherit_sensitivity_tags(request.key, governed_keys)
+            tags = self._governed_tags.require_tags(governed_keys)
             tag_keys = [tag.tag_key for tag in tags]
             if not description:
                 description = next((tag.description for tag in tags if tag.description), None)
@@ -299,6 +304,7 @@ class IdentityAttributeService:
             governed_tag_keys=tag_keys,
             value_source=request.value_source,
             value_sql=request.value_sql,
+            scope_path=request.scope_path or (existing.scope_path if existing else None),
             # Governed-tag values are resolved live by _enrich, so only other sources store them.
             allowed_values=(
                 [] if request.value_source == ValueSource.GOVERNED_TAGS else _with_all_values(stored_values)
@@ -814,6 +820,44 @@ class IdentityAttributeService:
         with self._uc_sync.lock:
             self._uc_sync.repo.upsert_assignment(assignment)
 
+    def _inherit_sensitivity_tags(self, key: str | None, tag_keys: list[str]) -> list[str]:
+        """Force the sensitivity definition to include the data-access access tag.
+
+        The client picks one tag (the sensitivity tag). The access tag from the data-access
+        definition is prepended. Create is rejected until a data-access definition exists.
+
+        Args:
+            key: Attribute key being saved.
+            tag_keys: Client-supplied governed tags.
+
+        Returns:
+            Tag keys to persist, access tag first when this is the sensitivity definition.
+
+        Raises:
+            InvalidRequestError: If sensitivity is saved before data access, or more than one
+                non-access tag is supplied.
+        """
+        if not is_sensitivity_definition(key or "", tag_keys):
+            return tag_keys
+        data_access = self.find_data_access_definition()
+        if data_access is None:
+            raise InvalidRequestError(
+                "Create a data-access definition first so sensitivity can inherit its access tag"
+            )
+        access_tag = next(
+            (tag for tag in data_access.governed_tag_keys if tag.strip()),
+            self.access_tag_key(),
+        )
+        access_l = access_tag.strip().lower()
+        others = [tag for tag in tag_keys if tag.strip().lower() != access_l]
+        if not others:
+            others = [SENSITIVITY_TAG_KEY]
+        if len(others) != 1:
+            raise InvalidRequestError(
+                "Sensitivity definitions pick one tag; the data-access access tag is added automatically"
+            )
+        return [access_tag, others[0]]
+
     def _enforce_purpose_uniqueness(
         self,
         key: str | None,
@@ -915,10 +959,13 @@ class IdentityAttributeService:
             InvalidRequestError: If a tag does not exist.
             UpstreamError: If tag policies cannot be read.
         """
-        key_set = set(tag_keys)
-        if "access_path" in key_set and "sensitivity" in key_set:
-            categories = self._governed_tags.get_tag("access_path").values
-            leaves = self._governed_tags.get_tag("sensitivity").values
+        key_set = {tag.lower() for tag in tag_keys}
+        access_tag = self.access_tag_key().strip().lower()
+        access_orig = next((tag for tag in tag_keys if tag.lower() == access_tag), access_tag)
+        other = [tag for tag in tag_keys if tag.lower() != access_tag]
+        if access_tag in key_set and other:
+            categories = self._governed_tags.get_tag(access_orig).values
+            leaves = self._governed_tags.get_tag(other[0]).values
             values: list[str] = []
             seen: set[str] = set()
             for category in categories:

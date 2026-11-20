@@ -81,6 +81,8 @@ def test_subdomain_tables_use_new_tag_keys_only(seed: ModuleType) -> None:
     assert "data_access_control" not in all_tag_keys
     assert "sensitivity_category" not in all_tag_keys
     assert {"access_path", "sensitivity", "mask_rule"} <= all_tag_keys
+    assert records.column_tags["state"]["row_filter"] == "finance.state"
+    assert summary.column_tags["state"]["row_filter"] == "finance.state"
 
 
 def test_each_domain_has_a_sensitive_focus_column(seed: ModuleType) -> None:

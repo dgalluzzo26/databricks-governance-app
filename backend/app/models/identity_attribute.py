@@ -112,6 +112,8 @@ class AttributeDefinition(ApiModel):
             ``value_source`` is ``governed_tags``.
         value_source: Where allowed values come from.
         value_sql: Seed query when ``value_source`` is ``sql``; otherwise None.
+        scope_path: Access-path this definition is scoped to (row-filter dimensions); None
+            for sensitivity and data-access definitions.
         allowed_values: Values that may be assigned. Resolved live for governed tags; stored
             for free-form / SQL definitions, which always include the ``*`` wildcard.
         created_by: User who created the definition.
@@ -126,6 +128,8 @@ class AttributeDefinition(ApiModel):
     value_source: ValueSource = ValueSource.GOVERNED_TAGS
     # Seed query for value_source=sql; refreshed into allowed_values.
     value_sql: str | None = None
+    # Access-path scope for row-filter dimensions (e.g. ``finance.budget``).
+    scope_path: str | None = None
     # Governed tags: resolved live. Free-form / SQL: stored, and always include "*".
     allowed_values: list[str] = []
     created_by: str | None = None
@@ -169,6 +173,7 @@ class UpsertAttributeDefinitionRequest(ApiModel):
         governed_tag_keys: Linked governed tags; stripped and de-duplicated.
         allowed_values: Values for free-form definitions; stripped and de-duplicated.
         value_sql: Seed query for SQL definitions.
+        scope_path: Access-path scope for row-filter dimensions.
     """
 
     key: str | None = Field(default=None, max_length=256)
@@ -177,6 +182,7 @@ class UpsertAttributeDefinitionRequest(ApiModel):
     governed_tag_keys: list[str] = []
     allowed_values: list[str] = []
     value_sql: str | None = None
+    scope_path: str | None = None
 
     @field_validator("governed_tag_keys", "allowed_values")
     @classmethod
@@ -218,6 +224,7 @@ class UpsertAttributeDefinitionRequest(ApiModel):
         else:
             self.value_sql = None
         self.key = key
+        self.scope_path = (self.scope_path or "").strip().lower() or None
         return self
 
 

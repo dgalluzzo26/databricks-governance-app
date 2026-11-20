@@ -5,6 +5,8 @@ resources:
     app_lakebase:
       project_id: ${var.lakebase_project_id}
       display_name: Data Governance App
+      # Endpoint sizing (lakebase_min_cu / lakebase_max_cu) is applied by scripts/deploy.sh.
+      # Setting default_endpoint_settings here makes the bundle recreate the database and role.
       lifecycle:
         prevent_destroy: true
 

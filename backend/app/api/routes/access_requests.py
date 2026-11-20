@@ -13,7 +13,6 @@ from backend.app.models.access_request import (
     AccessRequest,
     AccessRequestList,
     ApprovalInbox,
-    CategoryApprover,
     CategoryApproverList,
     CreateAccessRequestBody,
     DecideAccessRequestBody,
@@ -49,21 +48,21 @@ def list_category_approvers(
     return container.access_requests.list_approvers(category_path, attribute_key=attribute_key)
 
 
-@router.put("/category-approvers", response_model=CategoryApprover)
+@router.put("/category-approvers", response_model=CategoryApproverList)
 def upsert_category_approver(
     body: UpsertCategoryApproverRequest, admin: Admin, container: Container
-) -> CategoryApprover:
-    """Create or update a category approver mapping.
+) -> CategoryApproverList:
+    """Create or update approvers for an access path (users and/or groups).
 
     Requires app admin.
 
     Args:
-        body: Category path and approver principal to upsert.
+        body: Access path and one or more USER/GROUP principals.
         admin: Authenticated app administrator (dependency injection).
         container: Process-scoped service container (dependency injection).
 
     Returns:
-        The persisted category approver.
+        The persisted approver rows.
 
     Raises:
         ForbiddenError: If the caller is not an app admin (HTTP 403).

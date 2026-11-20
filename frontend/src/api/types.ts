@@ -215,6 +215,8 @@ export interface AttributeDefinition {
   valueSource: ValueSource;
   /** Seed query for `valueSource: "sql"`; refreshed into `allowedValues`. `null` for other sources. */
   valueSql: string | null;
+  /** Access-path this definition is scoped to (row-filter dimensions). */
+  scopePath?: string | null;
   /** Governed tags: resolved live. Free-form / SQL: stored, always including "*". */
   allowedValues: string[];
   createdBy: string | null;
@@ -251,10 +253,14 @@ export interface UpsertAttributeDefinitionRequest {
   valueSql?: string | null;
 }
 
-/** A row-filter dimension (e.g. `state`, `region`): an identity attribute used to filter rows on tagged columns. */
+/** A row-filter dimension: identity attribute + `row_filter` tag **value** (`finance.budget.state`). */
 export interface RowFilterDimension {
-  /** Dimension key; also the `row_filter` tag value on columns and the identity attribute key. */
+  /** Path-qualified dimension key; also the `row_filter` tag value and identity attribute key. */
   key: string;
+  /** Access-path this dimension is scoped to. */
+  accessPath: string | null;
+  /** Short filter name (`state`). */
+  name: string | null;
   description: string | null;
   valueSource: ValueSource;
   valueSql: string | null;
@@ -273,8 +279,12 @@ export interface RowFilterDimensionList {
 
 /** Body for `PUT /row-filters/dimensions` (create or replace by key). */
 export interface UpsertRowFilterDimensionRequest {
-  /** Must match `^[a-z][a-z0-9_]{0,62}$`; lower-cased server-side. */
-  key: string;
+  /** Access-path value from the data-access vocabulary. */
+  accessPath: string;
+  /** Short name such as `state`. */
+  name: string;
+  /** Optional; built as `{accessPath}.{name}` when omitted. */
+  key?: string;
   description?: string | null;
   /** Row-filter dimensions cannot be backed by governed tags. */
   valueSource: "free_form" | "sql";
@@ -454,15 +464,12 @@ export interface ApproverPreview {
   principalType: string;
 }
 
-/** A principal allowed to decide sensitivity requests under a category path. */
+/** A principal allowed to decide requests under an access path. */
 export interface CategoryApprover {
   approverId: string;
-  /** `sensitivity` for category routing, or a row-filter dimension key. */
+  /** Stored as `access`; ignored by routing. */
   attributeKey: string;
-  /**
-   * For sensitivity: dotted category path prefix (most specific match wins).
-   * For row filters: the dimension key (exact match).
-   */
+  /** Access-path prefix; covers data access, sensitivity, and row filters under that path. */
   categoryPath: string;
   principalName: string;
   principalType: PrincipalKind;
@@ -515,13 +522,22 @@ export interface ApplyPolicyExceptionsResult {
   rowFilterPackSynced: boolean;
 }
 
-/** Body for `PUT /identity/category-approvers`. Values are trimmed and must be non-empty. */
-export interface UpsertCategoryApproverRequest {
-  /** `sensitivity` (default) or a row-filter dimension key. */
-  attributeKey?: string;
-  categoryPath: string;
+/** One USER or GROUP to register as an access-path approver. */
+export interface ApproverPrincipal {
   principalName: string;
   principalType: PrincipalKind;
+}
+
+/** Body for `PUT /identity/category-approvers`. Values are trimmed and must be non-empty. */
+export interface UpsertCategoryApproverRequest {
+  /** Ignored; stored as `access`. */
+  attributeKey?: string;
+  categoryPath: string;
+  /** Legacy single principal; folded into `principals` when both are set. */
+  principalName?: string | null;
+  principalType?: PrincipalKind | null;
+  /** Users and/or groups to register for this path. */
+  principals?: ApproverPrincipal[];
 }
 
 /** A user's request to be granted an identity attribute value (typically a sensitivity path). */

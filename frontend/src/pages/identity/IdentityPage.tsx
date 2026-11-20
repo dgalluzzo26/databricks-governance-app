@@ -88,8 +88,6 @@ const VALUE_SOURCE_LABELS: Record<ValueSource, string> = {
 
 /** Principal kinds that can receive attribute assignments and be used as assignment filters. */
 const PRINCIPAL_TYPES: PrincipalKind[] = ["USER", "GROUP", "SERVICE_PRINCIPAL"];
-/** Principal kinds that can be configured as category approvers (service principals are excluded). */
-const APPROVER_TYPES: PrincipalKind[] = ["USER", "GROUP"];
 /** Tabs available to every signed-in user. */
 const USER_TABS: IdentityTab[] = ["mine", "my-access", "request", "my-requests"];
 /** Tabs available to app admins and path approvers. */
@@ -1002,169 +1000,115 @@ function MyRequestsTable({
 }
 
 /**
- * "Approvers" tab: configure who reviews sensitivity, data-access, and row-filter requests.
+ * "Approvers" tab: register users and/or groups on a data-access path.
  *
- * Uses governed sensitivity tags, the data-access definition vocabulary, and
- * `useRowFilterDimensions` for pickers, plus `useCategoryApprovers` for the list.
- *
- * @remarks
- * Rendered only for app admins. Sensitivity and data-access use most-specific path routing.
- * Row-filter dimensions use exact designated approvers and fall back to app admins when none
- * are configured.
+ * That registration covers data-access, sensitivity, and row-filter requests under the path
+ * (most specific wins). Falls back to app admins when nothing matches.
  */
 function CategoryApproversPanel() {
   const { data, isPending, error } = useCategoryApprovers();
-  const tags = useGovernedTags("access_path");
   const definitions = useAttributeDefinitions();
   const dataAccessSettings = useDataAccessSettings();
-  const dimensions = useRowFilterDimensions();
   const upsert = useUpsertCategoryApprover();
   const remove = useDeleteCategoryApprover();
-  const categoryTag = tags.data?.tags.find((tag) => tag.tagKey === "access_path");
   const accessTagKey =
     dataAccessSettings.data?.settings.accessTagKey?.trim().toLowerCase() || "access_path";
   const dataAccessDef = (definitions.data?.definitions ?? []).find((item) =>
     isDataAccessDefinition(item, accessTagKey),
   );
   const dataAccessPaths = (dataAccessDef?.allowedValues ?? []).filter((value) => value && value !== "*");
-  const [scope, setScope] = useState<"sensitivity" | "data_access" | "row_filter">("sensitivity");
   const [categoryPath, setCategoryPath] = useState("");
-  const [dataAccessPath, setDataAccessPath] = useState("");
-  const [dimensionKey, setDimensionKey] = useState("");
-  const [principalName, setPrincipalName] = useState("");
-  const [principalType, setPrincipalType] = useState<PrincipalKind>("GROUP");
+  const [pickerValue, setPickerValue] = useState("");
+  const [principals, setPrincipals] = useState<{ name: string; type: PrincipalKind }[]>([]);
 
-  const pathReady =
-    scope === "sensitivity"
-      ? Boolean(categoryPath)
-      : scope === "data_access"
-        ? Boolean(dataAccessPath)
-        : Boolean(dimensionKey);
+  const addPrincipal = (name: string, kind?: PrincipalKind) => {
+    const trimmed = name.trim();
+    if (!trimmed || !kind) return;
+    setPrincipals((current) => {
+      if (current.some((item) => item.name.toLowerCase() === trimmed.toLowerCase() && item.type === kind)) {
+        return current;
+      }
+      return [...current, { name: trimmed, type: kind }];
+    });
+    setPickerValue("");
+  };
 
   return (
     <div className={styles.stack}>
       <Card title="Add approver">
         <p className={styles.muted}>
-          Sensitivity and data-access approvers are set on vocabulary paths (most specific path
-          wins). Row-filter approvers are set per dimension; when none are configured, app admins
-          review those requests.
+          Approvers are set on an access path (most specific wins). Add any mix of users and groups
+          for that path; they decide data-access, sensitivity, and row-filter requests under it.
+          When nothing matches, app admins review the request.
         </p>
         <div className={styles.formGrid}>
           <label className={styles.field}>
-            <span className={styles.label}>Scope</span>
-            <select
-              className={styles.select}
-              value={scope}
-              onChange={(event) => {
-                setScope(event.target.value as "sensitivity" | "data_access" | "row_filter");
-                setCategoryPath("");
-                setDataAccessPath("");
-                setDimensionKey("");
-              }}
-            >
-              <option value="sensitivity">Sensitivity category</option>
-              <option value="data_access">Data-access path</option>
-              <option value="row_filter">Row-filter dimension</option>
-            </select>
+            <span className={styles.label}>Access path</span>
+            <SearchableSelect
+              aria-label="Access path"
+              value={categoryPath}
+              onChange={setCategoryPath}
+              options={dataAccessPaths}
+              placeholder={dataAccessDef ? "Select path" : "Create a data-access definition first"}
+              disabled={!dataAccessDef}
+            />
           </label>
-          {scope === "sensitivity" ? (
-            <label className={styles.field}>
-              <span className={styles.label}>Category</span>
-              <SearchableSelect
-                aria-label="Category"
-                value={categoryPath}
-                onChange={setCategoryPath}
-                options={categoryTag?.values ?? []}
-                placeholder="Select category"
-              />
-            </label>
-          ) : scope === "data_access" ? (
-            <label className={styles.field}>
-              <span className={styles.label}>Data-access path</span>
-              <SearchableSelect
-                aria-label="Data-access path"
-                value={dataAccessPath}
-                onChange={setDataAccessPath}
-                options={dataAccessPaths}
-                placeholder={dataAccessDef ? "Select path" : "Create a data-access definition first"}
-                disabled={!dataAccessDef}
-              />
-            </label>
-          ) : (
-            <label className={styles.field}>
-              <span className={styles.label}>Dimension</span>
-              <select
-                className={styles.select}
-                value={dimensionKey}
-                onChange={(event) => setDimensionKey(event.target.value)}
-              >
-                <option value="">Select dimension</option>
-                {(dimensions.data?.dimensions ?? []).map((item) => (
-                  <option key={item.key} value={item.key}>
-                    {item.key}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-          <label className={styles.field}>
-            <span className={styles.label}>Principal type</span>
-            <select
-              className={styles.select}
-              value={principalType}
-              onChange={(event) => setPrincipalType(event.target.value as PrincipalKind)}
-            >
-              {APPROVER_TYPES.map((type) => (
-                <option key={type} value={type}>
-                  {type}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className={styles.field}>
-            <span className={styles.label}>Principal</span>
+          <label className={styles.fieldGrow}>
+            <span className={styles.label}>Users and groups</span>
             <PrincipalPicker
-              value={principalName}
-              kind={principalType}
-              placeholder="Search users or groups…"
+              value={pickerValue}
+              placeholder="Search users or groups to add…"
+              aria-label="Add approver principal"
               onChange={(name, nextKind) => {
-                setPrincipalName(name);
-                if (nextKind === "USER" || nextKind === "GROUP") setPrincipalType(nextKind);
+                setPickerValue(name);
+                if (nextKind === "USER" || nextKind === "GROUP") addPrincipal(name, nextKind);
               }}
             />
+            {principals.length > 0 && (
+              <div className={styles.chipRow} aria-label="Selected approvers">
+                {principals.map((item) => (
+                  <span key={`${item.type}:${item.name}`} className={styles.chip}>
+                    <Badge>{item.type}</Badge>
+                    <code>{item.name}</code>
+                    <button
+                      type="button"
+                      className={styles.chipRemove}
+                      aria-label={`Remove ${item.name}`}
+                      onClick={() =>
+                        setPrincipals((current) =>
+                          current.filter((p) => !(p.name === item.name && p.type === item.type)),
+                        )
+                      }
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
           </label>
         </div>
         <div className={styles.buttonRow} style={{ marginTop: "var(--space-3)" }}>
           <button
             type="button"
             className={`${styles.button} ${styles.buttonPrimary}`}
-            disabled={!pathReady || !principalName.trim() || upsert.isPending}
+            disabled={!categoryPath || principals.length === 0 || upsert.isPending}
             onClick={() => {
-              const attributeKey =
-                scope === "sensitivity"
-                  ? "sensitivity"
-                  : scope === "data_access"
-                    ? (dataAccessDef?.key ?? "data_access")
-                    : dimensionKey;
-              const path =
-                scope === "sensitivity"
-                  ? categoryPath
-                  : scope === "data_access"
-                    ? dataAccessPath
-                    : dimensionKey;
               void upsert
                 .mutateAsync({
-                  attributeKey,
-                  categoryPath: path,
-                  principalName: principalName.trim(),
-                  principalType,
+                  categoryPath,
+                  principals: principals.map((item) => ({
+                    principalName: item.name,
+                    principalType: item.type,
+                  })),
                 })
                 .then(() => {
-                  setPrincipalName("");
+                  setPrincipals([]);
+                  setPickerValue("");
                 });
             }}
           >
-            {upsert.isPending ? "Saving…" : "Add approver"}
+            {upsert.isPending ? "Saving…" : principals.length > 1 ? "Add approvers" : "Add approver"}
           </button>
           {upsert.error && <ErrorAlert error={upsert.error} title="Could not save approver" />}
         </div>
@@ -1201,8 +1145,7 @@ function ApproversTable({
   onRemove: (approverId: string) => void;
 }) {
   const columns: TableColumn<CategoryApprover>[] = [
-    { key: "attribute", label: "Attribute", value: (item) => item.attributeKey },
-    { key: "path", label: "Path / dimension", value: (item) => item.categoryPath },
+    { key: "path", label: "Access path", value: (item) => item.categoryPath },
     { key: "principal", label: "Principal", value: (item) => item.principalName },
     { key: "type", label: "Type", value: (item) => item.principalType },
     { key: "actions", label: "" },
@@ -1217,9 +1160,6 @@ function ApproversTable({
           <tbody>
             {pager.rows.map((item) => (
               <tr key={item.approverId}>
-                <td>
-                  <code>{item.attributeKey}</code>
-                </td>
                 <td>
                   <code>{item.categoryPath}</code>
                 </td>
@@ -1691,7 +1631,6 @@ type DefinitionsView = "existing" | "create";
 type DefinitionPurpose = "sensitivity" | "data_access";
 
 const SENSITIVITY_KEY = "sensitivity";
-const SENSITIVITY_TAGS = ["access_path", "sensitivity"];
 const DEFAULT_DATA_ACCESS_KEY = "data_access";
 
 /**
@@ -1869,7 +1808,7 @@ function DefinitionsPanel() {
   const [key, setKey] = useState(SENSITIVITY_KEY);
   const [description, setDescription] = useState("");
   const [tagSearch, setTagSearch] = useState("");
-  const [selectedTags, setSelectedTags] = useState<string[]>([...SENSITIVITY_TAGS]);
+  const [selectedTags, setSelectedTags] = useState<string[]>([SENSITIVITY_KEY]);
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const tags = useGovernedTags(tagSearch.trim() || undefined);
 
@@ -1885,6 +1824,10 @@ function DefinitionsPanel() {
       tagKey.toLowerCase() === accessTagKey.toLowerCase() &&
       selectedTags.some((tag) => tag.toLowerCase() === accessTagKey.toLowerCase())
     ) {
+      return;
+    }
+    if (purpose === "sensitivity") {
+      setSelectedTags([tagKey]);
       return;
     }
     setSelectedTags((current) =>
@@ -1912,7 +1855,7 @@ function DefinitionsPanel() {
     setPurpose(next);
     if (next === "sensitivity") {
       setKey(SENSITIVITY_KEY);
-      setSelectedTags([...SENSITIVITY_TAGS]);
+      setSelectedTags([SENSITIVITY_KEY]);
     } else {
       setKey(DEFAULT_DATA_ACCESS_KEY);
       setSelectedTags([accessTagKey]);
@@ -1924,7 +1867,7 @@ function DefinitionsPanel() {
     setPurpose("sensitivity");
     setKey(SENSITIVITY_KEY);
     setDescription("");
-    setSelectedTags([...SENSITIVITY_TAGS]);
+    setSelectedTags([SENSITIVITY_KEY]);
     setTagSearch("");
     setEditingKey(null);
   };
@@ -1946,10 +1889,12 @@ function DefinitionsPanel() {
     const resolvedKey =
       purpose === "sensitivity" ? SENSITIVITY_KEY : key.trim() || DEFAULT_DATA_ACCESS_KEY;
     const tagsForSave =
-      purpose === "data_access" &&
-      !selectedTags.some((tag) => tag.toLowerCase() === accessTagKey.toLowerCase())
-        ? [accessTagKey, ...selectedTags]
-        : selectedTags;
+      purpose === "sensitivity"
+        ? selectedTags.filter((tag) => tag.toLowerCase() !== accessTagKey.toLowerCase()).slice(0, 1)
+        : purpose === "data_access" &&
+            !selectedTags.some((tag) => tag.toLowerCase() === accessTagKey.toLowerCase())
+          ? [accessTagKey, ...selectedTags]
+          : selectedTags;
     await upsert.mutateAsync({
       key: resolvedKey,
       description: description.trim() || null,
@@ -1973,12 +1918,18 @@ function DefinitionsPanel() {
     setPurpose(nextPurpose === "data_access" ? "data_access" : "sensitivity");
     setKey(definition.key);
     setDescription(definition.description ?? "");
-    setSelectedTags(
-      nextPurpose === "data_access" &&
+    if (nextPurpose === "sensitivity") {
+      const sensitivityTags = definition.governedTagKeys.filter(
+        (tag) => tag.toLowerCase() !== accessTagKey.toLowerCase(),
+      );
+      setSelectedTags(sensitivityTags.length ? [sensitivityTags[0] ?? SENSITIVITY_KEY] : [SENSITIVITY_KEY]);
+    } else {
+      setSelectedTags(
         !definition.governedTagKeys.some((tag) => tag.toLowerCase() === accessTagKey.toLowerCase())
-        ? [accessTagKey, ...definition.governedTagKeys]
-        : definition.governedTagKeys,
-    );
+          ? [accessTagKey, ...definition.governedTagKeys]
+          : definition.governedTagKeys,
+      );
+    }
     setView("create");
   };
 
@@ -1998,6 +1949,7 @@ function DefinitionsPanel() {
   const canSave =
     !purposeAlreadyExists &&
     selectedTags.length > 0 &&
+    (purpose !== "sensitivity" || Boolean(dataAccessDef)) &&
     (purpose !== "data_access" ||
       selectedTags.some((tag) => tag.toLowerCase() === accessTagKey.toLowerCase())) &&
     (purpose === "sensitivity" || Boolean(key.trim()));
@@ -2096,6 +2048,13 @@ function DefinitionsPanel() {
             </label>
           </div>
 
+          {purpose === "sensitivity" && !dataAccessDef && (
+            <Alert title="Data-access definition required" tone="warning">
+              Create the data-access definition first. Sensitivity inherits its access tag so the two
+              vocabularies stay aligned.
+            </Alert>
+          )}
+
           {purposeAlreadyExists && (
             <Alert title="Already configured" tone="warning">
               A {purpose === "sensitivity" ? "sensitivity" : "data-access"} definition already exists
@@ -2124,7 +2083,7 @@ function DefinitionsPanel() {
                 Governed tags
                 {purpose === "data_access"
                   ? ` (must include ${accessTagKey})`
-                  : " (access_path + sensitivity recommended)"}
+                  : " (pick the sensitivity tag; the data-access tag is added automatically)"}
               </span>
               <input
                 className={styles.input}
@@ -2133,6 +2092,13 @@ function DefinitionsPanel() {
                 placeholder="Search governed tags by name, description, or value"
               />
             </label>
+
+            {purpose === "sensitivity" && dataAccessDef && (
+              <div className={styles.muted}>
+                Inherits access tag <code>{accessTagKey}</code> from{" "}
+                <code>{dataAccessDef.key}</code>.
+              </div>
+            )}
 
             {selectedTags.length > 0 && (
               <div className={styles.chipRow}>

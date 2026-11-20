@@ -1,9 +1,9 @@
 # Approver guide
 
-This guide is for approvers: people, or members of groups, that an app admin has made
-responsible for a sensitivity category, a data-access path, or a row-filter dimension. You can
-also do everything in the [User guide](?tab=user). The screenshots use demo data: Priya Shah,
-a member of `finance-owners`, which approves the `finance` category.
+This guide is for approvers: people, or members of groups, that an app admin has registered
+on a data-access path. That path covers data-access, sensitivity, and row-filter requests under
+it. You can also do everything in the [User guide](?tab=user). The screenshots use demo data:
+Priya Shah, a member of `finance-owners`, which approves the `finance` path.
 
 ---
 
@@ -28,15 +28,16 @@ and grants sync — stays on admin-only pages.
 
 ## What you approve
 
-An admin assigns you (or your group) to one or more of these:
+An admin assigns you (or your group) to one or more **access paths**. Several users and groups
+can share the same path.
 
-| Approver type | Covers | Example |
+| Request | Covered by the path | Example |
 | --- | --- | --- |
-| **Sensitivity category** | Sensitivity paths under a category prefix | `finance` covers `finance.budget.PII.Name` |
-| **Data-access path** | `access_path` values under a path | `finance` covers `finance.budget` |
-| **Row-filter dimension** | Every value of one dimension | `state` covers `state=CA` and `state=*` |
+| Data access | `access_path` values under the path | `finance` covers `finance.budget` |
+| Sensitivity | Sensitivity values under the path | `finance` covers `finance.budget.PII.Name` |
+| Row filter | Dimensions scoped to that path | `finance` covers `finance.state=CA` |
 
-The most specific match wins. If `finance.budget` has its own approver, its requests go there
+The most specific match wins. If `finance.budget` has its own approvers, its requests go there
 instead of to `finance`. When nothing matches, the request goes to **app admins**.
 
 ---
