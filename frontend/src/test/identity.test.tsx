@@ -12,7 +12,7 @@ describe("Identity attributes", () => {
     expect(await screen.findByText("finance.budget")).toBeInTheDocument();
 
     await user.click(screen.getByRole("tab", { name: "Assignments" }));
-    expect(await screen.findByRole("heading", { name: "Assign attributes" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Assign access paths" })).toBeInTheDocument();
     expect(await screen.findByRole("columnheader", { name: "Expires" })).toBeInTheDocument();
     expect(screen.getByText(new Date("2026-12-31T23:59:00Z").toLocaleString())).toBeInTheDocument();
 
@@ -41,7 +41,7 @@ describe("Identity attributes", () => {
     const bulkAssign = vi.spyOn(services.identityAttributes, "bulkAssign");
     renderApp("/identity?tab=assignments", services);
 
-    const form = await screen.findByRole("heading", { name: "Assign attributes" });
+    const form = await screen.findByRole("heading", { name: "Assign access paths" });
     const card = form.closest("section") ?? form.parentElement!;
     const picker = within(card as HTMLElement).getByRole("combobox", { name: "Add principal" });
     await user.type(picker, "an");
@@ -49,17 +49,18 @@ describe("Identity attributes", () => {
     await user.click(within(matches).getByRole("button", { name: /Ana Lopez/ }));
     expect(within(card as HTMLElement).getByText("ana.lopez@example.com")).toBeInTheDocument();
 
-    await user.selectOptions(within(card as HTMLElement).getByLabelText("Grant"), "sensitivity");
-    const valueBox = within(card as HTMLElement).getByRole("combobox", { name: "Sensitivity path" });
-    await user.click(valueBox);
-    await user.click(await screen.findByRole("option", { name: "finance.budget.PII.Name" }));
+    await user.click(within(card as HTMLElement).getByRole("combobox", { name: "Access path" }));
+    await user.click(await screen.findByRole("option", { name: "finance.budget" }));
+    expect(within(card as HTMLElement).getByLabelText("Selected paths")).toHaveTextContent(
+      "finance.budget",
+    );
     await user.type(within(card as HTMLElement).getByLabelText("Justification"), "Close support");
-    expect(screen.getByText("1 principal × 1 value = 1 assignment")).toBeInTheDocument();
+    expect(screen.getByText("1 principal × 1 path = 1 assignment")).toBeInTheDocument();
     await user.click(within(card as HTMLElement).getByRole("button", { name: "Assign" }));
 
     expect(bulkAssign).toHaveBeenCalledWith({
       principals: [{ principalName: "ana.lopez@example.com", principalType: "USER" }],
-      attributes: [{ attributeKey: "sensitivity", attributeValue: "finance.budget.PII.Name" }],
+      attributes: [{ attributeKey: "data_access", attributeValue: "finance.budget" }],
       justification: "Close support",
       expiresAt: null,
     });
