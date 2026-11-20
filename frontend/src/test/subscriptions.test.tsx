@@ -55,8 +55,10 @@ describe("Subscriptions", () => {
     expect(screen.getByText("dac_subscription_flood_team_q4")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Next: People" }));
 
-    await user.type(screen.getByRole("combobox", { name: "Principal" }), "ana.lopez@example.com");
-    await user.click(screen.getByRole("button", { name: "Add" }));
+    const peoplePicker = screen.getByRole("combobox", { name: "Add principal" });
+    await user.type(peoplePicker, "an");
+    const peopleHits = await screen.findByRole("listbox", { name: "Matching principals" });
+    await user.click(within(peopleHits).getByRole("button", { name: /Ana Lopez/ }));
     expect(screen.getByText("ana.lopez@example.com")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Next: Access" }));
 
@@ -86,8 +88,10 @@ describe("Subscriptions", () => {
   async function openAccessStep(user: ReturnType<typeof userEvent.setup>) {
     await user.type(await screen.findByLabelText("Name"), "Ops");
     await user.click(screen.getByRole("button", { name: "Next: People" }));
-    await user.type(screen.getByRole("combobox", { name: "Principal" }), "ana.lopez@example.com");
-    await user.click(screen.getByRole("button", { name: "Add" }));
+    const peoplePicker = screen.getByRole("combobox", { name: "Add principal" });
+    await user.type(peoplePicker, "an");
+    const peopleHits = await screen.findByRole("listbox", { name: "Matching principals" });
+    await user.click(within(peopleHits).getByRole("button", { name: /Ana Lopez/ }));
     await user.click(screen.getByRole("button", { name: "Next: Access" }));
   }
 

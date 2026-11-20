@@ -49,7 +49,6 @@ import {
 } from "./subscriptionText";
 
 const STEPS = ["Basics", "People", "Access", "Attributes", "Review"] as const;
-const PRINCIPAL_TYPES: PrincipalKind[] = ["USER", "GROUP", "SERVICE_PRINCIPAL"];
 const DAY_MS = 86_400_000;
 
 /** Draft held by the wizard; dates are `datetime-local` strings. */
@@ -343,11 +342,14 @@ function BasicsStep({
 
 function PeopleStep({ draft, onChange }: { draft: WizardDraft; onChange: (patch: Partial<WizardDraft>) => void }) {
   const [name, setName] = useState("");
-  const [kind, setKind] = useState<PrincipalKind>("USER");
-  const add = () => {
-    const trimmed = name.trim();
+  const add = (principalName: string, kind: PrincipalKind) => {
+    const trimmed = principalName.trim();
     if (!trimmed) return;
-    if (!draft.subjects.some((s) => s.principalName.toLowerCase() === trimmed.toLowerCase() && s.principalType === kind)) {
+    if (
+      !draft.subjects.some(
+        (s) => s.principalName.toLowerCase() === trimmed.toLowerCase() && s.principalType === kind,
+      )
+    ) {
       onChange({ subjects: [...draft.subjects, { principalName: trimmed, principalType: kind }] });
     }
     setName("");
@@ -355,35 +357,26 @@ function PeopleStep({ draft, onChange }: { draft: WizardDraft; onChange: (patch:
   return (
     <Card title="Who gets access">
       <div className={shared.stack}>
-        <div className={shared.toolbar}>
-          <div className={shared.fieldGrow}>
-            <span className={shared.label}>Person, group, or service principal</span>
-            <PrincipalPicker
-              value={name}
-              onChange={(value, picked) => {
-                setName(value);
-                if (picked) setKind(picked);
-              }}
-            />
-          </div>
-          <label className={shared.field}>
-            <span className={shared.label}>Type</span>
-            <select className={shared.select} value={kind} onChange={(e) => setKind(e.target.value as PrincipalKind)}>
-              {PRINCIPAL_TYPES.map((t) => (
-                <option key={t} value={t}>
-                  {t === "SERVICE_PRINCIPAL" ? "Service principal" : t === "USER" ? "User" : "Group"}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button type="button" className={`${shared.button} ${shared.buttonPrimary}`} onClick={add} disabled={!name.trim()}>
-            Add
-          </button>
+        <div className={shared.fieldGrow}>
+          <span className={shared.label}>Person, group, or service principal</span>
+          <PrincipalPicker
+            value={name}
+            placeholder="Search users or groups to add…"
+            aria-label="Add principal"
+            onChange={(value, picked) => {
+              setName(value);
+              if (picked) add(value, picked);
+            }}
+          />
+          <p className={shared.muted} style={{ marginTop: "var(--space-1)" }}>
+            Pick a search result to add them. The directory tells us whether it is a user, group, or
+            service principal.
+          </p>
         </div>
         {draft.subjects.length === 0 ? (
           <p className={shared.empty}>Nobody yet. Members are added to the group when the subscription starts.</p>
         ) : (
-          <div className={shared.chipRow}>
+          <div className={shared.chipRow} aria-label="Selected principals">
             {draft.subjects.map((s) => (
               <span key={`${s.principalType}:${s.principalName}`} className={shared.chip}>
                 <Badge>{s.principalType === "SERVICE_PRINCIPAL" ? "SP" : s.principalType.toLowerCase()}</Badge>
