@@ -1239,27 +1239,35 @@ function ApproversTable({
 }
 
 /**
- * "Assignments" tab: grant access paths to principals and browse or revoke existing assignments.
+ * "Assignments" tab: bulk-grant attribute values to principals and browse or revoke existing
+ * assignments.
  *
- * The form uses the data-access definition from Definitions (bound to ``access_path``). Admins and
- * path approvers pick principals and one or more path values such as ``finance`` or
- * ``finance.budget`` — there is no attribute/tag picker. Path approvers also decide sensitivity
- * and row-filter requests under those paths.
+ * The form picks many users/groups and one or more grant rows. Each row chooses a grant type
+ * (data access, sensitivity, or a row-filter dimension) and a value for that type. Submitting
+ * calls `useBulkAssignAttributes`. Approvers only see keys from `useGrantableAttributes`; the
+ * server re-checks path authority per value.
  *
  * @remarks
  * Rendered for app admins and path approvers. Direct assignments bypass the request inbox.
+ * Approvers (Identity → Approvers) are registered on an access path and cover requests for all
+ * three grant types under that path — that is separate from this assign form.
  */
 function AssignmentsPanel() {
   const { data: user } = useEffectiveUser();
   const definitions = useAttributeDefinitions();
   const dataAccessSettings = useDataAccessSettings();
+  const dimensions = useRowFilterDimensions();
   const grantable = useGrantableAttributes();
   const accessTagKey =
     dataAccessSettings.data?.settings.accessTagKey?.trim().toLowerCase() || "access_path";
   const dataAccessDef = (definitions.data?.definitions ?? []).find((item) =>
     isDataAccessDefinition(item, accessTagKey),
   );
-  const dataAccessKey = dataAccessDef?.key ?? "data_access";
+  const defaultGrantKey = dataAccessDef?.key ?? "data_access";
+  const dimKeys = useMemo(
+    () => new Set((dimensions.data?.dimensions ?? []).map((item) => item.key.toLowerCase())),
+    [dimensions.data],
+  );
   const [principalName, setPrincipalName] = useState("");
   // The box filters as you type: the query waits briefly after the last keystroke.
   const principalSearch = useDebouncedValue(principalName.trim(), 300);
@@ -1308,36 +1316,68 @@ function AssignmentsPanel() {
 
   const [pickerValue, setPickerValue] = useState("");
   const [principals, setPrincipals] = useState<SelectedPrincipal[]>([]);
-  const [paths, setPaths] = useState<string[]>([]);
-  const [pathPicker, setPathPicker] = useState("");
+  const [attrRows, setAttrRows] = useState<{ id: string; key: string; value: string }[]>([
+    { id: "row-1", key: defaultGrantKey, value: "" },
+  ]);
   const [formJustification, setFormJustification] = useState("");
   const [formExpires, setFormExpires] = useState("");
   const [lastResult, setLastResult] = useState<BulkAssignResult | null>(null);
 
-  const grantableKeys = useMemo(() => {
-    const keys = user?.isAdmin
-      ? (definitions.data?.definitions ?? []).map((item) => item.key)
-      : (grantable.data?.attributes ?? []).map((item) => item.key);
-    return sortGrantableKeys(keys, accessTagKey);
-  }, [user?.isAdmin, definitions.data?.definitions, grantable.data?.attributes, accessTagKey]);
-
-  const pathOptions = useMemo(() => {
-    const all = (dataAccessDef?.allowedValues ?? []).filter((value) => value && value !== "*");
-    if (user?.isAdmin) return all;
-    const entry = (grantable.data?.attributes ?? []).find(
-      (item) => item.key.toLowerCase() === dataAccessKey.toLowerCase(),
+  useEffect(() => {
+    setAttrRows((current) =>
+      current.map((row) => (row.key ? row : { ...row, key: defaultGrantKey })),
     );
-    if (!entry) return [];
-    if (!entry.categories.length) return all;
+  }, [defaultGrantKey]);
+
+  const grantableKeys = useMemo(() => {
+    const defs = definitions.data?.definitions ?? [];
+    const isAssignable = (key: string) => {
+      const lower = key.toLowerCase();
+      if (lower === "sensitivity") return true;
+      if (dimKeys.has(lower)) return true;
+      const def = defs.find((item) => item.key.toLowerCase() === lower);
+      return Boolean(def && isDataAccessDefinition(def, accessTagKey));
+    };
+    const keys = user?.isAdmin
+      ? defs.map((item) => item.key).filter(isAssignable)
+      : (grantable.data?.attributes ?? []).map((item) => item.key).filter(isAssignable);
+    return sortGrantableKeys(keys, accessTagKey);
+  }, [
+    user?.isAdmin,
+    definitions.data?.definitions,
+    grantable.data?.attributes,
+    accessTagKey,
+    dimKeys,
+  ]);
+
+  const definitionByKey = useMemo(() => {
+    const map = new Map<string, AttributeDefinition>();
+    for (const item of definitions.data?.definitions ?? []) map.set(item.key, item);
+    return map;
+  }, [definitions.data?.definitions]);
+
+  const valuesForKey = (key: string): string[] => {
+    const def = definitionByKey.get(key);
+    const values = def?.allowedValues ?? [];
+    if (user?.isAdmin) return values;
+    const entry = (grantable.data?.attributes ?? []).find(
+      (item) => item.key.toLowerCase() === key.toLowerCase(),
+    );
+    if (!entry || !entry.categories.length) return values;
+    // Row-filter values are dimension codes (CA, *), not paths — keep the full list.
+    if (dimKeys.has(key.toLowerCase())) return values;
+    // Data-access and sensitivity values are paths (or path.sensitivity); keep values under the
+    // approver's registered paths.
     const allowed = entry.categories.map((item) => item.toLowerCase());
-    return all.filter((path) => {
-      const lower = path.toLowerCase();
+    return values.filter((value) => {
+      const lower = value.toLowerCase();
       return allowed.some((prefix) => lower === prefix || lower.startsWith(`${prefix}.`));
     });
-  }, [dataAccessDef, user?.isAdmin, grantable.data?.attributes, dataAccessKey]);
+  };
 
-  const grantCount = principals.length * paths.length;
-  const canSubmit = principals.length > 0 && paths.length > 0 && !bulkAssign.isPending;
+  const validAttrRows = attrRows.filter((row) => row.key.trim() && row.value.trim());
+  const grantCount = principals.length * validAttrRows.length;
+  const canSubmit = principals.length > 0 && validAttrRows.length > 0 && !bulkAssign.isPending;
 
   const addPrincipal = (name: string, kind?: PrincipalKind) => {
     const trimmed = name.trim();
@@ -1351,45 +1391,32 @@ function AssignmentsPanel() {
     setPickerValue("");
   };
 
-  const addPath = (path: string) => {
-    const trimmed = path.trim();
-    if (!trimmed) return;
-    setPaths((current) =>
-      current.some((item) => item.toLowerCase() === trimmed.toLowerCase())
-        ? current
-        : [...current, trimmed],
-    );
-    setPathPicker("");
-  };
-
   const onAssign = async () => {
     const result = await bulkAssign.mutateAsync({
       principals: principals.map((item) => ({
         principalName: item.name,
         principalType: item.type,
       })),
-      attributes: paths.map((path) => ({
-        attributeKey: dataAccessKey,
-        attributeValue: path,
+      attributes: validAttrRows.map((row) => ({
+        attributeKey: row.key.trim(),
+        attributeValue: row.value.trim(),
       })),
       justification: formJustification.trim() || null,
       expiresAt: formExpires ? new Date(formExpires).toISOString() : null,
     });
     setLastResult(result);
-    setPaths([]);
-    setPathPicker("");
+    setAttrRows([{ id: `row-${Date.now()}`, key: defaultGrantKey, value: "" }]);
     setFormJustification("");
     setFormExpires("");
   };
 
   return (
     <div className={styles.stack}>
-      <Card title="Assign access paths">
+      <Card title="Assign attributes">
         <p className={styles.muted}>
-          Pick principals and access paths from the data-access definition (the{" "}
-          <code>{accessTagKey}</code> values). You do not choose an attribute tag — grants are always
-          on that definition. Path approvers also decide sensitivity and row-filter requests under
-          the same path.
+          Choose a grant type — data access (access path), sensitivity, or a row filter — then pick
+          its value. Path approvers are configured under Approvers and decide requests under their
+          path for all three.
         </p>
         <div className={styles.formGrid}>
           <label className={styles.fieldGrow} style={{ gridColumn: "1 / -1" }}>
@@ -1427,39 +1454,88 @@ function AssignmentsPanel() {
             )}
           </label>
 
-          <label className={styles.fieldGrow} style={{ gridColumn: "1 / -1" }}>
-            <span className={styles.label}>Access paths</span>
-            <SearchableSelect
-              aria-label="Access path"
-              value={pathPicker}
-              onChange={(value) => {
-                if (value) addPath(value);
-                else setPathPicker("");
-              }}
-              options={pathOptions}
-              placeholder={
-                dataAccessDef ? "Select path to add…" : "Create a data-access definition first"
-              }
-              disabled={!pathOptions.length}
-            />
-            {paths.length > 0 && (
-              <div className={styles.chipRow} aria-label="Selected paths">
-                {paths.map((path) => (
-                  <span key={path} className={styles.chip}>
-                    <code>{path}</code>
-                    <button
-                      type="button"
-                      className={styles.chipRemove}
-                      aria-label={`Remove ${path}`}
-                      onClick={() => setPaths((current) => current.filter((item) => item !== path))}
-                    >
-                      ×
-                    </button>
-                  </span>
-                ))}
+          {attrRows.map((row) => {
+            const valueOptions = valuesForKey(row.key || defaultGrantKey);
+            const valueLabel = attributeValueLabel(row.key || defaultGrantKey, accessTagKey);
+            return (
+              <div key={row.id} className={styles.attrRow}>
+                <label className={styles.field}>
+                  <span className={styles.label}>Grant</span>
+                  <select
+                    className={styles.select}
+                    aria-label="Grant"
+                    value={row.key}
+                    onChange={(event) => {
+                      const key = event.target.value;
+                      setAttrRows((current) =>
+                        current.map((item) => (item.id === row.id ? { ...item, key, value: "" } : item)),
+                      );
+                    }}
+                  >
+                    {grantableKeys.map((key) => (
+                      <option key={key} value={key}>
+                        {attributeGrantLabel(key, accessTagKey)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className={styles.field}>
+                  <span className={styles.label}>{valueLabel}</span>
+                  {valueOptions.length ? (
+                    <SearchableSelect
+                      aria-label={valueLabel}
+                      value={row.value}
+                      onChange={(value) => {
+                        setAttrRows((current) =>
+                          current.map((item) => (item.id === row.id ? { ...item, value } : item)),
+                        );
+                      }}
+                      options={valueOptions}
+                      placeholder={`Select ${valueLabel.toLowerCase()}`}
+                    />
+                  ) : (
+                    <input
+                      className={styles.input}
+                      value={row.value}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        setAttrRows((current) =>
+                          current.map((item) => (item.id === row.id ? { ...item, value } : item)),
+                        );
+                      }}
+                      placeholder="finance or finance.budget"
+                      aria-label={valueLabel}
+                    />
+                  )}
+                </label>
+                {attrRows.length > 1 && (
+                  <button
+                    type="button"
+                    className={styles.button}
+                    aria-label="Remove grant row"
+                    onClick={() => setAttrRows((current) => current.filter((item) => item.id !== row.id))}
+                  >
+                    Remove
+                  </button>
+                )}
               </div>
-            )}
-          </label>
+            );
+          })}
+
+          <div className={styles.buttonRow} style={{ gridColumn: "1 / -1" }}>
+            <button
+              type="button"
+              className={styles.button}
+              onClick={() =>
+                setAttrRows((current) => [
+                  ...current,
+                  { id: `row-${Date.now()}`, key: defaultGrantKey, value: "" },
+                ])
+              }
+            >
+              Add grant
+            </button>
+          </div>
 
           <label className={styles.fieldGrow}>
             <span className={styles.label}>Justification</span>
@@ -1491,8 +1567,8 @@ function AssignmentsPanel() {
           </button>
           {grantCount > 0 && (
             <span className={styles.muted}>
-              {principals.length} principal{principals.length === 1 ? "" : "s"} × {paths.length} path
-              {paths.length === 1 ? "" : "s"} = {grantCount} assignment
+              {principals.length} principal{principals.length === 1 ? "" : "s"} × {validAttrRows.length}{" "}
+              value{validAttrRows.length === 1 ? "" : "s"} = {grantCount} assignment
               {grantCount === 1 ? "" : "s"}
             </span>
           )}
@@ -1520,10 +1596,10 @@ function AssignmentsPanel() {
             )}
           </Alert>
         )}
-        {!pathOptions.length && (
-          <Alert tone="warning" title="No grantable paths">
+        {grantableKeys.length === 0 && (
+          <Alert tone="warning" title="No grantable attributes">
             {user?.isAdmin
-              ? "Create a data-access definition first."
+              ? "Create a data-access or sensitivity definition, or a row-filter dimension, first."
               : "You are not listed as an approver for any access path."}
           </Alert>
         )}
