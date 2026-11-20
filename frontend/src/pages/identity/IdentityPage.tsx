@@ -1041,8 +1041,8 @@ function CategoryApproversPanel() {
           for that path; they decide data-access, sensitivity, and row-filter requests under it.
           When nothing matches, app admins review the request.
         </p>
-        <div className={styles.formGrid}>
-          <label className={styles.field}>
+        <div className={styles.formGrid} style={{ alignItems: "start" }}>
+          <div className={styles.field}>
             <span className={styles.label}>Access path</span>
             <SearchableSelect
               aria-label="Access path"
@@ -1052,8 +1052,8 @@ function CategoryApproversPanel() {
               placeholder={dataAccessDef ? "Select path" : "Create a data-access definition first"}
               disabled={!dataAccessDef}
             />
-          </label>
-          <label className={styles.fieldGrow}>
+          </div>
+          <div className={styles.field}>
             <span className={styles.label}>Users and groups</span>
             <PrincipalPicker
               value={pickerValue}
@@ -1064,30 +1064,30 @@ function CategoryApproversPanel() {
                 if (nextKind === "USER" || nextKind === "GROUP") addPrincipal(name, nextKind);
               }}
             />
-            {principals.length > 0 && (
-              <div className={styles.chipRow} aria-label="Selected approvers">
-                {principals.map((item) => (
-                  <span key={`${item.type}:${item.name}`} className={styles.chip}>
-                    <Badge>{item.type}</Badge>
-                    <code>{item.name}</code>
-                    <button
-                      type="button"
-                      className={styles.chipRemove}
-                      aria-label={`Remove ${item.name}`}
-                      onClick={() =>
-                        setPrincipals((current) =>
-                          current.filter((p) => !(p.name === item.name && p.type === item.type)),
-                        )
-                      }
-                    >
-                      ×
-                    </button>
-                  </span>
-                ))}
-              </div>
-            )}
-          </label>
+          </div>
         </div>
+        {principals.length > 0 && (
+          <div className={styles.chipRow} aria-label="Selected approvers">
+            {principals.map((item) => (
+              <span key={`${item.type}:${item.name}`} className={styles.chip}>
+                <Badge>{item.type}</Badge>
+                <code>{item.name}</code>
+                <button
+                  type="button"
+                  className={styles.chipRemove}
+                  aria-label={`Remove ${item.name}`}
+                  onClick={() =>
+                    setPrincipals((current) =>
+                      current.filter((p) => !(p.name === item.name && p.type === item.type)),
+                    )
+                  }
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
         <div className={styles.buttonRow} style={{ marginTop: "var(--space-3)" }}>
           <button
             type="button"
